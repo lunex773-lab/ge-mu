@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>CONTOUR — 測量野帳</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,7 +18,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; background: var(--ink); }
   body { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-  canvas { display: block; }
+  canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; }
 
   /* ---- HUD ---- */
   #hud {
@@ -122,6 +122,31 @@
   #net-list div { color: var(--line); font-weight: 400; }
   #net-list div.me { color: var(--major); }
 
+  /* ---- touch controls (mobile) ---- */
+  #touch { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
+  body.touch #touch { display: block; }
+  #stick {
+    position: absolute; width: 108px; height: 108px; margin: -54px 0 0 -54px;
+    border: 1px solid rgba(127,227,196,.35); border-radius: 50%;
+    background: rgba(127,227,196,.05); display: none;
+  }
+  #stick.on { display: block; }
+  #stick-knob {
+    position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
+    margin: -23px 0 0 -23px; border-radius: 50%;
+    background: rgba(127,227,196,.22); border: 1px solid rgba(127,227,196,.6);
+  }
+  .tbtn {
+    position: absolute; pointer-events: auto; touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    display: grid; place-items: center; color: var(--line);
+    font-size: 11px; font-weight: 600; letter-spacing: .12em;
+    border: 1px solid rgba(127,227,196,.42); border-radius: 50%;
+    background: rgba(127,227,196,.08); -webkit-tap-highlight-color: transparent;
+  }
+  .tbtn:active { background: rgba(127,227,196,.22); }
+  #jump { right: 30px; bottom: 42px; width: 78px; height: 78px; }
+
   #loading {
     position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
     color: var(--line-dim); font-size: 10px; letter-spacing: .3em;
@@ -164,8 +189,12 @@
       <label>ROOM <input id="room" maxlength="24" placeholder="lobby" autocomplete="off"></label>
     </div>
     <p id="hint">同じ ROOM 名の仲間と、同じ地形を一緒に歩けます。</p>
-    <button id="enter">視点を掴む</button>
+    <button id="enter">ゲームスタート</button>
   </div>
+</div>
+<div id="touch">
+  <div id="stick"><div id="stick-knob"></div></div>
+  <div id="jump" class="tbtn">JUMP</div>
 </div>
 <div id="loading">GENERATING TERRAIN</div>
 
@@ -402,7 +431,13 @@
   const p = new THREE.Vector3(0, 0, 0);
   let yaw = 0, pitch = -0.04, vy = 0, grounded = false, bob = 0;
   const keys = Object.create(null);
+  let wantJump = false;
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // touch-capable device? (phones / tablets) → show on-screen controls
+  const isTouch = matchMedia('(pointer: coarse)').matches ||
+                  ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  const touchMove = { active: false, x: 0, y: 0, run: false };  // x=strafe, y=forward
 
   // drop the player somewhere above water with a view
   for (let i = 0; i < 400; i++) {
@@ -426,30 +461,39 @@
     const sr = localStorage.getItem('contour.room'); if (sr) roomEl.value = sr;
   } catch (e) {}
 
+  // Start the game. Crucially this does NOT depend on Pointer Lock — the
+  // world reveals immediately, so it works even where lock is unavailable
+  // (mobile, embedded viewers). Mouse-look is layered on top for desktop.
   function startGame() {
+    if (MP.playing) { if (!isTouch) grab(); return; }
     MP.name = (nickEl.value || '').trim().slice(0, 16) || ('測量士-' + MP.id.slice(1, 4));
     MP.room = (roomEl.value || '').trim().slice(0, 24) || 'lobby';
     try {
       localStorage.setItem('contour.nick', MP.name);
       localStorage.setItem('contour.room', MP.room);
     } catch (e) {}
+    MP.playing = true;
+    gate.classList.add('gone');
+    hud.classList.add('live');
+    document.body.classList.toggle('touch', isTouch);
+    if (isTouch) {                     // mobile: swap the help line for touch verbs
+      const meta = document.querySelector('#meta div');
+      if (meta) meta.textContent = '左 スティック 移動 · 右 ドラッグ 視点 · JUMP 跳ぶ';
+    }
     connectMP();
-    grab();
+    if (!isTouch) grab();              // desktop: capture the mouse for looking
   }
 
   document.getElementById('enter').addEventListener('click', startGame);
   nickEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
   roomEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
   canvas.addEventListener('click', () => {
-    if (document.pointerLockElement) return;
-    MP.started ? grab() : startGame();
+    if (isTouch || document.pointerLockElement) return;
+    MP.playing ? grab() : startGame();   // desktop: re-capture mouse after Esc
   });
 
   document.addEventListener('pointerlockchange', () => {
-    const on = document.pointerLockElement === canvas;
-    gate.classList.toggle('gone', on);
-    hud.classList.toggle('live', on);
-    if (!on) for (const k in keys) keys[k] = false;
+    if (document.pointerLockElement !== canvas) for (const k in keys) keys[k] = false;
   });
   addEventListener('mousemove', (ev) => {
     if (document.pointerLockElement !== canvas) return;
@@ -457,6 +501,72 @@
     pitch -= ev.movementY * 0.0021;
     pitch = Math.max(-1.55, Math.min(1.55, pitch));
   });
+
+  // ---- touch controls: floating joystick (move) + drag (look) + JUMP ----
+  const stickEl = document.getElementById('stick');
+  const knobEl  = document.getElementById('stick-knob');
+  const jumpEl  = document.getElementById('jump');
+  const STICK_R = 46, LOOK_SENS = 0.0042;
+  let moveTid = null, lookTid = null, lookX = 0, lookY = 0;
+
+  function beginMove(t) {
+    moveTid = t.identifier;
+    stickEl.style.left = t.clientX + 'px';
+    stickEl.style.top  = t.clientY + 'px';
+    stickEl.classList.add('on');
+    knobEl.style.transform = 'translate(0px,0px)';
+    touchMove.active = true; touchMove.x = 0; touchMove.y = 0; touchMove.run = false;
+  }
+  function updateMove(t) {
+    let dx = t.clientX - parseFloat(stickEl.style.left);
+    let dy = t.clientY - parseFloat(stickEl.style.top);
+    const len = Math.hypot(dx, dy) || 1;
+    const cl = Math.min(len, STICK_R);
+    const kx = dx / len * cl, ky = dy / len * cl;
+    knobEl.style.transform = 'translate(' + kx + 'px,' + ky + 'px)';
+    touchMove.x = Math.max(-1, Math.min(1, dx / STICK_R));
+    touchMove.y = Math.max(-1, Math.min(1, -dy / STICK_R));   // up = forward
+    touchMove.run = (len / STICK_R) > 0.72;                    // push far to run
+  }
+  function endMove() {
+    moveTid = null; stickEl.classList.remove('on');
+    touchMove.active = false; touchMove.x = 0; touchMove.y = 0; touchMove.run = false;
+  }
+
+  addEventListener('touchstart', (ev) => {
+    if (!MP.playing) return;
+    for (const t of ev.changedTouches) {
+      if (t.target && t.target.closest && t.target.closest('.tbtn')) continue; // buttons handle themselves
+      if (moveTid === null && t.clientX < innerWidth * 0.5) beginMove(t);
+      else if (lookTid === null) { lookTid = t.identifier; lookX = t.clientX; lookY = t.clientY; }
+    }
+  }, { passive: true });
+
+  addEventListener('touchmove', (ev) => {
+    if (!MP.playing) return;
+    let handled = false;
+    for (const t of ev.changedTouches) {
+      if (t.identifier === moveTid) { updateMove(t); handled = true; }
+      else if (t.identifier === lookTid) {
+        yaw   -= (t.clientX - lookX) * LOOK_SENS;
+        pitch -= (t.clientY - lookY) * LOOK_SENS;
+        pitch = Math.max(-1.55, Math.min(1.55, pitch));
+        lookX = t.clientX; lookY = t.clientY; handled = true;
+      }
+    }
+    if (handled) ev.preventDefault();
+  }, { passive: false });
+
+  function endTouch(ev) {
+    for (const t of ev.changedTouches) {
+      if (t.identifier === moveTid) endMove();
+      else if (t.identifier === lookTid) lookTid = null;
+    }
+  }
+  addEventListener('touchend', endTouch);
+  addEventListener('touchcancel', endTouch);
+
+  jumpEl.addEventListener('touchstart', (ev) => { ev.preventDefault(); wantJump = true; }, { passive: false });
   addEventListener('keydown', (ev) => {
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
@@ -476,7 +586,7 @@
   const MP = {
     id: 'p' + Math.random().toString(36).slice(2, 9),
     name: '', room: 'lobby',
-    client: null, connected: false, started: false,
+    client: null, connected: false, started: false, playing: false,
     peers: new Map(),          // id -> { name, group, cur, tgt, yaw, tgtYaw, lastSeen }
     lastPub: 0,
     PUB_MS: 70,                 // ~14 broadcasts / second
@@ -666,7 +776,7 @@
     last = now;
 
     // --- move ---
-    const running = keys['ShiftLeft'] || keys['ShiftRight'];
+    const running = keys['ShiftLeft'] || keys['ShiftRight'] || touchMove.run;
     const speed = running ? RUN : WALK;
     fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
     rgt.set(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -675,6 +785,7 @@
     if (keys['KeyS'] || keys['ArrowDown'])  mv.sub(fwd);
     if (keys['KeyD'] || keys['ArrowRight']) mv.add(rgt);
     if (keys['KeyA'] || keys['ArrowLeft'])  mv.sub(rgt);
+    if (touchMove.active) { mv.addScaledVector(fwd, touchMove.y); mv.addScaledVector(rgt, touchMove.x); }
 
     const moving = mv.lengthSq() > 0;
     if (moving) {
@@ -691,7 +802,8 @@
     const floor = height(p.x, p.z) + EYE;
     if (p.y <= floor) { p.y = floor; vy = 0; grounded = true; }
     else grounded = false;
-    if (grounded && keys['Space']) { vy = JUMP; grounded = false; }
+    if (grounded && (keys['Space'] || wantJump)) { vy = JUMP; grounded = false; }
+    wantJump = false;
 
     // --- head bob: the only thing selling the walk ---
     let bobY = 0, roll = 0;
