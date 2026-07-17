@@ -18,11 +18,13 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--ink); }
   body { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-  canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; }
+  /* the brightness filter makes the canvas a stacking context, so pin it to
+     the bottom and give every overlay an explicit z-index above it */
+  canvas { display: block; position: fixed; inset: 0; z-index: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
 
   /* ---- HUD ---- */
   #hud {
-    position: fixed; inset: 0; pointer-events: none;
+    position: fixed; inset: 0; pointer-events: none; z-index: 2;
     opacity: 0; transition: opacity .6s ease .2s;
   }
   #hud.live { opacity: 1; }
@@ -66,7 +68,7 @@
 
   /* ---- Gate ---- */
   #gate {
-    position: fixed; inset: 0; display: grid; place-items: center;
+    position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
     background: radial-gradient(120% 90% at 50% 108%, #17303a 0%, #0B1014 62%);
     transition: opacity .5s ease, visibility .5s;
   }
@@ -165,8 +167,59 @@
   /* third-person: the centre reticle is meaningless, hide it */
   body.tps #reticle { display: none; }
 
+  /* ---- settings ---- */
+  #gear {
+    position: fixed; top: calc(20px + env(safe-area-inset-top));
+    right: calc(20px + env(safe-area-inset-right));
+    width: 42px; height: 42px; display: none; place-items: center;
+    pointer-events: auto; cursor: pointer; z-index: 8; font-size: 21px;
+    color: var(--line); border: 1px solid rgba(127,227,196,.4);
+    border-radius: 50%; background: rgba(11,16,20,.5);
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  }
+  body.playing #gear { display: grid; }
+  #gear:active { background: rgba(127,227,196,.18); }
+
+  #settings {
+    position: fixed; inset: 0; z-index: 9; display: none;
+    place-items: center; background: rgba(6,10,14,.55); pointer-events: auto;
+  }
+  #settings.open { display: grid; }
+  #settings .panel {
+    width: min(360px, 86vw); padding: 22px 22px 24px;
+    background: #0d151b; border: 1px solid rgba(127,227,196,.28); border-radius: 6px;
+  }
+  #settings h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: .22em; color: var(--major);
+    margin-bottom: 20px;
+  }
+  #settings .row { margin-bottom: 20px; }
+  #settings .lbl {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 10px; letter-spacing: .12em; color: var(--line-dim); margin-bottom: 10px;
+  }
+  #settings .lbl b { color: var(--line); font-weight: 600; font-variant-numeric: tabular-nums; }
+  #settings input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 3px;
+    background: rgba(127,227,196,.25); border-radius: 3px; outline: none; margin: 6px 0;
+  }
+  #settings input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 22px; height: 22px;
+    border-radius: 50%; background: var(--line); cursor: pointer; border: 3px solid #0d151b;
+  }
+  #settings input[type=range]::-moz-range-thumb {
+    width: 18px; height: 18px; border: 3px solid #0d151b;
+    border-radius: 50%; background: var(--line); cursor: pointer;
+  }
+  #settings .close {
+    width: 100%; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .2em;
+    color: var(--ink); background: var(--line); border: 0; border-radius: 2px;
+    padding: 12px; cursor: pointer;
+  }
+  #settings .close:hover { background: var(--major); }
+
   #loading {
-    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 25;
     color: var(--line-dim); font-size: 10px; letter-spacing: .3em;
   }
 </style>
@@ -215,6 +268,19 @@
   <div id="view" class="tbtn">視点</div>
   <div id="jump" class="tbtn">JUMP</div>
 </div>
+
+<div id="gear" role="button" aria-label="設定">⚙</div>
+<div id="settings">
+  <div class="panel">
+    <h2>設定 · SETTINGS</h2>
+    <div class="row">
+      <div class="lbl"><span>画面の明るさ · BRIGHTNESS</span><b id="bright-val">130%</b></div>
+      <input id="brightness" type="range" min="0.6" max="2.6" step="0.05" value="1.3">
+    </div>
+    <button class="close" id="settings-close">閉じる</button>
+  </div>
+</div>
+
 <div id="loading">GENERATING TERRAIN</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -494,6 +560,7 @@
     MP.playing = true;
     gate.classList.add('gone');
     hud.classList.add('live');
+    document.body.classList.add('playing');
     document.body.classList.toggle('touch', isTouch);
     if (!selfAvatar) {                       // your own avatar, shown in third-person
       selfAvatar = makeAvatar(MP.name);
@@ -569,16 +636,17 @@
   }
 
   addEventListener('touchstart', (ev) => {
-    if (!MP.playing) return;
+    if (!MP.playing || settingsEl.classList.contains('open')) return;
     for (const t of ev.changedTouches) {
-      if (t.target && t.target.closest && t.target.closest('.tbtn')) continue; // buttons handle themselves
+      // let buttons / gear / settings handle their own touches
+      if (t.target && t.target.closest && t.target.closest('.tbtn, #gear, #settings')) continue;
       if (moveTid === null && t.clientX < innerWidth * 0.5) beginMove(t);
       else if (lookTid === null) { lookTid = t.identifier; lookX = t.clientX; lookY = t.clientY; }
     }
   }, { passive: true });
 
   addEventListener('touchmove', (ev) => {
-    if (!MP.playing) return;
+    if (!MP.playing || settingsEl.classList.contains('open')) return;
     let handled = false;
     for (const t of ev.changedTouches) {
       if (t.identifier === moveTid) { updateMove(t); handled = true; }
@@ -605,6 +673,32 @@
   const onViewTap = (ev) => { ev.preventDefault(); toggleView(); };
   viewEl.addEventListener('touchstart', onViewTap, { passive: false });
   viewEl.addEventListener('click', onViewTap);
+
+  // ---- settings: screen brightness ----
+  const gearEl     = document.getElementById('gear');
+  const settingsEl = document.getElementById('settings');
+  const brightEl   = document.getElementById('brightness');
+  const brightVal  = document.getElementById('bright-val');
+
+  function applyBrightness(v) {
+    renderer.domElement.style.filter = 'brightness(' + v + ')';
+    brightVal.textContent = Math.round(v * 100) + '%';
+  }
+  let bright = 1.3;                              // brighter than raw scene by default
+  try { const s = parseFloat(localStorage.getItem('contour.bright')); if (s >= 0.6 && s <= 2.6) bright = s; } catch (e) {}
+  brightEl.value = bright;
+  applyBrightness(bright);
+  brightEl.addEventListener('input', () => {
+    const v = parseFloat(brightEl.value);
+    applyBrightness(v);
+    try { localStorage.setItem('contour.bright', String(v)); } catch (e) {}
+  });
+
+  const openSettings  = () => settingsEl.classList.add('open');
+  const closeSettings = () => settingsEl.classList.remove('open');
+  gearEl.addEventListener('click', openSettings);
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  settingsEl.addEventListener('click', (ev) => { if (ev.target === settingsEl) closeSettings(); });
 
   addEventListener('keydown', (ev) => {
     keys[ev.code] = true;
@@ -683,21 +777,51 @@
     return spr;
   }
 
+  // A simple humanoid: torso, head, two arms, two legs. The limbs hang from
+  // pivot groups so they can swing for the walk cycle (see animateAvatar).
   function makeAvatar(name) {
     const g = new THREE.Group();
-    const amber = new THREE.MeshBasicMaterial({ color: C.sun, fog: true });
+    const skin  = new THREE.MeshBasicMaterial({ color: C.sun, fog: true });
+    const skin2 = new THREE.MeshBasicMaterial({ color: 0xC98A3C, fog: true });
     const cyan  = new THREE.MeshBasicMaterial({ color: C.line, fog: true, transparent: true, opacity: 0.9 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.30, 1.25, 8), amber);
-    body.position.y = 0.95; g.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), amber);
-    head.position.y = 1.78; g.add(head);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.62, 28), cyan);
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; g.add(ring);
-    const pip = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.34, 8), cyan);
-    pip.rotation.x = Math.PI / 2; pip.position.set(0, 0.95, 0.42); g.add(pip);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.60, 0.24), skin);
+    torso.position.y = 1.15; g.add(torso);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 14, 12), skin);
+    head.position.y = 1.62; g.add(head);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.10), cyan);
+    nose.position.set(0, 1.62, 0.19); g.add(nose);          // marks the facing side
+
+    const limb = (mat, w, len, x, y) => {
+      const pivot = new THREE.Group(); pivot.position.set(x, y, 0);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, len, w), mat);
+      mesh.position.y = -len / 2; pivot.add(mesh);           // hangs below the joint
+      return pivot;
+    };
+    const armL = limb(skin2, 0.12, 0.60, -0.30, 1.40);
+    const armR = limb(skin2, 0.12, 0.60,  0.30, 1.40);
+    const legL = limb(skin2, 0.15, 0.85, -0.12, 0.90);
+    const legR = limb(skin2, 0.15, 0.85,  0.12, 0.90);
+    g.add(armL, armR, legL, legR);
+
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.54, 28), cyan);
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; g.add(ring);
+
     const tag = nameSprite(name);
-    g.add(tag); g.userData.tag = tag;
+    g.add(tag);
+    g.userData = { tag, limbs: { armL, armR, legL, legR }, phase: 0, swing: 0 };
     return g;
+  }
+
+  // Swing arms/legs while moving; settle smoothly to a neutral stance when idle.
+  function animateAvatar(g, dt, moving, speed) {
+    const u = g.userData; if (!u || !u.limbs) return;
+    u.swing += ((moving ? 1 : 0) - u.swing) * (1 - Math.exp(-dt * 10));
+    const cadence = Math.min(Math.max((speed || 0) * 2.0, 6), 18);
+    if (moving) u.phase += dt * cadence;
+    const a = Math.sin(u.phase) * 0.7 * u.swing;
+    u.limbs.legL.rotation.x =  a; u.limbs.legR.rotation.x = -a;
+    u.limbs.armL.rotation.x = -a * 0.8; u.limbs.armR.rotation.x =  a * 0.8;
   }
 
   function setTag(peer, name) {
@@ -800,13 +924,16 @@
     const k = 1 - Math.exp(-dt * 9);
     for (const [id, peer] of MP.peers) {
       if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
+      const px = peer.cur.x, pz = peer.cur.z;
       peer.cur.lerp(peer.tgt, k);
       peer.group.position.copy(peer.cur);
       let d = (peer.tgtYaw - peer.yaw) % (Math.PI * 2);
       if (d > Math.PI) d -= Math.PI * 2;
       if (d < -Math.PI) d += Math.PI * 2;
       peer.yaw += d * k;
-      peer.group.rotation.y = peer.yaw;
+      peer.group.rotation.y = peer.yaw + Math.PI;         // nose points along travel
+      const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
+      animateAvatar(peer.group, dt, spd > 0.4, spd);      // walk when actually moving
     }
   }
 
@@ -877,6 +1004,7 @@
       if (selfAvatar) {
         selfAvatar.position.set(p.x, p.y - EYE, p.z);
         selfAvatar.rotation.y = yaw + Math.PI;                     // face where you're looking
+        animateAvatar(selfAvatar, dt, moving && grounded, running ? RUN : WALK);
       }
     } else {
       camera.position.set(p.x, p.y + bobY, p.z);
