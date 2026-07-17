@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>CONTOUR — 測量野帳</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,7 +16,7 @@
     --amber:    #E8A24C;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: var(--ink); }
+  html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--ink); }
   body { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
   canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; }
 
@@ -43,7 +43,8 @@
   }
 
   #survey {
-    position: absolute; left: 28px; bottom: 26px;
+    position: absolute;
+    left: calc(28px + env(safe-area-inset-left)); bottom: calc(26px + env(safe-area-inset-bottom));
     color: var(--line); font-size: 11px; font-weight: 300;
     letter-spacing: .09em; line-height: 1.9;
   }
@@ -53,10 +54,14 @@
   #survey dd.up { color: var(--amber); }
 
   #meta {
-    position: absolute; right: 28px; bottom: 26px; text-align: right;
+    position: absolute;
+    right: calc(28px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom));
+    text-align: right;
     color: var(--line-dim); font-size: 10px; font-weight: 300; letter-spacing: .12em;
     line-height: 2;
   }
+  /* on touch, lift the readout clear of the on-screen buttons */
+  body.touch #meta { bottom: calc(122px + env(safe-area-inset-bottom)); }
   #meta b { color: var(--line); font-weight: 600; font-variant-numeric: tabular-nums; }
 
   /* ---- Gate ---- */
@@ -112,7 +117,8 @@
 
   /* ---- network / roster ---- */
   #net {
-    position: absolute; left: 28px; top: 22px;
+    position: absolute;
+    left: calc(28px + env(safe-area-inset-left)); top: calc(22px + env(safe-area-inset-top));
     color: var(--line-dim); font-size: 10px; font-weight: 300;
     letter-spacing: .12em; line-height: 1.9;
   }
@@ -145,7 +151,19 @@
     background: rgba(127,227,196,.08); -webkit-tap-highlight-color: transparent;
   }
   .tbtn:active { background: rgba(127,227,196,.22); }
-  #jump { right: 30px; bottom: 42px; width: 78px; height: 78px; }
+  #jump {
+    right: calc(28px + env(safe-area-inset-right));
+    bottom: calc(30px + env(safe-area-inset-bottom));
+    width: 76px; height: 76px;
+  }
+  #view {
+    right: calc(116px + env(safe-area-inset-right));
+    bottom: calc(41px + env(safe-area-inset-bottom));
+    width: 58px; height: 58px; font-size: 10px; letter-spacing: .06em;
+  }
+  #view.on { color: var(--major); border-color: var(--major); background: rgba(200,251,234,.14); }
+  /* third-person: the centre reticle is meaningless, hide it */
+  body.tps #reticle { display: none; }
 
   #loading {
     position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
@@ -170,7 +188,7 @@
     </dl>
   </div>
   <div id="meta">
-    <div>WASD 移動 · SHIFT 走る · SPACE 跳ぶ · ESC 解除</div>
+    <div>WASD 移動 · SHIFT 走る · SPACE 跳ぶ · V 視点 · ESC 解除</div>
     <div>CI 4 m &nbsp;·&nbsp; <b id="v-fps">--</b> FPS</div>
   </div>
 </div>
@@ -194,6 +212,7 @@
 </div>
 <div id="touch">
   <div id="stick"><div id="stick-knob"></div></div>
+  <div id="view" class="tbtn">視点</div>
   <div id="jump" class="tbtn">JUMP</div>
 </div>
 <div id="loading">GENERATING TERRAIN</div>
@@ -476,9 +495,15 @@
     gate.classList.add('gone');
     hud.classList.add('live');
     document.body.classList.toggle('touch', isTouch);
+    if (!selfAvatar) {                       // your own avatar, shown in third-person
+      selfAvatar = makeAvatar(MP.name);
+      if (selfAvatar.userData.tag) selfAvatar.userData.tag.visible = false; // hide own nameplate
+      selfAvatar.visible = tps;
+      scene.add(selfAvatar);
+    }
     if (isTouch) {                     // mobile: swap the help line for touch verbs
       const meta = document.querySelector('#meta div');
-      if (meta) meta.textContent = '左 スティック 移動 · 右 ドラッグ 視点 · JUMP 跳ぶ';
+      if (meta) meta.textContent = '左 移動 · 右 ドラッグ 視点 · JUMP · 視点 で三人称';
     }
     connectMP();
     if (!isTouch) grab();              // desktop: capture the mouse for looking
@@ -506,8 +531,18 @@
   const stickEl = document.getElementById('stick');
   const knobEl  = document.getElementById('stick-knob');
   const jumpEl  = document.getElementById('jump');
+  const viewEl  = document.getElementById('view');
   const STICK_R = 46, LOOK_SENS = 0.0042;
   let moveTid = null, lookTid = null, lookX = 0, lookY = 0;
+
+  // view mode: false = first-person, true = third-person (see your own avatar)
+  let tps = false, selfAvatar = null;
+  function toggleView() {
+    tps = !tps;
+    document.body.classList.toggle('tps', tps);
+    viewEl.classList.toggle('on', tps);
+    if (selfAvatar) selfAvatar.visible = tps;
+  }
 
   function beginMove(t) {
     moveTid = t.identifier;
@@ -567,16 +602,28 @@
   addEventListener('touchcancel', endTouch);
 
   jumpEl.addEventListener('touchstart', (ev) => { ev.preventDefault(); wantJump = true; }, { passive: false });
+  const onViewTap = (ev) => { ev.preventDefault(); toggleView(); };
+  viewEl.addEventListener('touchstart', onViewTap, { passive: false });
+  viewEl.addEventListener('click', onViewTap);
+
   addEventListener('keydown', (ev) => {
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
+    if (ev.code === 'KeyV' && !ev.repeat) toggleView();
   });
   addEventListener('keyup', (ev) => { keys[ev.code] = false; });
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
+
+  // keep the render size locked to the visible viewport, including after an
+  // orientation flip (mobile fires this late, so re-apply on a short delay)
+  function onResize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
+    renderer.setSize(w, h);
+  }
+  addEventListener('resize', onResize);
+  addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 250); setTimeout(onResize, 600); });
+  if (window.visualViewport) visualViewport.addEventListener('resize', onResize);
 
   // ──────────────────────────────────────────────────────────
   //  Multiplayer — shared world over a public MQTT broker.
@@ -768,6 +815,7 @@
   // ──────────────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
   const fwd = new THREE.Vector3(), rgt = new THREE.Vector3(), mv = new THREE.Vector3();
+  const _look = new THREE.Vector3(), _tgt = new THREE.Vector3(), _cam = new THREE.Vector3();
   let last = performance.now(), fpsT = 0, fpsN = 0;
 
   function frame(now) {
@@ -815,8 +863,25 @@
       roll = Math.sin(bob) * 0.0075 * amt;
     }
 
-    camera.position.set(p.x, p.y + bobY, p.z);
-    camera.rotation.set(pitch, yaw, roll, 'YXZ');
+    // --- camera: first- or third-person ---
+    if (tps) {
+      const cp = Math.cos(pitch), sp = Math.sin(pitch);
+      _look.set(-Math.sin(yaw) * cp, sp, -Math.cos(yaw) * cp);     // gaze direction
+      _tgt.set(p.x, p.y + 0.1, p.z);                               // orbit around the head
+      _cam.copy(_tgt).addScaledVector(_look, -4.6);                // pull the camera back
+      _cam.y += 0.6;
+      const gy = height(_cam.x, _cam.z) + 0.5;                     // stay above the terrain
+      if (_cam.y < gy) _cam.y = gy;
+      camera.position.copy(_cam);
+      camera.lookAt(_tgt);
+      if (selfAvatar) {
+        selfAvatar.position.set(p.x, p.y - EYE, p.z);
+        selfAvatar.rotation.y = yaw + Math.PI;                     // face where you're looking
+      }
+    } else {
+      camera.position.set(p.x, p.y + bobY, p.z);
+      camera.rotation.set(pitch, yaw, roll, 'YXZ');
+    }
     sky.position.set(p.x, 0, p.z);
     water.position.set(p.x, 0, p.z);
 
