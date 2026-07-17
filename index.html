@@ -93,6 +93,35 @@
   #enter:hover { background: var(--major); transform: translateY(-1px); }
   #enter:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 
+  /* ---- login fields ---- */
+  #fields { display: grid; gap: 12px; margin-top: 30px; text-align: left; }
+  #fields label {
+    display: grid; grid-template-columns: 50px 1fr; align-items: center; gap: 12px;
+    color: var(--line-dim); font-size: 10px; letter-spacing: .18em;
+  }
+  #fields input {
+    font: inherit; font-size: 13px; font-weight: 400; letter-spacing: .06em;
+    color: var(--major); background: rgba(127,227,196,.06);
+    border: 1px solid rgba(127,227,196,.24); border-radius: 2px;
+    padding: 9px 11px; width: 100%; outline: none;
+    transition: border-color .18s ease, background .18s ease;
+  }
+  #fields input:focus { border-color: var(--line); background: rgba(127,227,196,.10); }
+  #fields input::placeholder { color: rgba(127,227,196,.28); }
+  #hint { margin-top: 14px !important; font-size: 10px !important; }
+
+  /* ---- network / roster ---- */
+  #net {
+    position: absolute; left: 28px; top: 22px;
+    color: var(--line-dim); font-size: 10px; font-weight: 300;
+    letter-spacing: .12em; line-height: 1.9;
+  }
+  #net-status b { color: var(--line); font-weight: 600; }
+  #net-status.off b { color: var(--amber); }
+  #net-list { margin-top: 4px; }
+  #net-list div { color: var(--line); font-weight: 400; }
+  #net-list div.me { color: var(--major); }
+
   #loading {
     position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
     color: var(--line-dim); font-size: 10px; letter-spacing: .3em;
@@ -103,6 +132,10 @@
 
 <div id="hud">
   <div id="reticle"><span></span></div>
+  <div id="net">
+    <div id="net-status">NET <b>—</b></div>
+    <div id="net-list"></div>
+  </div>
   <div id="survey">
     <dl>
       <dt>ELEV</dt><dd id="v-elev">—</dd>
@@ -126,12 +159,18 @@
       標高 4 m ごとに 1 本、20 m ごとに計曲線。<br>
       水面が 0 m の等高線になる。
     </p>
-    <button id="enter" autofocus>視点を掴む</button>
+    <div id="fields">
+      <label>NAME <input id="nick" maxlength="16" placeholder="測量士" autocomplete="off" autofocus></label>
+      <label>ROOM <input id="room" maxlength="24" placeholder="lobby" autocomplete="off"></label>
+    </div>
+    <p id="hint">同じ ROOM 名の仲間と、同じ地形を一緒に歩けます。</p>
+    <button id="enter">視点を掴む</button>
   </div>
 </div>
 <div id="loading">GENERATING TERRAIN</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>
 <script>
 (() => {
   'use strict';
@@ -326,6 +365,15 @@
   light.position.copy(SUN_DIR).multiplyScalar(100);
   scene.add(light, new THREE.HemisphereLight(0x35525e, 0x070b0e, 0.55));
 
+  // seeded RNG so every player sees the same outcrops in the shared world
+  const mulberry32 = (a) => () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+  const rrand = mulberry32(0x5EEDBEEF);
+
   const rockGeo = new THREE.IcosahedronGeometry(1, 0);
   const rocks = new THREE.InstancedMesh(
     rockGeo, new THREE.MeshLambertMaterial({ color: C.rock, flatShading: true }), 150
@@ -334,14 +382,14 @@
   const vPos = new THREE.Vector3(), vScl = new THREE.Vector3();
   let placed = 0, guard = 0;
   while (placed < 150 && guard++ < 6000) {
-    const x = (Math.random() - 0.5) * WORLD * 0.94;
-    const z = (Math.random() - 0.5) * WORLD * 0.94;
+    const x = (rrand() - 0.5) * WORLD * 0.94;
+    const z = (rrand() - 0.5) * WORLD * 0.94;
     const y = height(x, z);
     if (y < 4) continue;
-    const s = 2.2 + Math.random() * 9;
+    const s = 2.2 + rrand() * 9;
     vPos.set(x, y + s * 0.32, z);
-    vScl.set(s * (0.7 + Math.random() * 0.8), s * (1.1 + Math.random() * 1.9), s * (0.7 + Math.random() * 0.8));
-    e.set(Math.random() * 0.5, Math.random() * 6.3, Math.random() * 0.5);
+    vScl.set(s * (0.7 + rrand() * 0.8), s * (1.1 + rrand() * 1.9), s * (0.7 + rrand() * 0.8));
+    e.set(rrand() * 0.5, rrand() * 6.3, rrand() * 0.5);
     rocks.setMatrixAt(placed++, m4.compose(vPos, q.setFromEuler(e), vScl));
   }
   rocks.count = placed;
@@ -369,8 +417,33 @@
   const hud  = document.getElementById('hud');
 
   const grab = () => canvas.requestPointerLock();
-  document.getElementById('enter').addEventListener('click', grab);
-  canvas.addEventListener('click', () => { if (!document.pointerLockElement) grab(); });
+  const nickEl = document.getElementById('nick');
+  const roomEl = document.getElementById('room');
+
+  // restore last-used name / room
+  try {
+    const sn = localStorage.getItem('contour.nick'); if (sn) nickEl.value = sn;
+    const sr = localStorage.getItem('contour.room'); if (sr) roomEl.value = sr;
+  } catch (e) {}
+
+  function startGame() {
+    MP.name = (nickEl.value || '').trim().slice(0, 16) || ('測量士-' + MP.id.slice(1, 4));
+    MP.room = (roomEl.value || '').trim().slice(0, 24) || 'lobby';
+    try {
+      localStorage.setItem('contour.nick', MP.name);
+      localStorage.setItem('contour.room', MP.room);
+    } catch (e) {}
+    connectMP();
+    grab();
+  }
+
+  document.getElementById('enter').addEventListener('click', startGame);
+  nickEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
+  roomEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
+  canvas.addEventListener('click', () => {
+    if (document.pointerLockElement) return;
+    MP.started ? grab() : startGame();
+  });
 
   document.addEventListener('pointerlockchange', () => {
     const on = document.pointerLockElement === canvas;
@@ -394,6 +467,191 @@
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   });
+
+  // ──────────────────────────────────────────────────────────
+  //  Multiplayer — shared world over a public MQTT broker.
+  //  No backend: players pub/sub their position on a room topic,
+  //  so friends who pick the same ROOM meet in the same terrain.
+  // ──────────────────────────────────────────────────────────
+  const MP = {
+    id: 'p' + Math.random().toString(36).slice(2, 9),
+    name: '', room: 'lobby',
+    client: null, connected: false, started: false,
+    peers: new Map(),          // id -> { name, group, cur, tgt, yaw, tgtYaw, lastSeen }
+    lastPub: 0,
+    PUB_MS: 70,                 // ~14 broadcasts / second
+    TIMEOUT: 6000,             // forget a peer unheard-of for 6 s
+    BROKER: 'wss://broker.emqx.io:8084/mqtt',
+  };
+
+  const netStatus = document.getElementById('net-status');
+  const netList   = document.getElementById('net-list');
+  const esc = (s) => String(s).replace(/[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function setNet(text, off) {
+    netStatus.innerHTML = 'NET <b>' + esc(text) + '</b>';
+    netStatus.className = off ? 'off' : '';
+  }
+  function topic(sub) { return 'contour/' + encodeURIComponent(MP.room) + '/' + sub; }
+
+  function renderRoster() {
+    const rows = ['<div class="me">' + esc(MP.name || '—') + ' (you)</div>'];
+    for (const peer of MP.peers.values()) rows.push('<div>' + esc(peer.name || '匿名') + '</div>');
+    netList.innerHTML = rows.join('');
+    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1), !MP.connected);
+  }
+
+  // floating nameplate as a billboard sprite
+  function nameSprite(name) {
+    const fs = 30, pad = 9;
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d');
+    ctx.font = '600 ' + fs + 'px "IBM Plex Mono", monospace';
+    const w = Math.ceil(ctx.measureText(name).width) + pad * 2;
+    const h = fs + pad * 2;
+    cv.width = w; cv.height = h;
+    ctx.font = '600 ' + fs + 'px "IBM Plex Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(11,16,20,0.62)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#C8FBEA';
+    ctx.fillText(name, pad, h / 2 + 1);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.minFilter = THREE.LinearFilter;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, fog: false }));
+    spr.scale.set(w / h * 1.15, 1.15, 1);
+    spr.position.y = 2.55;
+    spr.renderOrder = 4;
+    return spr;
+  }
+
+  function makeAvatar(name) {
+    const g = new THREE.Group();
+    const amber = new THREE.MeshBasicMaterial({ color: C.sun, fog: true });
+    const cyan  = new THREE.MeshBasicMaterial({ color: C.line, fog: true, transparent: true, opacity: 0.9 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.30, 1.25, 8), amber);
+    body.position.y = 0.95; g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), amber);
+    head.position.y = 1.78; g.add(head);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.62, 28), cyan);
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; g.add(ring);
+    const pip = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.34, 8), cyan);
+    pip.rotation.x = Math.PI / 2; pip.position.set(0, 0.95, 0.42); g.add(pip);
+    const tag = nameSprite(name);
+    g.add(tag); g.userData.tag = tag;
+    return g;
+  }
+
+  function setTag(peer, name) {
+    const old = peer.group.userData.tag;
+    peer.group.remove(old);
+    old.material.map.dispose(); old.material.dispose();
+    const tag = nameSprite(name);
+    peer.group.add(tag); peer.group.userData.tag = tag;
+  }
+
+  function upsertPeer(s) {
+    let peer = MP.peers.get(s.id);
+    if (!peer) {
+      const group = makeAvatar(s.n || '匿名');
+      group.position.set(s.x, s.y, s.z);
+      group.rotation.y = s.r || 0;
+      scene.add(group);
+      peer = {
+        name: s.n || '匿名', group,
+        cur: new THREE.Vector3(s.x, s.y, s.z),
+        tgt: new THREE.Vector3(s.x, s.y, s.z),
+        yaw: s.r || 0, tgtYaw: s.r || 0,
+        lastSeen: performance.now(),
+      };
+      MP.peers.set(s.id, peer);
+      renderRoster();
+    }
+    peer.tgt.set(s.x, s.y, s.z);
+    peer.tgtYaw = s.r || 0;
+    peer.lastSeen = performance.now();
+    if (s.n && s.n !== peer.name) { peer.name = s.n; setTag(peer, s.n); renderRoster(); }
+  }
+
+  function dropPeer(id) {
+    const peer = MP.peers.get(id);
+    if (!peer) return;
+    scene.remove(peer.group);
+    peer.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
+    MP.peers.delete(id);
+    renderRoster();
+  }
+
+  function connectMP() {
+    if (MP.started) return;
+    MP.started = true;
+    renderRoster();
+    if (typeof mqtt === 'undefined') { setNet('SOLO', true); return; }   // CDN blocked → play alone
+
+    setNet('CONNECTING…', true);
+    let client;
+    try {
+      client = mqtt.connect(MP.BROKER, {
+        clientId: 'contour_' + MP.id,
+        clean: true, reconnectPeriod: 3000, connectTimeout: 9000, keepalive: 30,
+        will: { topic: topic('leave'), payload: JSON.stringify({ id: MP.id }), qos: 0 },
+      });
+    } catch (err) { setNet('SOLO', true); return; }
+    MP.client = client;
+
+    client.on('connect', () => {
+      MP.connected = true;
+      client.subscribe(topic('state/+'));
+      client.subscribe(topic('leave'));
+      publishState(true);
+      renderRoster();
+    });
+    client.on('reconnect', () => setNet('RECONNECTING…', true));
+    client.on('close', () => { MP.connected = false; renderRoster(); });
+    client.on('error', () => {});
+    client.on('message', (t, buf) => {
+      let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
+      if (!msg || !msg.id) return;
+      if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
+      if (msg.id === MP.id) return;
+      upsertPeer(msg);
+    });
+
+    addEventListener('beforeunload', () => {
+      try { client.publish(topic('leave'), JSON.stringify({ id: MP.id })); client.end(true); } catch (e) {}
+    });
+  }
+
+  function publishState(force) {
+    if (!MP.connected || !MP.client) return;
+    const now = performance.now();
+    if (!force && now - MP.lastPub < MP.PUB_MS) return;
+    MP.lastPub = now;
+    MP.client.publish(topic('state/' + MP.id), JSON.stringify({
+      id: MP.id, n: MP.name,
+      x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2),
+      r: +yaw.toFixed(3),
+    }));
+  }
+
+  function updatePeers(dt) {
+    const now = performance.now();
+    const k = 1 - Math.exp(-dt * 9);
+    for (const [id, peer] of MP.peers) {
+      if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
+      peer.cur.lerp(peer.tgt, k);
+      peer.group.position.copy(peer.cur);
+      let d = (peer.tgtYaw - peer.yaw) % (Math.PI * 2);
+      if (d > Math.PI) d -= Math.PI * 2;
+      if (d < -Math.PI) d += Math.PI * 2;
+      peer.yaw += d * k;
+      peer.group.rotation.y = peer.yaw;
+    }
+  }
 
   // ──────────────────────────────────────────────────────────
   //  Loop
@@ -449,6 +707,10 @@
     camera.rotation.set(pitch, yaw, roll, 'YXZ');
     sky.position.set(p.x, 0, p.z);
     water.position.set(p.x, 0, p.z);
+
+    // --- multiplayer: broadcast self, advance others ---
+    updatePeers(dt);
+    publishState(false);
 
     renderer.render(scene, camera);
 
