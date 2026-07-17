@@ -3,51 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>CONTOUR — 測量野帳</title>
+<title>CONTOUR — 草原と海</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&display=swap" rel="stylesheet">
 <style>
   :root {
     --ink:      #0B1014;
-    --line:     #7FE3C4;
-    --line-dim: rgba(127, 227, 196, 0.42);
-    --major:    #C8FBEA;
+    --line:     #EAF3E4;
+    --line-dim: rgba(234, 243, 228, 0.42);
+    --major:    #FFFFFF;
     --amber:    #E8A24C;
+    --grass:    #86A94E;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; height: 100dvh; overflow: hidden; background: var(--ink); }
-  body { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-  /* the brightness filter makes the canvas a stacking context, so pin it to
-     the bottom and give every overlay an explicit z-index above it */
-  canvas { display: block; position: fixed; inset: 0; z-index: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
+  html, body { height: 100%; overflow: hidden; background: var(--ink); }
+  body {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    touch-action: none; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  canvas { display: block; }
 
   /* ---- HUD ---- */
   #hud {
-    position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    position: fixed; inset: 0; z-index: 6; pointer-events: none;
     opacity: 0; transition: opacity .6s ease .2s;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
   #hud.live { opacity: 1; }
 
-  #reticle {
-    position: absolute; left: 50%; top: 50%;
-    width: 26px; height: 26px; transform: translate(-50%, -50%);
-  }
-  #reticle::before, #reticle::after {
-    content: ''; position: absolute; background: var(--line-dim);
-  }
-  #reticle::before { left: 50%; top: 0; width: 1px; height: 100%; transform: translateX(-50%); }
-  #reticle::after  { top: 50%; left: 0; height: 1px; width: 100%; transform: translateY(-50%); }
-  #reticle span {
-    position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
-    transform: translate(-50%, -50%); background: var(--ink);
-    box-shadow: 0 0 0 1px rgba(127,227,196,.55);
-  }
-
   #survey {
-    position: absolute;
-    left: calc(28px + env(safe-area-inset-left)); bottom: calc(26px + env(safe-area-inset-bottom));
-    color: var(--line); font-size: 11px; font-weight: 300;
+    position: absolute; left: calc(24px + env(safe-area-inset-left)); top: calc(22px + env(safe-area-inset-top));
+    color: var(--grass); font-size: 11px; font-weight: 300;
     letter-spacing: .09em; line-height: 1.9;
   }
   #survey dl { display: grid; grid-template-columns: auto auto; gap: 0 14px; }
@@ -56,20 +44,64 @@
   #survey dd.up { color: var(--amber); }
 
   #meta {
-    position: absolute;
-    right: calc(28px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom));
+    position: absolute; right: calc(24px + env(safe-area-inset-right)); top: calc(22px + env(safe-area-inset-top));
     text-align: right;
     color: var(--line-dim); font-size: 10px; font-weight: 300; letter-spacing: .12em;
     line-height: 2;
   }
-  /* on touch, lift the readout clear of the on-screen buttons */
-  body.touch #meta { bottom: calc(122px + env(safe-area-inset-bottom)); }
   #meta b { color: var(--line); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* ---- Touch controls ---- */
+  #touch { position: fixed; inset: 0; z-index: 5; pointer-events: none; opacity: 0; transition: opacity .4s ease; }
+  #touch.live { opacity: 1; }
+
+  #look, #stick, #jump, #lookpad { pointer-events: none; touch-action: none; }
+  #touch.live #look, #touch.live #stick, #touch.live #jump, #touch.live #lookpad { pointer-events: auto; }
+
+  #look { position: absolute; inset: 0; z-index: 1; }
+
+  #stick {
+    position: absolute; z-index: 2;
+    left: calc(30px + env(safe-area-inset-left)); bottom: calc(38px + env(safe-area-inset-bottom));
+    width: 138px; height: 138px; border-radius: 50%;
+    border: 1px solid var(--line-dim); background: rgba(234, 243, 228, .04);
+    box-shadow: inset 0 0 22px rgba(234,243,228,.05);
+  }
+  #knob {
+    position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px;
+    border-radius: 50%; background: rgba(234, 243, 228, .22);
+    border: 1px solid var(--line); transition: transform .05s linear;
+  }
+  #jump {
+    position: absolute; z-index: 2;
+    right: calc(52px + env(safe-area-inset-right)); bottom: calc(192px + env(safe-area-inset-bottom));
+    width: 84px; height: 84px; border-radius: 50%;
+    border: 1px solid var(--line-dim); background: rgba(234, 243, 228, .06);
+    color: var(--line); font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .18em;
+  }
+  #jump:active { background: rgba(234, 243, 228, .18); }
+
+  #lookpad {
+    position: absolute; z-index: 2;
+    right: calc(30px + env(safe-area-inset-right)); bottom: calc(38px + env(safe-area-inset-bottom));
+    width: 138px; height: 138px; border-radius: 50%;
+    border: 1px solid var(--line-dim); background: rgba(234, 243, 228, .04);
+    box-shadow: inset 0 0 22px rgba(234, 243, 228, .05);
+  }
+  #lookpad span {
+    position: absolute; left: 0; right: 0; bottom: 13px; text-align: center;
+    color: var(--line-dim); font-size: 9px; font-weight: 600; letter-spacing: .18em;
+  }
+  #lookknob {
+    position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px;
+    border-radius: 50%; background: rgba(234, 243, 228, .14);
+    border: 1px solid var(--line-dim); transition: transform .12s ease;
+  }
 
   /* ---- Gate ---- */
   #gate {
-    position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
-    background: radial-gradient(120% 90% at 50% 108%, #17303a 0%, #0B1014 62%);
+    position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+    background: radial-gradient(120% 90% at 50% 108%, #1d3a44 0%, #0B1014 62%);
     transition: opacity .5s ease, visibility .5s;
   }
   #gate.gone { opacity: 0; visibility: hidden; }
@@ -86,113 +118,94 @@
     color: var(--line-dim); font-size: 12px; font-weight: 300;
     letter-spacing: .07em; line-height: 2.1;
   }
-  #card kbd {
-    color: var(--line); font-weight: 600; font-size: 11px;
-    border: 1px solid rgba(127,227,196,.28); border-radius: 2px;
-    padding: 2px 6px; margin: 0 1px;
-  }
   #enter {
-    margin-top: 34px; font: inherit; font-size: 11px; font-weight: 600;
-    letter-spacing: .22em; color: var(--ink); background: var(--line);
-    border: 0; border-radius: 2px; padding: 13px 30px; cursor: pointer;
+    margin-top: 34px; font: inherit; font-size: 12px; font-weight: 600;
+    letter-spacing: .22em; color: var(--ink); background: var(--grass);
+    border: 0; border-radius: 2px; padding: 15px 34px; cursor: pointer;
     transition: background .18s ease, transform .18s ease;
   }
-  #enter:hover { background: var(--major); transform: translateY(-1px); }
+  #enter:active { transform: translateY(1px); }
   #enter:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 
-  /* ---- login fields ---- */
+  #loading {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    color: var(--line-dim); font-size: 10px; letter-spacing: .3em;
+  }
+
+  /* ---- underwater tint ---- */
+  #fx {
+    position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0;
+    transition: opacity .28s linear;
+    background: radial-gradient(120% 120% at 50% 42%, rgba(58,140,166,.20), rgba(9,44,68,.9));
+  }
+
+  /* ---- toolbar (view / control-mode toggles) ---- */
+  #toolbar {
+    position: absolute; left: 50%; bottom: calc(26px + env(safe-area-inset-bottom));
+    transform: translateX(-50%); display: flex; gap: 10px; pointer-events: none;
+  }
+  #hud.live #toolbar button { pointer-events: auto; }
+  #toolbar button {
+    font: inherit; font-size: 10px; font-weight: 600; letter-spacing: .14em;
+    color: var(--line); background: rgba(11, 16, 20, .5);
+    border: 1px solid var(--line-dim); border-radius: 2px; padding: 9px 14px;
+    cursor: pointer; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  }
+  #toolbar button:active { background: rgba(234, 243, 228, .16); transform: translateY(1px); }
+
+  /* ================= merged additions ================= */
+  /* pin the canvas below every overlay (the brightness filter turns it into a
+     stacking context, which would otherwise paint over the HUD/gate) */
+  canvas { position: fixed; inset: 0; z-index: 0; }
+
+  /* ---- login fields on the gate ---- */
   #fields { display: grid; gap: 12px; margin-top: 30px; text-align: left; }
   #fields label {
-    display: grid; grid-template-columns: 50px 1fr; align-items: center; gap: 12px;
-    color: var(--line-dim); font-size: 10px; letter-spacing: .18em;
+    display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 12px;
+    color: var(--line-dim); font-size: 10px; letter-spacing: .16em;
   }
   #fields input {
-    font: inherit; font-size: 13px; font-weight: 400; letter-spacing: .06em;
-    color: var(--major); background: rgba(127,227,196,.06);
-    border: 1px solid rgba(127,227,196,.24); border-radius: 2px;
-    padding: 9px 11px; width: 100%; outline: none;
+    font: inherit; font-size: 13px; font-weight: 400; letter-spacing: .05em;
+    color: var(--major); background: rgba(234,243,228,.06);
+    border: 1px solid rgba(234,243,228,.28); border-radius: 2px; padding: 9px 11px; width: 100%; outline: none;
     transition: border-color .18s ease, background .18s ease;
   }
-  #fields input:focus { border-color: var(--line); background: rgba(127,227,196,.10); }
-  #fields input::placeholder { color: rgba(127,227,196,.28); }
-  #hint { margin-top: 14px !important; font-size: 10px !important; }
+  #fields input:focus { border-color: var(--line); background: rgba(234,243,228,.12); }
+  #fields input::placeholder { color: rgba(234,243,228,.3); }
+  #hint { margin-top: 14px; color: var(--line-dim); font-size: 10px; letter-spacing: .06em; line-height: 1.9; }
 
-  /* ---- network / roster ---- */
+  /* ---- roster (top centre) ---- */
   #net {
-    position: absolute;
-    left: calc(28px + env(safe-area-inset-left)); top: calc(22px + env(safe-area-inset-top));
-    color: var(--line-dim); font-size: 10px; font-weight: 300;
-    letter-spacing: .12em; line-height: 1.9;
+    position: absolute; left: 50%; transform: translateX(-50%);
+    top: calc(20px + env(safe-area-inset-top)); text-align: center;
+    color: var(--line-dim); font-size: 10px; font-weight: 300; letter-spacing: .12em; line-height: 1.8;
   }
   #net-status b { color: var(--line); font-weight: 600; }
   #net-status.off b { color: var(--amber); }
-  #net-list { margin-top: 4px; }
+  #net-list { margin-top: 3px; }
   #net-list div { color: var(--line); font-weight: 400; }
   #net-list div.me { color: var(--major); }
 
-  /* ---- touch controls (mobile) ---- */
-  #touch { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
-  body.touch #touch { display: block; }
-  #stick {
-    position: absolute; width: 108px; height: 108px; margin: -54px 0 0 -54px;
-    border: 1px solid rgba(127,227,196,.35); border-radius: 50%;
-    background: rgba(127,227,196,.05); display: none;
-  }
-  #stick.on { display: block; }
-  #stick-knob {
-    position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
-    margin: -23px 0 0 -23px; border-radius: 50%;
-    background: rgba(127,227,196,.22); border: 1px solid rgba(127,227,196,.6);
-  }
-  .tbtn {
-    position: absolute; pointer-events: auto; touch-action: none;
-    -webkit-user-select: none; user-select: none;
-    display: grid; place-items: center; color: var(--line);
-    font-size: 11px; font-weight: 600; letter-spacing: .12em;
-    border: 1px solid rgba(127,227,196,.42); border-radius: 50%;
-    background: rgba(127,227,196,.08); -webkit-tap-highlight-color: transparent;
-  }
-  .tbtn:active { background: rgba(127,227,196,.22); }
-  #jump {
-    right: calc(28px + env(safe-area-inset-right));
-    bottom: calc(30px + env(safe-area-inset-bottom));
-    width: 76px; height: 76px;
-  }
-  #view {
-    right: calc(116px + env(safe-area-inset-right));
-    bottom: calc(41px + env(safe-area-inset-bottom));
-    width: 58px; height: 58px; font-size: 10px; letter-spacing: .06em;
-  }
-  #view.on { color: var(--major); border-color: var(--major); background: rgba(200,251,234,.14); }
-  /* third-person: the centre reticle is meaningless, hide it */
-  body.tps #reticle { display: none; }
+  /* nudge the help/FPS readout down so it clears the settings gear */
+  #meta { top: calc(72px + env(safe-area-inset-top)); }
 
   /* ---- settings ---- */
   #gear {
-    position: fixed; top: calc(20px + env(safe-area-inset-top));
-    right: calc(20px + env(safe-area-inset-right));
-    width: 42px; height: 42px; display: none; place-items: center;
-    pointer-events: auto; cursor: pointer; z-index: 8; font-size: 21px;
-    color: var(--line); border: 1px solid rgba(127,227,196,.4);
-    border-radius: 50%; background: rgba(11,16,20,.5);
-    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+    position: fixed; top: calc(18px + env(safe-area-inset-top)); right: calc(20px + env(safe-area-inset-right));
+    width: 42px; height: 42px; display: none; place-items: center; z-index: 12; font-size: 21px; cursor: pointer;
+    color: var(--line); border: 1px solid var(--line-dim); border-radius: 50%; background: rgba(11,16,20,.5);
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); -webkit-tap-highlight-color: transparent;
   }
   body.playing #gear { display: grid; }
-  #gear:active { background: rgba(127,227,196,.18); }
+  #gear:active { background: rgba(234,243,228,.18); }
 
-  #settings {
-    position: fixed; inset: 0; z-index: 9; display: none;
-    place-items: center; background: rgba(6,10,14,.55); pointer-events: auto;
-  }
+  #settings { position: fixed; inset: 0; z-index: 14; display: none; place-items: center; background: rgba(6,10,14,.55); }
   #settings.open { display: grid; }
   #settings .panel {
     width: min(360px, 86vw); padding: 22px 22px 24px;
-    background: #0d151b; border: 1px solid rgba(127,227,196,.28); border-radius: 6px;
+    background: #0f1a16; border: 1px solid rgba(234,243,228,.24); border-radius: 6px;
   }
-  #settings h2 {
-    font-size: 12px; font-weight: 600; letter-spacing: .22em; color: var(--major);
-    margin-bottom: 20px;
-  }
+  #settings h2 { font-size: 12px; font-weight: 600; letter-spacing: .22em; color: var(--major); margin-bottom: 20px; }
   #settings .row { margin-bottom: 20px; }
   #settings .lbl {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -201,37 +214,25 @@
   #settings .lbl b { color: var(--line); font-weight: 600; font-variant-numeric: tabular-nums; }
   #settings input[type=range] {
     -webkit-appearance: none; appearance: none; width: 100%; height: 3px;
-    background: rgba(127,227,196,.25); border-radius: 3px; outline: none; margin: 6px 0;
+    background: rgba(234,243,228,.25); border-radius: 3px; outline: none; margin: 6px 0;
   }
   #settings input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none; appearance: none; width: 22px; height: 22px;
-    border-radius: 50%; background: var(--line); cursor: pointer; border: 3px solid #0d151b;
+    border-radius: 50%; background: var(--line); cursor: pointer; border: 3px solid #0f1a16;
   }
   #settings input[type=range]::-moz-range-thumb {
-    width: 18px; height: 18px; border: 3px solid #0d151b;
-    border-radius: 50%; background: var(--line); cursor: pointer;
+    width: 18px; height: 18px; border: 3px solid #0f1a16; border-radius: 50%; background: var(--line); cursor: pointer;
   }
   #settings .close {
     width: 100%; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .2em;
-    color: var(--ink); background: var(--line); border: 0; border-radius: 2px;
-    padding: 12px; cursor: pointer;
+    color: var(--ink); background: var(--grass); border: 0; border-radius: 2px; padding: 12px; cursor: pointer;
   }
-  #settings .close:hover { background: var(--major); }
 
-  #loading {
-    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 25;
-    color: var(--line-dim); font-size: 10px; letter-spacing: .3em;
-  }
 </style>
 </head>
 <body>
 
 <div id="hud">
-  <div id="reticle"><span></span></div>
-  <div id="net">
-    <div id="net-status">NET <b>—</b></div>
-    <div id="net-list"></div>
-  </div>
   <div id="survey">
     <dl>
       <dt>ELEV</dt><dd id="v-elev">—</dd>
@@ -240,9 +241,38 @@
       <dt>N</dt><dd id="v-n">—</dd>
     </dl>
   </div>
+  <div id="net">
+    <div id="net-status">NET <b>—</b></div>
+    <div id="net-list"></div>
+  </div>
   <div id="meta">
-    <div>WASD 移動 · SHIFT 走る · SPACE 跳ぶ · V 視点 · ESC 解除</div>
+    <div id="m-help">左スティック 移動 · ドラッグ 視点 · JUMP 跳ぶ</div>
     <div>CI 4 m &nbsp;·&nbsp; <b id="v-fps">--</b> FPS</div>
+  </div>
+  <div id="toolbar">
+    <button id="b-view" type="button">3人称</button>
+    <button id="b-mode" type="button">SP操作</button>
+  </div>
+</div>
+
+<div id="fx"></div>
+
+<div id="touch">
+  <div id="look"></div>
+  <div id="stick"><div id="knob"></div></div>
+  <div id="lookpad"><span>視点</span><div id="lookknob"></div></div>
+  <button id="jump" type="button">JUMP</button>
+</div>
+
+<div id="gear" role="button" aria-label="設定">⚙</div>
+<div id="settings">
+  <div class="panel">
+    <h2>設定 · SETTINGS</h2>
+    <div class="row">
+      <div class="lbl"><span>画面の明るさ · BRIGHTNESS</span><b id="bright-val">100%</b></div>
+      <input id="brightness" type="range" min="0.6" max="2.6" step="0.05" value="1">
+    </div>
+    <button class="close" id="settings-close">閉じる</button>
   </div>
 </div>
 
@@ -251,36 +281,18 @@
     <h1>CONTOUR</h1>
     <div class="rule"></div>
     <p>
-      等高線だけで描かれた地形の内側を歩く。<br>
-      標高 4 m ごとに 1 本、20 m ごとに計曲線。<br>
-      水面が 0 m の等高線になる。
+      草原をあるき、砂浜をこえ、海をのぞむ。<br>
+      等高線でえがかれた地形の内側を、仲間と歩く。<br>
+      標高 0 m の等高線が水ぎわになる。
     </p>
     <div id="fields">
-      <label>NAME <input id="nick" maxlength="16" placeholder="測量士" autocomplete="off" autofocus></label>
+      <label>NAME <input id="nick" maxlength="16" placeholder="旅人" autocomplete="off" autofocus></label>
       <label>ROOM <input id="room" maxlength="24" placeholder="lobby" autocomplete="off"></label>
     </div>
     <p id="hint">同じ ROOM 名の仲間と、同じ地形を一緒に歩けます。</p>
-    <button id="enter">ゲームスタート</button>
+    <button id="enter">あるきはじめる</button>
   </div>
 </div>
-<div id="touch">
-  <div id="stick"><div id="stick-knob"></div></div>
-  <div id="view" class="tbtn">視点</div>
-  <div id="jump" class="tbtn">JUMP</div>
-</div>
-
-<div id="gear" role="button" aria-label="設定">⚙</div>
-<div id="settings">
-  <div class="panel">
-    <h2>設定 · SETTINGS</h2>
-    <div class="row">
-      <div class="lbl"><span>画面の明るさ · BRIGHTNESS</span><b id="bright-val">130%</b></div>
-      <input id="brightness" type="range" min="0.6" max="2.6" step="0.05" value="1.3">
-    </div>
-    <button class="close" id="settings-close">閉じる</button>
-  </div>
-</div>
-
 <div id="loading">GENERATING TERRAIN</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -290,21 +302,23 @@
   'use strict';
 
   // ──────────────────────────────────────────────────────────
-  //  Palette
+  //  Palette — grassland · beach · sea
   // ──────────────────────────────────────────────────────────
   const C = {
-    horizon: new THREE.Color(0x2E4A54),
-    zenith:  new THREE.Color(0x080C11),
-    sun:     new THREE.Color(0xE8A24C),
-    low:     new THREE.Color(0x101C23),
-    high:    new THREE.Color(0x3B505A),
-    line:    new THREE.Color(0x7FE3C4),
-    major:   new THREE.Color(0xC8FBEA),
-    rock:    new THREE.Color(0x0C141A),
-    water:   new THREE.Color(0x14313B),
+    horizon: new THREE.Color(0xBcd3d8),
+    zenith:  new THREE.Color(0x2C6FA6),
+    sun:     new THREE.Color(0xFCE7B0),
+    sand:    new THREE.Color(0xD8C79A),
+    grassLo: new THREE.Color(0x4E7233),
+    grassHi: new THREE.Color(0x88A94E),
+    cliff:   new THREE.Color(0x6E655A),
+    line:    new THREE.Color(0xEAF3E4),
+    major:   new THREE.Color(0xFFFFFF),
+    rock:    new THREE.Color(0x7A7266),
+    water:   new THREE.Color(0x2E7FA0),
   };
-  const FOG_DENSITY = 0.0092;
-  const SUN_DIR = new THREE.Vector3(0.62, 0.085, -0.78).normalize();
+  const FOG_DENSITY = 0.0065;
+  const SUN_DIR = new THREE.Vector3(0.5, 0.4, -0.6).normalize();
 
   const WORLD = 700;      // metres across
   const SEGS  = 360;      // grid resolution
@@ -381,10 +395,10 @@
         void main() {
           vec3 d = normalize(vDir);
           float t = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 col = mix(uHorizon, uZenith, smoothstep(0.50, 0.88, t));
-          col = mix(col, uHorizon * 0.72, smoothstep(0.50, 0.30, t));
+          vec3 col = mix(uHorizon, uZenith, smoothstep(0.50, 0.92, t));
+          col = mix(col, uHorizon * 0.94, smoothstep(0.50, 0.32, t));
           float a = max(dot(d, uSunDir), 0.0);
-          col += uSun * (pow(a, 220.0) * 1.6 + pow(a, 6.0) * 0.20);
+          col += uSun * (pow(a, 260.0) * 1.4 + pow(a, 6.0) * 0.16);
           gl_FragColor = vec4(col, 1.0);
         }`
     })
@@ -392,7 +406,7 @@
   scene.add(sky);
 
   // ──────────────────────────────────────────────────────────
-  //  Terrain — the signature: elevation read as contour lines
+  //  Terrain — grass / beach / sea, with faint contour lines
   // ──────────────────────────────────────────────────────────
   const geo = new THREE.PlaneGeometry(WORLD, WORLD, SEGS, SEGS);
   geo.rotateX(-Math.PI / 2);
@@ -405,13 +419,15 @@
   const terrainMat = new THREE.ShaderMaterial({
     extensions: { derivatives: true },
     uniforms: {
-      uLow:      { value: C.low },
-      uHigh:     { value: C.high },
+      uSand:     { value: C.sand },
+      uGrassLo:  { value: C.grassLo },
+      uGrassHi:  { value: C.grassHi },
+      uCliff:    { value: C.cliff },
       uLine:     { value: C.line },
       uMajor:    { value: C.major },
       uSunCol:   { value: C.sun },
       uSunDir:   { value: SUN_DIR },
-      uFogCol:   { value: C.horizon },
+      uFogCol:   { value: C.horizon.clone() },
       uFogDens:  { value: FOG_DENSITY },
       uCI:       { value: CI },
     },
@@ -428,7 +444,7 @@
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform vec3  uLow, uHigh, uLine, uMajor, uSunCol, uSunDir, uFogCol;
+      uniform vec3  uSand, uGrassLo, uGrassHi, uCliff, uLine, uMajor, uSunCol, uSunDir, uFogCol;
       uniform float uFogDens, uCI;
       varying float vH;
       varying vec3  vN;
@@ -444,20 +460,25 @@
       void main() {
         vec3 n = normalize(vN);
 
-        // base: elevation ramp + grazing sun on slopes
-        vec3 base = mix(uLow, uHigh, smoothstep(-16.0, 74.0, vH));
+        // ---- ground cover: sand near the water line, grass above ----
+        vec3 grass = mix(uGrassLo, uGrassHi, smoothstep(3.0, 62.0, vH));
+        float sandy = 1.0 - smoothstep(0.6, 3.2, vH);       // 1 at shore, 0 inland
+        vec3 base = mix(grass, uSand, clamp(sandy, 0.0, 1.0));
+
+        // steep faces read as bare rock / dirt, not lawn
+        float steep = 1.0 - smoothstep(0.34, 0.68, n.y);
+        base = mix(base, uCliff, steep * 0.72);
+
         float ndl = max(dot(n, uSunDir), 0.0);
-        vec3 col  = base * (0.30 + 0.95 * ndl) + uSunCol * pow(ndl, 3.0) * 0.10;
+        vec3 col  = base * (0.42 + 0.78 * ndl) + uSunCol * pow(ndl, 3.0) * 0.08;
 
-        // contours fade out with distance so they never shimmer
+        // faint survey contours, fading with distance and on cliffs
         float fade = 1.0 - smoothstep(70.0, 250.0, vFog);
-        // and fade on near-vertical faces, where an isoline means nothing
         fade *= smoothstep(0.10, 0.42, n.y);
-
         float minor = band(vH, uCI);
         float major = band(vH, uCI * 5.0);
-        col = mix(col, uLine,  minor * 0.50 * fade);
-        col = mix(col, uMajor, major * 0.92 * fade);
+        col = mix(col, uLine,  minor * 0.14 * fade);
+        col = mix(col, uMajor, major * 0.30 * fade);
 
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -465,27 +486,22 @@
   });
   scene.add(new THREE.Mesh(geo, terrainMat));
 
-  // ---- water = the 0 m contour, filled ----
+  // ---- sea = the 0 m contour, filled ----
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(WORLD * 1.6, WORLD * 1.6),
-    new THREE.MeshBasicMaterial({ color: C.water, transparent: true, opacity: 0.9, fog: true })
+    new THREE.MeshBasicMaterial({ color: C.water, transparent: true, opacity: 0.86, side: THREE.DoubleSide, fog: true })
   );
   water.rotation.x = -Math.PI / 2;
   water.position.y = 0;
   scene.add(water);
 
-  // ---- outcrops: silhouettes only, for parallax and scale ----
-  const light = new THREE.DirectionalLight(0xffd7a0, 1.15);
+  // ---- rock outcrops: solid, and collidable ----
+  const light = new THREE.DirectionalLight(0xfff0d6, 1.15);
   light.position.copy(SUN_DIR).multiplyScalar(100);
-  scene.add(light, new THREE.HemisphereLight(0x35525e, 0x070b0e, 0.55));
+  scene.add(light, new THREE.HemisphereLight(0x8fb1c4, 0x30402c, 0.7));
 
-  // seeded RNG so every player sees the same outcrops in the shared world
-  const mulberry32 = (a) => () => {
-    a |= 0; a = a + 0x6D2B79F5 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+  // seeded RNG so every player shares the same collidable outcrops
+  const mulberry32 = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   const rrand = mulberry32(0x5EEDBEEF);
 
   const rockGeo = new THREE.IcosahedronGeometry(1, 0);
@@ -494,357 +510,230 @@
   );
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   const vPos = new THREE.Vector3(), vScl = new THREE.Vector3();
+  const rockCols = [];   // { x, z, r } cylinders for collision
   let placed = 0, guard = 0;
   while (placed < 150 && guard++ < 6000) {
     const x = (rrand() - 0.5) * WORLD * 0.94;
     const z = (rrand() - 0.5) * WORLD * 0.94;
     const y = height(x, z);
-    if (y < 4) continue;
+    if (y < 3) continue;
     const s = 2.2 + rrand() * 9;
+    const sx = s * (0.7 + rrand() * 0.8);
+    const sz = s * (0.7 + rrand() * 0.8);
     vPos.set(x, y + s * 0.32, z);
-    vScl.set(s * (0.7 + rrand() * 0.8), s * (1.1 + rrand() * 1.9), s * (0.7 + rrand() * 0.8));
+    vScl.set(sx, s * (1.1 + rrand() * 1.9), sz);
     e.set(rrand() * 0.5, rrand() * 6.3, rrand() * 0.5);
     rocks.setMatrixAt(placed++, m4.compose(vPos, q.setFromEuler(e), vScl));
+    rockCols.push({ x, z, r: Math.max(sx, sz) * 0.82 });
   }
   rocks.count = placed;
   scene.add(rocks);
 
-  // ──────────────────────────────────────────────────────────
-  //  First-person controller
-  // ──────────────────────────────────────────────────────────
-  const EYE = 1.68, GRAV = 26, JUMP = 8.4, WALK = 5.4, RUN = 10.2;
-  const p = new THREE.Vector3(0, 0, 0);
-  let yaw = 0, pitch = -0.04, vy = 0, grounded = false, bob = 0;
-  const keys = Object.create(null);
-  let wantJump = false;
-  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // ---- monkey avatar (rigged; shown in third-person view) ----
+  function makeMonkey() {
+    const furBack = new THREE.MeshStandardMaterial({ color: 0x9C8A6A, roughness: 1, metalness: 0, flatShading: true });
+    const furLite = new THREE.MeshStandardMaterial({ color: 0xD8CBAE, roughness: 1, metalness: 0, flatShading: true });
+    const faceSkin = new THREE.MeshStandardMaterial({ color: 0xC26456, roughness: 0.8, metalness: 0 });
+    const faceLite = new THREE.MeshStandardMaterial({ color: 0xD79A88, roughness: 0.8, metalness: 0 });
+    const skinD = new THREE.MeshStandardMaterial({ color: 0x8E3F34, roughness: 0.7, metalness: 0 });
+    const hands = new THREE.MeshStandardMaterial({ color: 0xB07A63, roughness: 0.85, metalness: 0 });
+    const dark  = new THREE.MeshStandardMaterial({ color: 0x1B1206, roughness: 0.5 });
+    const sph = (r, s = 16) => new THREE.SphereGeometry(r, s, s);
+    const seg = (len, rt, rb, mat) => {
+      const gm = new THREE.CylinderGeometry(rt, rb, len, 10);
+      gm.translate(0, -len / 2, 0);             // pivot at the top
+      return new THREE.Mesh(gm, mat);
+    };
 
-  // touch-capable device? (phones / tablets) → show on-screen controls
-  const isTouch = matchMedia('(pointer: coarse)').matches ||
-                  ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-  const touchMove = { active: false, x: 0, y: 0, run: false };  // x=strafe, y=forward
+    const g = new THREE.Group();
+    const body = new THREE.Group(); g.add(body);
+    const hipY = 0.86;
 
-  // drop the player somewhere above water with a view
-  for (let i = 0; i < 400; i++) {
-    const x = (Math.random() - 0.5) * WORLD * 0.6;
-    const z = (Math.random() - 0.5) * WORLD * 0.6;
-    const y = height(x, z);
-    if (y > 6 && y < 40) { p.set(x, y + EYE, z); break; }
-  }
+    const pelvis = new THREE.Group(); pelvis.position.y = hipY; body.add(pelvis);
+    const torso  = new THREE.Group(); torso.position.y  = hipY; body.add(torso);
 
-  const canvas = renderer.domElement;
-  const gate = document.getElementById('gate');
-  const hud  = document.getElementById('hud');
-
-  const grab = () => canvas.requestPointerLock();
-  const nickEl = document.getElementById('nick');
-  const roomEl = document.getElementById('room');
-
-  // restore last-used name / room
-  try {
-    const sn = localStorage.getItem('contour.nick'); if (sn) nickEl.value = sn;
-    const sr = localStorage.getItem('contour.room'); if (sr) roomEl.value = sr;
-  } catch (e) {}
-
-  // Start the game. Crucially this does NOT depend on Pointer Lock — the
-  // world reveals immediately, so it works even where lock is unavailable
-  // (mobile, embedded viewers). Mouse-look is layered on top for desktop.
-  function startGame() {
-    if (MP.playing) { if (!isTouch) grab(); return; }
-    MP.name = (nickEl.value || '').trim().slice(0, 16) || ('測量士-' + MP.id.slice(1, 4));
-    MP.room = (roomEl.value || '').trim().slice(0, 24) || 'lobby';
-    try {
-      localStorage.setItem('contour.nick', MP.name);
-      localStorage.setItem('contour.room', MP.room);
-    } catch (e) {}
-    MP.playing = true;
-    gate.classList.add('gone');
-    hud.classList.add('live');
-    document.body.classList.add('playing');
-    document.body.classList.toggle('touch', isTouch);
-    if (!selfAvatar) {                       // your own avatar, shown in third-person
-      selfAvatar = makeAvatar(MP.name);
-      if (selfAvatar.userData.tag) selfAvatar.userData.tag.visible = false; // hide own nameplate
-      selfAvatar.visible = tps;
-      scene.add(selfAvatar);
+    // rounded belly (cream) with a tan back and cream chest — macaque colouring
+    const back  = new THREE.Mesh(sph(0.34), furBack); back.position.set(0, 0.34, -0.06); back.scale.set(1.12, 1.2, 0.95); torso.add(back);
+    const belly = new THREE.Mesh(sph(0.37), furLite); belly.position.set(0, 0.14, 0.07); belly.scale.set(1.05, 1.12, 1.0); torso.add(belly);
+    const chest = new THREE.Mesh(sph(0.3),  furLite); chest.position.set(0, 0.54, 0.05); chest.scale.set(1.12, 0.95, 0.9); torso.add(chest);
+    for (const s of [-1, 1]) {
+      const sh = new THREE.Mesh(sph(0.2), furBack); sh.position.set(0.27 * s, 0.6, -0.03); torso.add(sh);
     }
-    if (isTouch) {                     // mobile: swap the help line for touch verbs
-      const meta = document.querySelector('#meta div');
-      if (meta) meta.textContent = '左 移動 · 右 ドラッグ 視点 · JUMP · 視点 で三人称';
+
+    const head = new THREE.Group(); head.position.set(0, 0.94, 0.03); torso.add(head);
+    const skull = new THREE.Mesh(sph(0.26), furBack); skull.scale.set(1, 1.02, 1.02); head.add(skull);
+    const faceRing = new THREE.Mesh(sph(0.225), faceSkin); faceRing.position.set(0, -0.02, 0.14); faceRing.scale.set(1, 1.12, 0.72); head.add(faceRing);
+    const muzzle = new THREE.Mesh(sph(0.14), faceSkin); muzzle.position.set(0, -0.12, 0.26); muzzle.scale.set(1, 0.82, 1.0); head.add(muzzle);
+    const nose = new THREE.Mesh(sph(0.045, 10), skinD); nose.position.set(0, -0.1, 0.39); head.add(nose);
+    const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 6), skinD); mouth.rotation.z = Math.PI / 2; mouth.position.set(0, -0.19, 0.33); head.add(mouth);
+    const brow = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.32, 8), faceSkin); brow.rotation.z = Math.PI / 2; brow.position.set(0, 0.08, 0.19); head.add(brow);
+    for (const s of [-1, 1]) {
+      const cheek = new THREE.Mesh(sph(0.1, 12), faceLite); cheek.position.set(0.15 * s, -0.05, 0.15); cheek.scale.set(0.9, 1, 0.6); head.add(cheek);
+      const ear = new THREE.Mesh(sph(0.09, 12), faceSkin); ear.position.set(0.26 * s, 0.03, -0.01); ear.scale.set(0.5, 1, 1); head.add(ear);
+      const eye = new THREE.Mesh(sph(0.042, 10), dark); eye.position.set(0.1 * s, 0.04, 0.32); head.add(eye);
     }
-    connectMP();
-    if (!isTouch) grab();              // desktop: capture the mouse for looking
-  }
 
-  document.getElementById('enter').addEventListener('click', startGame);
-  nickEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
-  roomEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGame(); });
-  canvas.addEventListener('click', () => {
-    if (isTouch || document.pointerLockElement) return;
-    MP.playing ? grab() : startGame();   // desktop: re-capture mouse after Esc
-  });
-
-  document.addEventListener('pointerlockchange', () => {
-    if (document.pointerLockElement !== canvas) for (const k in keys) keys[k] = false;
-  });
-  addEventListener('mousemove', (ev) => {
-    if (document.pointerLockElement !== canvas) return;
-    yaw   -= ev.movementX * 0.0021;
-    pitch -= ev.movementY * 0.0021;
-    pitch = Math.max(-1.55, Math.min(1.55, pitch));
-  });
-
-  // ---- touch controls: floating joystick (move) + drag (look) + JUMP ----
-  const stickEl = document.getElementById('stick');
-  const knobEl  = document.getElementById('stick-knob');
-  const jumpEl  = document.getElementById('jump');
-  const viewEl  = document.getElementById('view');
-  const STICK_R = 46, LOOK_SENS = 0.0042;
-  let moveTid = null, lookTid = null, lookX = 0, lookY = 0;
-
-  // view mode: false = first-person, true = third-person (see your own avatar)
-  let tps = false, selfAvatar = null;
-  function toggleView() {
-    tps = !tps;
-    document.body.classList.toggle('tps', tps);
-    viewEl.classList.toggle('on', tps);
-    if (selfAvatar) selfAvatar.visible = tps;
-  }
-
-  function beginMove(t) {
-    moveTid = t.identifier;
-    stickEl.style.left = t.clientX + 'px';
-    stickEl.style.top  = t.clientY + 'px';
-    stickEl.classList.add('on');
-    knobEl.style.transform = 'translate(0px,0px)';
-    touchMove.active = true; touchMove.x = 0; touchMove.y = 0; touchMove.run = false;
-  }
-  function updateMove(t) {
-    let dx = t.clientX - parseFloat(stickEl.style.left);
-    let dy = t.clientY - parseFloat(stickEl.style.top);
-    const len = Math.hypot(dx, dy) || 1;
-    const cl = Math.min(len, STICK_R);
-    const kx = dx / len * cl, ky = dy / len * cl;
-    knobEl.style.transform = 'translate(' + kx + 'px,' + ky + 'px)';
-    touchMove.x = Math.max(-1, Math.min(1, dx / STICK_R));
-    touchMove.y = Math.max(-1, Math.min(1, -dy / STICK_R));   // up = forward
-    touchMove.run = (len / STICK_R) > 0.72;                    // push far to run
-  }
-  function endMove() {
-    moveTid = null; stickEl.classList.remove('on');
-    touchMove.active = false; touchMove.x = 0; touchMove.y = 0; touchMove.run = false;
-  }
-
-  addEventListener('touchstart', (ev) => {
-    if (!MP.playing || settingsEl.classList.contains('open')) return;
-    for (const t of ev.changedTouches) {
-      // let buttons / gear / settings handle their own touches
-      if (t.target && t.target.closest && t.target.closest('.tbtn, #gear, #settings')) continue;
-      if (moveTid === null && t.clientX < innerWidth * 0.5) beginMove(t);
-      else if (lookTid === null) { lookTid = t.identifier; lookX = t.clientX; lookY = t.clientY; }
+    function makeArm(side) {
+      const arm = new THREE.Group(); arm.position.set(0.31 * side, 0.6, 0); torso.add(arm);
+      arm.add(seg(0.5, 0.12, 0.095, furBack));
+      const lo = new THREE.Group(); lo.position.y = -0.5; arm.add(lo);
+      lo.add(seg(0.5, 0.095, 0.07, furLite));
+      const hand = new THREE.Mesh(sph(0.1, 12), hands); hand.position.set(0, -0.53, 0.02); hand.scale.set(1, 0.8, 1.3); lo.add(hand);
+      return { arm, lo };
     }
-  }, { passive: true });
-
-  addEventListener('touchmove', (ev) => {
-    if (!MP.playing || settingsEl.classList.contains('open')) return;
-    let handled = false;
-    for (const t of ev.changedTouches) {
-      if (t.identifier === moveTid) { updateMove(t); handled = true; }
-      else if (t.identifier === lookTid) {
-        yaw   -= (t.clientX - lookX) * LOOK_SENS;
-        pitch -= (t.clientY - lookY) * LOOK_SENS;
-        pitch = Math.max(-1.55, Math.min(1.55, pitch));
-        lookX = t.clientX; lookY = t.clientY; handled = true;
-      }
+    function makeLeg(side) {
+      const leg = new THREE.Group(); leg.position.set(0.17 * side, 0, 0); pelvis.add(leg);
+      leg.add(seg(0.44, 0.15, 0.12, furBack));                 // thigh (tan)
+      const lo = new THREE.Group(); lo.position.y = -0.44; leg.add(lo);
+      lo.add(seg(0.42, 0.11, 0.085, furLite));                 // shin (light front)
+      const foot = new THREE.Mesh(sph(0.12, 12), hands); foot.position.set(0, -0.42, 0.08); foot.scale.set(1, 0.5, 1.8); lo.add(foot);
+      return { leg, lo };
     }
-    if (handled) ev.preventDefault();
-  }, { passive: false });
+    const la = makeArm(-1), ra = makeArm(1), ll = makeLeg(-1), rl = makeLeg(1);
 
-  function endTouch(ev) {
-    for (const t of ev.changedTouches) {
-      if (t.identifier === moveTid) endMove();
-      else if (t.identifier === lookTid) lookTid = null;
+    // groin
+    const groin = new THREE.Group(); groin.position.set(0, -0.02, 0.12); pelvis.add(groin);
+    const scrotum = new THREE.Mesh(sph(0.085, 10), hands); scrotum.position.set(0, -0.03, 0); scrotum.scale.set(1, 0.9, 0.85); groin.add(scrotum);
+    const pen = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.036, 0.15, 8), skinD); pen.position.set(0, 0.04, 0.05); pen.rotation.x = 1.15; groin.add(pen);
+
+    // short macaque tail (2 stubby segments, hanging down-back)
+    const tail = [];
+    const tailRoot = new THREE.Group(); tailRoot.position.set(0, 0.06, -0.26); tailRoot.rotation.x = 1.15; torso.add(tailRoot);
+    let parent = tailRoot;
+    for (let i = 0; i < 2; i++) {
+      const n = new THREE.Group(); if (i > 0) n.position.y = -0.14; n.rotation.x = 0.2; parent.add(n);
+      n.add(seg(0.15, 0.055 - i * 0.012, 0.04 - i * 0.012, furBack));
+      tail.push(n); parent = n;
+    }
+
+    g.scale.setScalar(0.9);
+    g.userData = {
+      body, torso, head, tail,
+      lArm: la.arm, lArmLo: la.lo, rArm: ra.arm, rArmLo: ra.lo,
+      lLeg: ll.leg, lLegLo: ll.lo, rLeg: rl.leg, rLegLo: rl.lo,
+    };
+    return g;
+  }
+  const monkey = makeMonkey();
+  monkey.visible = false;
+  scene.add(monkey);
+
+  // pose the rig each frame from movement / jump state
+  function poseMonkey(P, s) {
+    const { stride, walk, run, air, crouch, land, time } = s;
+    const amp = run ? 1.25 : 1;
+    const sw = Math.sin(stride), swc = Math.cos(stride);
+
+    P.torso.rotation.x = 0.14 + walk * 0.12 * amp + crouch * 0.5 - air * 0.25;
+    P.head.rotation.x  = -walk * 0.06 * amp + air * 0.22;
+    const bob = Math.abs(sw) * 0.05 * walk * amp;
+    P.body.position.y  = bob - crouch * 0.3 - land * 0.14;
+    let sy = air ? 1.1 : 1 - land * 0.16 - crouch * 0.06;
+    P.body.scale.set(1 / Math.sqrt(sy), sy, 1 / Math.sqrt(sy));
+
+    // walk cycle (arms & legs in opposition, knees/elbows bend on the back-swing)
+    const legSw = sw * 0.85 * walk * amp, armSw = sw * 0.7 * walk * amp;
+    P.lLeg.rotation.x = legSw;  P.rLeg.rotation.x = -legSw;
+    P.lLegLo.rotation.x = Math.max(0, swc) * 0.6 * walk;  P.rLegLo.rotation.x = Math.max(0, -swc) * 0.6 * walk;
+    P.lArm.rotation.x = -armSw; P.rArm.rotation.x = armSw;
+    P.lArm.rotation.z = 0.12;   P.rArm.rotation.z = -0.12;
+    P.lArmLo.rotation.x = 0.2 + Math.max(0, -swc) * 0.3 * walk;
+    P.rArmLo.rotation.x = 0.2 + Math.max(0,  swc) * 0.3 * walk;
+
+    if (walk < 0.05 && !air && crouch < 0.05) {          // idle breathing
+      const b = Math.sin(time * 1.8) * 0.04;
+      P.lArm.rotation.x = b; P.rArm.rotation.x = b;
+      P.torso.rotation.x = 0.14 + Math.sin(time * 1.8) * 0.02;
+    }
+    if (crouch > 0) {                                     // pre-jump crouch
+      const c = crouch;
+      P.lLeg.rotation.x = 0.72 * c; P.rLeg.rotation.x = 0.72 * c;
+      P.lLegLo.rotation.x = 1.15 * c; P.rLegLo.rotation.x = 1.15 * c;
+      P.lArm.rotation.x = 0.9 * c;  P.rArm.rotation.x = 0.9 * c;
+      P.lArmLo.rotation.x = 0.3;    P.rArmLo.rotation.x = 0.3;
+    }
+    if (air) {                                            // airborne reach/tuck
+      P.lLeg.rotation.x = -0.6; P.rLeg.rotation.x = -0.4;
+      P.lLegLo.rotation.x = 0.85; P.rLegLo.rotation.x = 0.65;
+      P.lArm.rotation.x = -1.5;  P.rArm.rotation.x = -1.5;
+      P.lArmLo.rotation.x = 0.5; P.rArmLo.rotation.x = 0.5;
+    }
+    const tsway = Math.sin(time * 2 + stride * 0.5) * 0.12;
+    for (let i = 0; i < P.tail.length; i++) {
+      P.tail[i].rotation.z = tsway * (i / P.tail.length);
+      P.tail[i].rotation.x = 0.45 + (air ? -0.18 : 0);
     }
   }
-  addEventListener('touchend', endTouch);
-  addEventListener('touchcancel', endTouch);
-
-  jumpEl.addEventListener('touchstart', (ev) => { ev.preventDefault(); wantJump = true; }, { passive: false });
-  const onViewTap = (ev) => { ev.preventDefault(); toggleView(); };
-  viewEl.addEventListener('touchstart', onViewTap, { passive: false });
-  viewEl.addEventListener('click', onViewTap);
-
-  // ---- settings: screen brightness ----
-  const gearEl     = document.getElementById('gear');
-  const settingsEl = document.getElementById('settings');
-  const brightEl   = document.getElementById('brightness');
-  const brightVal  = document.getElementById('bright-val');
-
-  function applyBrightness(v) {
-    renderer.domElement.style.filter = 'brightness(' + v + ')';
-    brightVal.textContent = Math.round(v * 100) + '%';
-  }
-  let bright = 1.3;                              // brighter than raw scene by default
-  try { const s = parseFloat(localStorage.getItem('contour.bright')); if (s >= 0.6 && s <= 2.6) bright = s; } catch (e) {}
-  brightEl.value = bright;
-  applyBrightness(bright);
-  brightEl.addEventListener('input', () => {
-    const v = parseFloat(brightEl.value);
-    applyBrightness(v);
-    try { localStorage.setItem('contour.bright', String(v)); } catch (e) {}
-  });
-
-  const openSettings  = () => settingsEl.classList.add('open');
-  const closeSettings = () => settingsEl.classList.remove('open');
-  gearEl.addEventListener('click', openSettings);
-  document.getElementById('settings-close').addEventListener('click', closeSettings);
-  settingsEl.addEventListener('click', (ev) => { if (ev.target === settingsEl) closeSettings(); });
-
-  addEventListener('keydown', (ev) => {
-    keys[ev.code] = true;
-    if (ev.code === 'Space') ev.preventDefault();
-    if (ev.code === 'KeyV' && !ev.repeat) toggleView();
-  });
-  addEventListener('keyup', (ev) => { keys[ev.code] = false; });
-
-  // keep the render size locked to the visible viewport, including after an
-  // orientation flip (mobile fires this late, so re-apply on a short delay)
-  function onResize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-  }
-  addEventListener('resize', onResize);
-  addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 250); setTimeout(onResize, 600); });
-  if (window.visualViewport) visualViewport.addEventListener('resize', onResize);
 
   // ──────────────────────────────────────────────────────────
   //  Multiplayer — shared world over a public MQTT broker.
-  //  No backend: players pub/sub their position on a room topic,
-  //  so friends who pick the same ROOM meet in the same terrain.
+  //  Friends who pick the same ROOM meet in the same terrain, each
+  //  shown as the rigged monkey with a name plate and walk cycle.
   // ──────────────────────────────────────────────────────────
   const MP = {
     id: 'p' + Math.random().toString(36).slice(2, 9),
     name: '', room: 'lobby',
-    client: null, connected: false, started: false, playing: false,
-    peers: new Map(),          // id -> { name, group, cur, tgt, yaw, tgtYaw, lastSeen }
-    lastPub: 0,
-    PUB_MS: 70,                 // ~14 broadcasts / second
-    TIMEOUT: 6000,             // forget a peer unheard-of for 6 s
+    client: null, connected: false, started: false,
+    peers: new Map(),
+    lastPub: 0, PUB_MS: 70, TIMEOUT: 6000,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
-
   const netStatus = document.getElementById('net-status');
   const netList   = document.getElementById('net-list');
-  const esc = (s) => String(s).replace(/[&<>"]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function setNet(text, off) { netStatus.innerHTML = 'NET <b>' + escHtml(text) + '</b>'; netStatus.className = off ? 'off' : ''; }
+  function mtopic(sub) { return 'contour2/' + encodeURIComponent(MP.room) + '/' + sub; }
 
-  function setNet(text, off) {
-    netStatus.innerHTML = 'NET <b>' + esc(text) + '</b>';
-    netStatus.className = off ? 'off' : '';
-  }
-  function topic(sub) { return 'contour/' + encodeURIComponent(MP.room) + '/' + sub; }
-
-  function renderRoster() {
-    const rows = ['<div class="me">' + esc(MP.name || '—') + ' (you)</div>'];
-    for (const peer of MP.peers.values()) rows.push('<div>' + esc(peer.name || '匿名') + '</div>');
-    netList.innerHTML = rows.join('');
-    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1), !MP.connected);
-  }
-
-  // floating nameplate as a billboard sprite
+  // floating name plate (billboard sprite)
   function nameSprite(name) {
     const fs = 30, pad = 9;
     const cv = document.createElement('canvas');
     const ctx = cv.getContext('2d');
     ctx.font = '600 ' + fs + 'px "IBM Plex Mono", monospace';
-    const w = Math.ceil(ctx.measureText(name).width) + pad * 2;
-    const h = fs + pad * 2;
+    const w = Math.ceil(ctx.measureText(name).width) + pad * 2, h = fs + pad * 2;
     cv.width = w; cv.height = h;
     ctx.font = '600 ' + fs + 'px "IBM Plex Mono", monospace';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(11,16,20,0.62)';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#C8FBEA';
-    ctx.fillText(name, pad, h / 2 + 1);
-    const tex = new THREE.CanvasTexture(cv);
-    tex.minFilter = THREE.LinearFilter;
+    ctx.fillStyle = 'rgba(11,16,20,0.55)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#FFFFFF'; ctx.fillText(name, pad, h / 2 + 1);
+    const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, fog: false }));
-    spr.scale.set(w / h * 1.15, 1.15, 1);
-    spr.position.y = 2.55;
-    spr.renderOrder = 4;
+    spr.scale.set(w / h * 1.4, 1.4, 1);
+    spr.position.y = 2.7; spr.renderOrder = 4;
     return spr;
   }
 
-  // A simple humanoid: torso, head, two arms, two legs. The limbs hang from
-  // pivot groups so they can swing for the walk cycle (see animateAvatar).
-  function makeAvatar(name) {
-    const g = new THREE.Group();
-    const skin  = new THREE.MeshBasicMaterial({ color: C.sun, fog: true });
-    const skin2 = new THREE.MeshBasicMaterial({ color: 0xC98A3C, fog: true });
-    const cyan  = new THREE.MeshBasicMaterial({ color: C.line, fog: true, transparent: true, opacity: 0.9 });
-
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.60, 0.24), skin);
-    torso.position.y = 1.15; g.add(torso);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 14, 12), skin);
-    head.position.y = 1.62; g.add(head);
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.10), cyan);
-    nose.position.set(0, 1.62, 0.19); g.add(nose);          // marks the facing side
-
-    const limb = (mat, w, len, x, y) => {
-      const pivot = new THREE.Group(); pivot.position.set(x, y, 0);
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, len, w), mat);
-      mesh.position.y = -len / 2; pivot.add(mesh);           // hangs below the joint
-      return pivot;
-    };
-    const armL = limb(skin2, 0.12, 0.60, -0.30, 1.40);
-    const armR = limb(skin2, 0.12, 0.60,  0.30, 1.40);
-    const legL = limb(skin2, 0.15, 0.85, -0.12, 0.90);
-    const legR = limb(skin2, 0.15, 0.85,  0.12, 0.90);
-    g.add(armL, armR, legL, legR);
-
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.54, 28), cyan);
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; g.add(ring);
-
-    const tag = nameSprite(name);
-    g.add(tag);
-    g.userData = { tag, limbs: { armL, armR, legL, legR }, phase: 0, swing: 0 };
-    return g;
+  function makePeerAvatar(name) {
+    const m = makeMonkey();                 // reuse the rigged macaque
+    m.visible = true;
+    const tag = nameSprite(name || '匿名');
+    m.add(tag); m.userData.tag = tag;
+    return m;
   }
-
-  // Swing arms/legs while moving; settle smoothly to a neutral stance when idle.
-  function animateAvatar(g, dt, moving, speed) {
-    const u = g.userData; if (!u || !u.limbs) return;
-    u.swing += ((moving ? 1 : 0) - u.swing) * (1 - Math.exp(-dt * 10));
-    const cadence = Math.min(Math.max((speed || 0) * 2.0, 6), 18);
-    if (moving) u.phase += dt * cadence;
-    const a = Math.sin(u.phase) * 0.7 * u.swing;
-    u.limbs.legL.rotation.x =  a; u.limbs.legR.rotation.x = -a;
-    u.limbs.armL.rotation.x = -a * 0.8; u.limbs.armR.rotation.x =  a * 0.8;
-  }
-
-  function setTag(peer, name) {
+  function setPeerTag(peer, name) {
     const old = peer.group.userData.tag;
-    peer.group.remove(old);
-    old.material.map.dispose(); old.material.dispose();
-    const tag = nameSprite(name);
-    peer.group.add(tag); peer.group.userData.tag = tag;
+    if (old) { peer.group.remove(old); old.material.map.dispose(); old.material.dispose(); }
+    const tag = nameSprite(name); peer.group.add(tag); peer.group.userData.tag = tag;
+  }
+
+  function renderRoster() {
+    const rows = ['<div class="me">' + escHtml(MP.name || '—') + ' (you)</div>'];
+    for (const peer of MP.peers.values()) rows.push('<div>' + escHtml(peer.name || '匿名') + '</div>');
+    netList.innerHTML = rows.join('');
+    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1), !MP.connected);
   }
 
   function upsertPeer(s) {
     let peer = MP.peers.get(s.id);
     if (!peer) {
-      const group = makeAvatar(s.n || '匿名');
+      const group = makePeerAvatar(s.n || '匿名');
       group.position.set(s.x, s.y, s.z);
-      group.rotation.y = s.r || 0;
+      group.rotation.y = (s.r || 0) + Math.PI;
       scene.add(group);
       peer = {
         name: s.n || '匿名', group,
-        cur: new THREE.Vector3(s.x, s.y, s.z),
-        tgt: new THREE.Vector3(s.x, s.y, s.z),
-        yaw: s.r || 0, tgtYaw: s.r || 0,
-        lastSeen: performance.now(),
+        cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
+        yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
       };
       MP.peers.set(s.id, peer);
       renderRoster();
@@ -852,44 +741,35 @@
     peer.tgt.set(s.x, s.y, s.z);
     peer.tgtYaw = s.r || 0;
     peer.lastSeen = performance.now();
-    if (s.n && s.n !== peer.name) { peer.name = s.n; setTag(peer, s.n); renderRoster(); }
+    if (s.n && s.n !== peer.name) { peer.name = s.n; setPeerTag(peer, s.n); renderRoster(); }
   }
-
   function dropPeer(id) {
-    const peer = MP.peers.get(id);
-    if (!peer) return;
+    const peer = MP.peers.get(id); if (!peer) return;
     scene.remove(peer.group);
     peer.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
     });
-    MP.peers.delete(id);
-    renderRoster();
+    MP.peers.delete(id); renderRoster();
   }
 
   function connectMP() {
-    if (MP.started) return;
-    MP.started = true;
-    renderRoster();
-    if (typeof mqtt === 'undefined') { setNet('SOLO', true); return; }   // CDN blocked → play alone
-
+    if (MP.started) return; MP.started = true; renderRoster();
+    if (typeof mqtt === 'undefined') { setNet('SOLO', true); return; }   // CDN blocked -> solo
     setNet('CONNECTING…', true);
     let client;
     try {
       client = mqtt.connect(MP.BROKER, {
-        clientId: 'contour_' + MP.id,
-        clean: true, reconnectPeriod: 3000, connectTimeout: 9000, keepalive: 30,
-        will: { topic: topic('leave'), payload: JSON.stringify({ id: MP.id }), qos: 0 },
+        clientId: 'contour_' + MP.id, clean: true, reconnectPeriod: 3000, connectTimeout: 9000, keepalive: 30,
+        will: { topic: mtopic('leave'), payload: JSON.stringify({ id: MP.id }), qos: 0 },
       });
     } catch (err) { setNet('SOLO', true); return; }
     MP.client = client;
-
     client.on('connect', () => {
       MP.connected = true;
-      client.subscribe(topic('state/+'));
-      client.subscribe(topic('leave'));
-      publishState(true);
-      renderRoster();
+      client.subscribe(mtopic('state/+'));
+      client.subscribe(mtopic('leave'));
+      publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
     client.on('close', () => { MP.connected = false; renderRoster(); });
@@ -901,9 +781,8 @@
       if (msg.id === MP.id) return;
       upsertPeer(msg);
     });
-
     addEventListener('beforeunload', () => {
-      try { client.publish(topic('leave'), JSON.stringify({ id: MP.id })); client.end(true); } catch (e) {}
+      try { client.publish(mtopic('leave'), JSON.stringify({ id: MP.id })); client.end(true); } catch (e) {}
     });
   }
 
@@ -912,15 +791,15 @@
     const now = performance.now();
     if (!force && now - MP.lastPub < MP.PUB_MS) return;
     MP.lastPub = now;
-    MP.client.publish(topic('state/' + MP.id), JSON.stringify({
+    MP.client.publish(mtopic('state/' + MP.id), JSON.stringify({
       id: MP.id, n: MP.name,
-      x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2),
-      r: +yaw.toFixed(3),
+      x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
     }));
   }
 
-  function updatePeers(dt) {
-    const now = performance.now();
+  // advance remote monkeys: smooth position/heading, drive the walk cycle
+  // from how fast they are actually moving (no extra network fields needed)
+  function updatePeers(dt, now) {
     const k = 1 - Math.exp(-dt * 9);
     for (const [id, peer] of MP.peers) {
       if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
@@ -931,18 +810,262 @@
       if (d > Math.PI) d -= Math.PI * 2;
       if (d < -Math.PI) d += Math.PI * 2;
       peer.yaw += d * k;
-      peer.group.rotation.y = peer.yaw + Math.PI;         // nose points along travel
+      peer.group.rotation.y = peer.yaw + Math.PI;
       const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
-      animateAvatar(peer.group, dt, spd > 0.4, spd);      // walk when actually moving
+      const air = (peer.cur.y - height(peer.cur.x, peer.cur.z)) > 0.5;
+      const walk = air ? 0 : Math.min(spd / (WALK * 0.7), 1);
+      const run = spd > WALK * 1.1;
+      if (walk > 0.05) peer.stride += dt * (run ? 13 : 9);
+      poseMonkey(peer.group.userData, { stride: peer.stride, walk, run, air, crouch: 0, land: 0, time: now / 1000 });
     }
   }
+
+
+  // ──────────────────────────────────────────────────────────
+  //  Player controller  (touch flick + desktop fallback)
+  // ──────────────────────────────────────────────────────────
+  const EYE = 1.68, GRAV = 26, JUMP = 8.4, WALK = 5.4, RUN = 10.2, PRAD = 0.55;
+  const p = new THREE.Vector3(0, 0, 0);
+  let yaw = 0, pitch = -0.04, vy = 0, grounded = false, bob = 0, wantJump = false;
+  let stridePhase = 0, jumpCharge = 0, charging = false, landTimer = 0, prevGrounded = true, strideDir = 1;
+  let orbitYaw = 0, orbitPitch = 0.18;
+  const PREJUMP = 0.11;
+  const keys = Object.create(null);
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const isTouch = matchMedia('(pointer: coarse)').matches || ('ontouchstart' in window);
+  let mode = isTouch ? 'mobile' : 'pc';   // 'mobile' | 'pc'  — toggled by button
+  let view = 'first';                     // 'first' | 'third'
+
+  // joystick vector, normalised to [-1,1]
+  const stickVec = { x: 0, y: 0, active: false };
+
+  // drop the player on grass/beach above the sea; track the best spot so we
+  // never fall back to the origin (which is underwater).
+  {
+    const clearOfRocks = (x, z) => {
+      for (let i = 0; i < rockCols.length; i++) {
+        const rk = rockCols[i];
+        const dx = x - rk.x, dz = z - rk.z, rr = rk.r + PRAD + 1.6;
+        if (dx * dx + dz * dz < rr * rr) return false;
+      }
+      return true;
+    };
+    let best = null, bestY = -Infinity, anyBest = null, anyY = -Infinity;
+    for (let i = 0; i < 1200; i++) {
+      const x = (Math.random() - 0.5) * WORLD * 0.7;
+      const z = (Math.random() - 0.5) * WORLD * 0.7;
+      const y = height(x, z);
+      if (y <= 3 || y >= 40) continue;
+      if (y > anyY) { anyY = y; anyBest = { x, z, y }; }          // any dry spot
+      if (!clearOfRocks(x, z)) continue;
+      if (y > bestY) { bestY = y; best = { x, z, y }; }           // dry + rock-clear
+      if (y > 5 && y < 30) { p.set(x, y + EYE, z); best = null; anyBest = null; break; }
+    }
+    const spot = best || anyBest;
+    if (spot) p.set(spot.x, spot.y + EYE, spot.z);                // above water, clear of rocks
+  }
+
+  const canvas = renderer.domElement;
+  const gate = document.getElementById('gate');
+  const hud  = document.getElementById('hud');
+  const touchUI = document.getElementById('touch');
+  const $ = (id) => document.getElementById(id);
+
+  // route look input: first-person aims the player, third-person orbits the camera
+  function applyLook(dx, dy) {
+    if (view === 'third') {
+      orbitYaw  -= dx;
+      orbitPitch = Math.max(-0.25, Math.min(1.3, orbitPitch - dy));
+    } else {
+      yaw   -= dx;
+      pitch = Math.max(-1.55, Math.min(1.55, pitch - dy));
+    }
+  }
+
+  function applyMode() {
+    const m = mode === 'mobile';
+    const started = gate.classList.contains('gone');
+    touchUI.classList.toggle('live', m && started);
+    $('m-help').textContent = m
+      ? '左スティック 移動 · ドラッグ 視点 · JUMP 跳ぶ'
+      : 'WASD 移動 · クリックで視点ロック · SPACE 跳ぶ';
+    $('b-mode').textContent = m ? 'SP操作' : 'PC操作';
+    if (!m && started) {
+      if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+    } else if (m && document.pointerLockElement === canvas) {
+      document.exitPointerLock();
+    }
+  }
+
+  const nickEl = document.getElementById('nick');
+  const roomEl = document.getElementById('room');
+  try {
+    const sn = localStorage.getItem('contour.nick'); if (sn) nickEl.value = sn;
+    const sr = localStorage.getItem('contour.room'); if (sr) roomEl.value = sr;
+  } catch (e) {}
+
+  function start() {
+    if (gate.classList.contains('gone')) return;
+    MP.name = (nickEl.value || '').trim().slice(0, 16) || ('旅人-' + MP.id.slice(1, 4));
+    MP.room = (roomEl.value || '').trim().slice(0, 24) || 'lobby';
+    try { localStorage.setItem('contour.nick', MP.name); localStorage.setItem('contour.room', MP.room); } catch (e) {}
+    gate.classList.add('gone');
+    hud.classList.add('live');
+    document.body.classList.add('playing');
+    applyMode();
+    connectMP();
+  }
+  $('enter').addEventListener('click', start);
+  nickEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') start(); });
+  roomEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') start(); });
+
+  // ---- keyboard (used only in PC mode) ----
+  addEventListener('keydown', (ev) => {
+    if (mode !== 'pc') return;
+    keys[ev.code] = true;
+    if (ev.code === 'Space') ev.preventDefault();
+  });
+  addEventListener('keyup', (ev) => { keys[ev.code] = false; });
+
+  // ---- mouse look (PC mode) via pointer lock ----
+  canvas.addEventListener('click', () => {
+    if (mode === 'pc' && gate.classList.contains('gone') && !document.pointerLockElement)
+      canvas.requestPointerLock();
+  });
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement !== canvas) for (const k in keys) keys[k] = false;
+  });
+  addEventListener('mousemove', (ev) => {
+    if (mode !== 'pc' || document.pointerLockElement !== canvas) return;
+    applyLook(ev.movementX * 0.0021, ev.movementY * 0.0021);
+  });
+
+  // ---- touch: left stick = move, drag = look, button = jump ----
+  const stick = document.getElementById('stick');
+  const knob  = document.getElementById('knob');
+  const look  = document.getElementById('look');
+  const jumpBtn = document.getElementById('jump');
+  const lookpad = document.getElementById('lookpad');
+  const lookknob = document.getElementById('lookknob');
+  const STICK_R = 52;
+  let moveId = null, lookId = null, lookX = 0, lookY = 0, stickCx = 0, stickCy = 0;
+  let padId = null, padX = 0, padY = 0, padOx = 0, padOy = 0;
+
+  function setKnob(cx, cy) {
+    let dx = cx - stickCx, dy = cy - stickCy;
+    const d = Math.hypot(dx, dy);
+    if (d > STICK_R) { dx = dx / d * STICK_R; dy = dy / d * STICK_R; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    stickVec.x = dx / STICK_R;
+    stickVec.y = dy / STICK_R;
+    stickVec.active = true;
+  }
+  function clearKnob() {
+    knob.style.transform = 'translate(0px, 0px)';
+    stickVec.x = 0; stickVec.y = 0; stickVec.active = false;
+  }
+
+  stick.addEventListener('touchstart', (ev) => {
+    ev.preventDefault();
+    const t = ev.changedTouches[0];
+    moveId = t.identifier;
+    const r = stick.getBoundingClientRect();
+    stickCx = r.left + r.width / 2; stickCy = r.top + r.height / 2;
+    setKnob(t.clientX, t.clientY);
+  }, { passive: false });
+
+  look.addEventListener('touchstart', (ev) => {
+    ev.preventDefault();
+    if (lookId !== null) return;
+    const t = ev.changedTouches[0];
+    lookId = t.identifier; lookX = t.clientX; lookY = t.clientY;
+  }, { passive: false });
+
+  // dedicated look pad: flick to rotate the view only
+  lookpad.addEventListener('touchstart', (ev) => {
+    ev.preventDefault();
+    if (padId !== null) return;
+    const t = ev.changedTouches[0];
+    padId = t.identifier;
+    padX = padOx = t.clientX; padY = padOy = t.clientY;
+  }, { passive: false });
+
+  document.addEventListener('touchmove', (ev) => {
+    for (const t of ev.changedTouches) {
+      if (t.identifier === moveId) { setKnob(t.clientX, t.clientY); ev.preventDefault(); }
+      else if (t.identifier === lookId) {
+        applyLook((t.clientX - lookX) * 0.005, (t.clientY - lookY) * 0.005);
+        lookX = t.clientX; lookY = t.clientY;
+        ev.preventDefault();
+      }
+      else if (t.identifier === padId) {
+        applyLook((t.clientX - padX) * 0.006, (t.clientY - padY) * 0.006);
+        padX = t.clientX; padY = t.clientY;
+        const ox = Math.max(-42, Math.min(42, t.clientX - padOx));
+        const oy = Math.max(-42, Math.min(42, t.clientY - padOy));
+        lookknob.style.transform = `translate(${ox}px, ${oy}px)`;
+        ev.preventDefault();
+      }
+    }
+  }, { passive: false });
+
+  function endTouch(ev) {
+    for (const t of ev.changedTouches) {
+      if (t.identifier === moveId) { moveId = null; clearKnob(); }
+      else if (t.identifier === lookId) { lookId = null; }
+      else if (t.identifier === padId) { padId = null; lookknob.style.transform = 'translate(0px, 0px)'; }
+    }
+  }
+  document.addEventListener('touchend', endTouch);
+  document.addEventListener('touchcancel', endTouch);
+
+  jumpBtn.addEventListener('touchstart', (ev) => { ev.preventDefault(); wantJump = true; }, { passive: false });
+  jumpBtn.addEventListener('click', () => { wantJump = true; });
+
+  // ---- toolbar toggles ----
+  $('b-view').addEventListener('click', () => {
+    view = view === 'first' ? 'third' : 'first';
+    if (view === 'third') { orbitYaw = yaw; orbitPitch = 0.18; }
+    $('b-view').textContent = view === 'first' ? '3人称' : '1人称';
+  });
+  $('b-mode').addEventListener('click', () => {
+    mode = mode === 'mobile' ? 'pc' : 'mobile';
+    applyMode();
+  });
+
+  // ---- settings: screen brightness (CSS filter over the render canvas) ----
+  const gearEl = $('gear'), settingsEl = $('settings'), brightEl = $('brightness'), brightVal = $('bright-val');
+  function applyBrightness(v) {
+    renderer.domElement.style.filter = 'brightness(' + v + ')';
+    brightVal.textContent = Math.round(v * 100) + '%';
+  }
+  let bright = 1.0;
+  try { const s = parseFloat(localStorage.getItem('contour.bright')); if (s >= 0.6 && s <= 2.6) bright = s; } catch (e) {}
+  brightEl.value = bright; applyBrightness(bright);
+  brightEl.addEventListener('input', () => {
+    const v = parseFloat(brightEl.value); applyBrightness(v);
+    try { localStorage.setItem('contour.bright', String(v)); } catch (e) {}
+  });
+  const openSettings = () => settingsEl.classList.add('open');
+  const closeSettings = () => settingsEl.classList.remove('open');
+  gearEl.addEventListener('click', openSettings);
+  $('settings-close').addEventListener('click', closeSettings);
+  settingsEl.addEventListener('click', (ev) => { if (ev.target === settingsEl) closeSettings(); });
+
+  function onResize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  }
+  addEventListener('resize', onResize);
+  addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 250); setTimeout(onResize, 600); });
+  if (window.visualViewport) visualViewport.addEventListener('resize', onResize);
 
   // ──────────────────────────────────────────────────────────
   //  Loop
   // ──────────────────────────────────────────────────────────
-  const $ = (id) => document.getElementById(id);
+  const fxEl = $('fx');
   const fwd = new THREE.Vector3(), rgt = new THREE.Vector3(), mv = new THREE.Vector3();
-  const _look = new THREE.Vector3(), _tgt = new THREE.Vector3(), _cam = new THREE.Vector3();
   let last = performance.now(), fpsT = 0, fpsN = 0;
 
   function frame(now) {
@@ -950,25 +1073,55 @@
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
 
-    // --- move ---
-    const running = keys['ShiftLeft'] || keys['ShiftRight'] || touchMove.run;
-    const speed = running ? RUN : WALK;
-    fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
-    rgt.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    // --- assemble move vector from keys + joystick ---
+    // move relative to aim: player yaw (1st) or camera orbit (3rd)
+    const aimYaw = view === 'third' ? orbitYaw : yaw;
+    fwd.set(-Math.sin(aimYaw), 0, -Math.cos(aimYaw));
+    rgt.set(Math.cos(aimYaw), 0, -Math.sin(aimYaw));
     mv.set(0, 0, 0);
     if (keys['KeyW'] || keys['ArrowUp'])    mv.add(fwd);
     if (keys['KeyS'] || keys['ArrowDown'])  mv.sub(fwd);
     if (keys['KeyD'] || keys['ArrowRight']) mv.add(rgt);
     if (keys['KeyA'] || keys['ArrowLeft'])  mv.sub(rgt);
-    if (touchMove.active) { mv.addScaledVector(fwd, touchMove.y); mv.addScaledVector(rgt, touchMove.x); }
+    if (stickVec.active) {
+      mv.addScaledVector(fwd, -stickVec.y);   // stick up  = forward
+      mv.addScaledVector(rgt,  stickVec.x);    // stick right = right
+    }
+    const kbRun = keys['ShiftLeft'] || keys['ShiftRight'];
 
-    const moving = mv.lengthSq() > 0;
+    // which way are we heading relative to facing? (drives fwd vs. back stride)
+    const fdot = mv.x * fwd.x + mv.z * fwd.z;
+    if (fdot < -0.12) strideDir = -1; else if (fdot > 0.12) strideDir = 1;
+
+    const mag = Math.min(mv.length(), 1);
+    const moving = mag > 0.06;
+    const running = kbRun || mag > 0.85;
     if (moving) {
-      mv.normalize().multiplyScalar(speed * dt);
+      const speed = running ? RUN : WALK;
+      mv.normalize().multiplyScalar(speed * mag * dt);
       p.x += mv.x; p.z += mv.z;
-      const lim = WORLD * 0.48;
-      p.x = Math.max(-lim, Math.min(lim, p.x));
-      p.z = Math.max(-lim, Math.min(lim, p.z));
+    }
+    // in third-person the monkey turns to face where it walks
+    if (view === 'third' && moving) yaw = Math.atan2(-mv.x, -mv.z);
+    const lim = WORLD * 0.48;
+    p.x = Math.max(-lim, Math.min(lim, p.x));
+    p.z = Math.max(-lim, Math.min(lim, p.z));
+
+    // --- rock collision: resolve EVERY frame (2 passes) so you can't clip in ---
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < rockCols.length; i++) {
+        const rk = rockCols[i];
+        let dx = p.x - rk.x, dz = p.z - rk.z;
+        const rr = rk.r + PRAD;
+        let d2 = dx * dx + dz * dz;
+        if (d2 < rr * rr) {
+          if (d2 < 1e-6) { dx = 1; dz = 0; d2 = 1; }   // dead-centre nudge
+          const d = Math.sqrt(d2);
+          const push = rr - d;
+          p.x += (dx / d) * push;
+          p.z += (dz / d) * push;
+        }
+      }
     }
 
     // --- gravity + ground ---
@@ -977,10 +1130,26 @@
     const floor = height(p.x, p.z) + EYE;
     if (p.y <= floor) { p.y = floor; vy = 0; grounded = true; }
     else grounded = false;
-    if (grounded && (keys['Space'] || wantJump)) { vy = JUMP; grounded = false; }
-    wantJump = false;
 
-    // --- head bob: the only thing selling the walk ---
+    // landing squash + walk-cycle phase
+    if (!prevGrounded && grounded) landTimer = 0.16;
+    prevGrounded = grounded;
+    if (landTimer > 0) landTimer -= dt;
+    if (grounded && moving) stridePhase += dt * (running ? 13 : 9) * strideDir;
+
+    // --- jump with a short pre-jump crouch (anticipation) ---
+    const jumpPressed = keys['Space'] || wantJump;
+    wantJump = false;
+    if (grounded && jumpPressed && !charging) { charging = true; jumpCharge = PREJUMP; }
+    if (charging) {
+      if (!grounded) charging = false;
+      else {
+        jumpCharge -= dt;
+        if (jumpCharge <= 0) { vy = JUMP; grounded = false; charging = false; }
+      }
+    }
+
+    // --- head bob ---
     let bobY = 0, roll = 0;
     if (!reduceMotion) {
       if (moving && grounded) bob += dt * (running ? 15.5 : 9.4);
@@ -990,22 +1159,31 @@
       roll = Math.sin(bob) * 0.0075 * amt;
     }
 
-    // --- camera: first- or third-person ---
-    if (tps) {
-      const cp = Math.cos(pitch), sp = Math.sin(pitch);
-      _look.set(-Math.sin(yaw) * cp, sp, -Math.cos(yaw) * cp);     // gaze direction
-      _tgt.set(p.x, p.y + 0.1, p.z);                               // orbit around the head
-      _cam.copy(_tgt).addScaledVector(_look, -4.6);                // pull the camera back
-      _cam.y += 0.6;
-      const gy = height(_cam.x, _cam.z) + 0.5;                     // stay above the terrain
-      if (_cam.y < gy) _cam.y = gy;
-      camera.position.copy(_cam);
-      camera.lookAt(_tgt);
-      if (selfAvatar) {
-        selfAvatar.position.set(p.x, p.y - EYE, p.z);
-        selfAvatar.rotation.y = yaw + Math.PI;                     // face where you're looking
-        animateAvatar(selfAvatar, dt, moving && grounded, running ? RUN : WALK);
-      }
+    // avatar follows the player; camera is first- or third-person
+    const groundY = p.y - EYE;
+    monkey.position.set(p.x, groundY, p.z);
+    monkey.rotation.y = yaw + Math.PI;
+    monkey.visible = view === 'third';
+    poseMonkey(monkey.userData, {
+      stride: stridePhase,
+      walk: (grounded && moving) ? Math.min(mag / 0.5, 1) : 0,
+      run: running,
+      air: (!grounded && !charging),
+      crouch: charging ? 1 - Math.max(jumpCharge, 0) / PREJUMP : 0,
+      land: Math.max(landTimer, 0) / 0.16,
+      time: now / 1000,
+    });
+
+    if (view === 'third') {
+      const cdist = 5.2;
+      const cp = Math.cos(orbitPitch);
+      const cx = p.x + Math.sin(orbitYaw) * cp * cdist;
+      const cz = p.z + Math.cos(orbitYaw) * cp * cdist;
+      let cy = p.y + 0.4 + Math.sin(orbitPitch) * cdist;
+      const camFloor = height(cx, cz) + 0.6;
+      if (cy < camFloor) cy = camFloor;
+      camera.position.set(cx, cy, cz);
+      camera.lookAt(p.x, p.y + 0.2, p.z);
     } else {
       camera.position.set(p.x, p.y + bobY, p.z);
       camera.rotation.set(pitch, yaw, roll, 'YXZ');
@@ -1013,8 +1191,21 @@
     sky.position.set(p.x, 0, p.z);
     water.position.set(p.x, 0, p.z);
 
-    // --- multiplayer: broadcast self, advance others ---
-    updatePeers(dt);
+    // --- underwater: blue tint + murk when the player drops below sea level ---
+    const submerged = p.y < 0;
+    fxEl.style.opacity = submerged ? Math.min(0.30 + (-p.y) * 0.045, 0.68) : 0;
+    if (submerged) {
+      scene.fog.color.setHex(0x1A5773); scene.fog.density = 0.018;
+      terrainMat.uniforms.uFogCol.value.setHex(0x1A5773);
+      terrainMat.uniforms.uFogDens.value = 0.013;
+    } else {
+      scene.fog.color.copy(C.horizon); scene.fog.density = FOG_DENSITY;
+      terrainMat.uniforms.uFogCol.value.copy(C.horizon);
+      terrainMat.uniforms.uFogDens.value = FOG_DENSITY;
+    }
+
+    // --- multiplayer: advance others, broadcast self ---
+    updatePeers(dt, now);
     publishState(false);
 
     renderer.render(scene, camera);
