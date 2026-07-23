@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>CONTOUR — 草原と海</title>
+<title>CONTOUR — 市街戦</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&display=swap" rel="stylesheet">
@@ -223,6 +223,12 @@
   #settings input[type=range]::-moz-range-thumb {
     width: 18px; height: 18px; border: 3px solid #0f1a16; border-radius: 50%; background: var(--line); cursor: pointer;
   }
+  #settings .toggle {
+    width: 100%; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .16em;
+    color: var(--line); background: rgba(234,243,228,.08); border: 1px solid var(--line-dim);
+    border-radius: 2px; padding: 9px; cursor: pointer;
+  }
+  #settings .toggle.off { color: var(--line-dim); opacity: .6; }
   #settings .close {
     width: 100%; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .2em;
     color: var(--ink); background: var(--grass); border: 0; border-radius: 2px; padding: 12px; cursor: pointer;
@@ -330,6 +336,14 @@
       <div class="lbl"><span>画面の明るさ · BRIGHTNESS</span><b id="bright-val">100%</b></div>
       <input id="brightness" type="range" min="0.6" max="2.6" step="0.05" value="1">
     </div>
+    <div class="row">
+      <div class="lbl"><span>効果音 · SOUND</span><b id="sfx-state">ON</b></div>
+      <button id="sfx-toggle" class="toggle" type="button">ON / OFF</button>
+    </div>
+    <div class="row">
+      <div class="lbl"><span>音量 · VOLUME</span><b id="vol-val">70%</b></div>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7">
+    </div>
     <button class="close" id="settings-close">閉じる</button>
   </div>
 </div>
@@ -348,9 +362,9 @@
     <h1>CONTOUR</h1>
     <div class="rule"></div>
     <p>
-      草原をあるき、砂浜をこえ、海をのぞむ。<br>
-      等高線でえがかれた地形の内側を、仲間と歩く。<br>
-      標高 0 m の等高線が水ぎわになる。
+      ビルの立ちならぶ街を、仲間と駆ける。<br>
+      銃を持ち、撃ち合い、キル数をきそう。<br>
+      最多キルのプレイヤーには王冠がつく。
     </p>
     <div id="fields">
       <label>NAME <input id="nick" maxlength="16" placeholder="旅人" autocomplete="off" autofocus></label>
@@ -372,56 +386,59 @@
   //  Palette — grassland · beach · sea
   // ──────────────────────────────────────────────────────────
   const C = {
-    horizon: new THREE.Color(0xBcd3d8),
-    zenith:  new THREE.Color(0x2C6FA6),
-    sun:     new THREE.Color(0xFCE7B0),
-    sand:    new THREE.Color(0xD8C79A),
-    grassLo: new THREE.Color(0x4E7233),
-    grassHi: new THREE.Color(0x88A94E),
-    cliff:   new THREE.Color(0x6E655A),
-    line:    new THREE.Color(0xEAF3E4),
+    horizon: new THREE.Color(0xC6D2DB),   // hazy city sky at the horizon
+    zenith:  new THREE.Color(0x5C7C9E),
+    sun:     new THREE.Color(0xFFF1CE),
+    road:    new THREE.Color(0x24272c),   // asphalt
+    curb:    new THREE.Color(0x565c64),   // sidewalk
+    paint:   new THREE.Color(0xC9B45A),   // road markings
     major:   new THREE.Color(0xFFFFFF),
-    rock:    new THREE.Color(0x7A7266),
-    water:   new THREE.Color(0x2E7FA0),
   };
-  const FOG_DENSITY = 0.0065;
-  const SUN_DIR = new THREE.Vector3(0.5, 0.4, -0.6).normalize();
+  const FOG_DENSITY = 0.0038;
+  const SUN_DIR = new THREE.Vector3(0.5, 0.62, -0.42).normalize();
 
-  const WORLD = 700;      // metres across
-  const SEGS  = 360;      // grid resolution
-  const CI    = 4;        // contour interval (m)
+  const WORLD = 700;          // metres across (movement clamp)
+  const CELL = 60;            // city block + street pitch
+  const GRID_N = 5;           // blocks from -N..N
+  const buildings = new Map();   // "ci,cj" -> { cx, cz, hw, hd, h, mat }
 
   // ──────────────────────────────────────────────────────────
-  //  Terrain field  — value noise fBm
+  //  City grid — flat streets with a box building on each block.
+  //  Seeded so every player shares the same skyline + collision.
   // ──────────────────────────────────────────────────────────
-  const hash = (x, y) => {
-    const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
-    return s - Math.floor(s);
-  };
-  const noise = (x, y) => {
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const xf = x - xi, yf = y - yi;
-    const u = xf * xf * (3 - 2 * xf);
-    const v = yf * yf * (3 - 2 * yf);
-    const a = hash(xi, yi),     b = hash(xi + 1, yi);
-    const c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
-    return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
-  };
-  const fbm = (x, y, oct) => {
-    let t = 0, amp = 1, frq = 1, max = 0;
-    for (let i = 0; i < oct; i++) {
-      t += noise(x * frq, y * frq) * amp;
-      max += amp; amp *= 0.5; frq *= 2;
+  const mulberry32 = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const rrand = mulberry32(0x51742C17);
+  for (let ci = -GRID_N; ci <= GRID_N; ci++) {
+    for (let cj = -GRID_N; cj <= GRID_N; cj++) {
+      if (ci === 0 && cj === 0) continue;               // open plaza at the centre
+      if (rrand() < 0.12) continue;                     // occasional empty lot
+      const hw = 9 + rrand() * 8, hd = 9 + rrand() * 8;
+      const h = 9 + Math.pow(rrand(), 1.7) * 64;
+      buildings.set(ci + ',' + cj, { cx: ci * CELL, cz: cj * CELL, hw, hd, h, mat: (rrand() * 4) | 0 });
     }
-    return t / max;
-  };
+  }
+  // ground height: 0 on the street, the roof height inside a footprint (this
+  // also blocks shots and keeps you from walking through a tower)
   function height(x, z) {
-    const macro  = fbm(x * 0.0018, z * 0.0018, 5);
-    const meso   = fbm(x * 0.0090 + 71, z * 0.0090 + 71, 4);
-    const micro  = fbm(x * 0.0460 + 13, z * 0.0460 + 13, 3);
-    let h = (macro + meso * 0.24 + micro * 0.035) / 1.275;
-    h = Math.pow(h, 1.85);
-    return h * 96 - 19;
+    const b = buildings.get(Math.round(x / CELL) + ',' + Math.round(z / CELL));
+    if (b && Math.abs(x - b.cx) <= b.hw && Math.abs(z - b.cz) <= b.hd) return b.h;
+    return 0;
+  }
+  function onStreet(x, z, margin) {
+    const ci = Math.round(x / CELL), cj = Math.round(z / CELL);
+    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+      const b = buildings.get((ci + oi) + ',' + (cj + oj)); if (!b) continue;
+      if (Math.abs(x - b.cx) < b.hw + margin && Math.abs(z - b.cz) < b.hd + margin) return false;
+    }
+    return true;
+  }
+  function pickSpawn() {
+    const R = (GRID_N + 0.5) * CELL;
+    for (let i = 0; i < 3000; i++) {
+      const x = (Math.random() * 2 - 1) * R, z = (Math.random() * 2 - 1) * R;
+      if (onStreet(x, z, 2.0)) return { x, z };
+    }
+    return { x: CELL * 0.5, z: CELL * 0.5 };
   }
 
   // ──────────────────────────────────────────────────────────
@@ -473,128 +490,94 @@
   scene.add(sky);
 
   // ──────────────────────────────────────────────────────────
-  //  Terrain — grass / beach / sea, with faint contour lines
+  //  Ground — asphalt streets on a grid, with painted centre lines
   // ──────────────────────────────────────────────────────────
-  const geo = new THREE.PlaneGeometry(WORLD, WORLD, SEGS, SEGS);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    pos.setY(i, height(pos.getX(i), pos.getZ(i)));
-  }
-  geo.computeVertexNormals();
-
-  const terrainMat = new THREE.ShaderMaterial({
-    extensions: { derivatives: true },
+  const groundMat = new THREE.ShaderMaterial({
     uniforms: {
-      uSand:     { value: C.sand },
-      uGrassLo:  { value: C.grassLo },
-      uGrassHi:  { value: C.grassHi },
-      uCliff:    { value: C.cliff },
-      uLine:     { value: C.line },
-      uMajor:    { value: C.major },
-      uSunCol:   { value: C.sun },
-      uSunDir:   { value: SUN_DIR },
-      uFogCol:   { value: C.horizon.clone() },
-      uFogDens:  { value: FOG_DENSITY },
-      uCI:       { value: CI },
+      uRoad: { value: C.road }, uCurb: { value: C.curb }, uPaint: { value: C.paint },
+      uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY }, uCell: { value: CELL },
     },
     vertexShader: `
-      varying float vH;
-      varying vec3  vN;
-      varying float vFog;
+      varying vec3 vW; varying float vFog;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
-        vH = wp.y;
-        vN = normalize(mat3(modelMatrix) * normal);
-        vec4 mv = viewMatrix * wp;
-        vFog = -mv.z;
+        vW = wp.xyz;
+        vec4 mv = viewMatrix * wp; vFog = -mv.z;
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform vec3  uSand, uGrassLo, uGrassHi, uCliff, uLine, uMajor, uSunCol, uSunDir, uFogCol;
-      uniform float uFogDens, uCI;
-      varying float vH;
-      varying vec3  vN;
-      varying float vFog;
-
-      float band(float h, float interval) {
-        float d  = h / interval;
-        float f  = abs(fract(d - 0.5) - 0.5);
-        float w  = fwidth(d) * 1.1;
-        return 1.0 - smoothstep(0.0, w, f);
-      }
-
+      uniform vec3 uRoad, uCurb, uPaint, uFogCol; uniform float uFogDens, uCell;
+      varying vec3 vW; varying float vFog;
       void main() {
-        vec3 n = normalize(vN);
-
-        // ---- ground cover: sand near the water line, grass above ----
-        vec3 grass = mix(uGrassLo, uGrassHi, smoothstep(3.0, 62.0, vH));
-        float sandy = 1.0 - smoothstep(0.6, 3.2, vH);       // 1 at shore, 0 inland
-        vec3 base = mix(grass, uSand, clamp(sandy, 0.0, 1.0));
-
-        // steep faces read as bare rock / dirt, not lawn
-        float steep = 1.0 - smoothstep(0.34, 0.68, n.y);
-        base = mix(base, uCliff, steep * 0.72);
-
-        float ndl = max(dot(n, uSunDir), 0.0);
-        vec3 col  = base * (0.42 + 0.78 * ndl) + uSunCol * pow(ndl, 3.0) * 0.08;
-
-        // faint survey contours, fading with distance and on cliffs
-        float fade = 1.0 - smoothstep(70.0, 250.0, vFog);
-        fade *= smoothstep(0.10, 0.42, n.y);
-        float minor = band(vH, uCI);
-        float major = band(vH, uCI * 5.0);
-        col = mix(col, uLine,  minor * 0.14 * fade);
-        col = mix(col, uMajor, major * 0.30 * fade);
-
+        float sx = abs(fract(vW.x / uCell + 0.5) - 0.5) * uCell;   // dist to nearest N-S street centre
+        float sz = abs(fract(vW.z / uCell + 0.5) - 0.5) * uCell;   // dist to nearest E-W street centre
+        float onRoad = (sx < 9.0 || sz < 9.0) ? 1.0 : 0.0;
+        vec3 col = mix(uCurb, uRoad, onRoad);
+        float cl = 0.0;
+        if (sx < 0.35 && fract(vW.z / 7.0) < 0.5) cl = 1.0;         // dashed lane lines
+        if (sz < 0.35 && fract(vW.x / 7.0) < 0.5) cl = 1.0;
+        col = mix(col, uPaint, cl * onRoad);
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
       }`
   });
-  scene.add(new THREE.Mesh(geo, terrainMat));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
 
-  // ---- sea = the 0 m contour, filled ----
-  const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(WORLD * 1.6, WORLD * 1.6),
-    new THREE.MeshBasicMaterial({ color: C.water, transparent: true, opacity: 0.86, side: THREE.DoubleSide, fog: true })
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = 0;
-  scene.add(water);
-
-  // ---- rock outcrops: solid, and collidable ----
-  const light = new THREE.DirectionalLight(0xfff0d6, 1.15);
+  // ---- lighting ----
+  const light = new THREE.DirectionalLight(0xfff2dc, 1.05);
   light.position.copy(SUN_DIR).multiplyScalar(100);
-  scene.add(light, new THREE.HemisphereLight(0x8fb1c4, 0x30402c, 0.7));
+  scene.add(light, new THREE.HemisphereLight(0xC6D2DB, 0x3a3f45, 0.75));
 
-  // seeded RNG so every player shares the same collidable outcrops
-  const mulberry32 = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-  const rrand = mulberry32(0x5EEDBEEF);
-
-  const rockGeo = new THREE.IcosahedronGeometry(1, 0);
-  const rocks = new THREE.InstancedMesh(
-    rockGeo, new THREE.MeshLambertMaterial({ color: C.rock, flatShading: true }), 150
-  );
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
-  const vPos = new THREE.Vector3(), vScl = new THREE.Vector3();
-  const rockCols = [];   // { x, z, r } cylinders for collision
-  let placed = 0, guard = 0;
-  while (placed < 150 && guard++ < 6000) {
-    const x = (rrand() - 0.5) * WORLD * 0.94;
-    const z = (rrand() - 0.5) * WORLD * 0.94;
-    const y = height(x, z);
-    if (y < 3) continue;
-    const s = 2.2 + rrand() * 9;
-    const sx = s * (0.7 + rrand() * 0.8);
-    const sz = s * (0.7 + rrand() * 0.8);
-    vPos.set(x, y + s * 0.32, z);
-    vScl.set(sx, s * (1.1 + rrand() * 1.9), sz);
-    e.set(rrand() * 0.5, rrand() * 6.3, rrand() * 0.5);
-    rocks.setMatrixAt(placed++, m4.compose(vPos, q.setFromEuler(e), vScl));
-    rockCols.push({ x, z, r: Math.max(sx, sz) * 0.82 });
+  // ---- buildings: box towers with procedural windows ----
+  const B_WALL = [0x9aa1a8, 0xb8ab97, 0x7f8a93, 0x6f7681];
+  const B_WIN  = [0x2b3a45, 0x36414a, 0x24303a, 0x3a4650];
+  const buildMats = [];
+  for (let i = 0; i < 4; i++) {
+    buildMats.push(new THREE.ShaderMaterial({
+      uniforms: {
+        uWall: { value: new THREE.Color(B_WALL[i]) }, uWin: { value: new THREE.Color(B_WIN[i]) },
+        uRoof: { value: new THREE.Color(0x50565d) }, uSunDir: { value: SUN_DIR },
+        uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
+      },
+      vertexShader: `
+        varying vec3 vW; varying vec3 vN; varying float vFog;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vW = wp.xyz; vN = normalize(mat3(modelMatrix) * normal);
+          vec4 mv = viewMatrix * wp; vFog = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 uWall, uWin, uRoof, uSunDir, uFogCol; uniform float uFogDens;
+        varying vec3 vW; varying vec3 vN; varying float vFog;
+        void main() {
+          vec3 n = normalize(vN);
+          vec3 col;
+          if (n.y > 0.5) { col = uRoof; }
+          else {
+            float hc = abs(n.x) > abs(n.z) ? vW.z : vW.x;   // run windows along the face
+            float wx = fract(hc / 4.2);
+            float wy = fract(vW.y / 3.6);
+            float win = step(0.16, wx) * step(wx, 0.84) * step(0.18, wy) * step(wy, 0.80);
+            win *= step(4.5, vW.y);                          // no windows on the ground floor
+            col = mix(uWall, uWin, win);
+          }
+          float ndl = max(dot(n, uSunDir), 0.0);
+          col *= 0.42 + 0.72 * ndl;
+          float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
+          gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
+        }`
+    }));
   }
-  rocks.count = placed;
-  scene.add(rocks);
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);   // base at y=0
+  for (const b of buildings.values()) {
+    const m = new THREE.Mesh(boxGeo, buildMats[b.mat]);
+    m.scale.set(b.hw * 2, b.h, b.hd * 2);
+    m.position.set(b.cx, 0, b.cz);
+    scene.add(m);
+  }
 
   // ---- monkey avatar (rigged; shown in third-person view) ----
   function makeMonkey() {
@@ -802,8 +785,9 @@
   }
 
   function renderRoster() {
-    const rows = ['<div class="me">' + escHtml(MP.name || '—') + ' (you)</div>'];
-    for (const peer of MP.peers.values()) rows.push('<div>' + escHtml(peer.name || '匿名') + '</div>');
+    const crown = (isKing) => isKing ? '👑 ' : '';
+    const rows = ['<div class="me">' + crown(kingId === MP.id) + escHtml(MP.name || '—') + ' (you) · ' + kills + '</div>'];
+    for (const [pid, peer] of MP.peers) rows.push('<div>' + crown(kingId === pid) + escHtml(peer.name || '匿名') + ' · ' + (peer.kills || 0) + '</div>');
     netList.innerHTML = rows.join('');
     setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1), !MP.connected);
   }
@@ -819,7 +803,7 @@
         name: s.n || '匿名', group,
         cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
         yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
-        hp: 100, hpShown: 100, dead: false, inv: false,
+        hp: 100, hpShown: 100, dead: false, inv: false, kills: 0,
       };
       MP.peers.set(s.id, peer);
       renderRoster();
@@ -830,6 +814,8 @@
     if (s.hp != null) peer.hp = s.hp;
     peer.dead = !!s.d;
     peer.inv = !!s.iv;
+    const prevK = peer.kills; peer.kills = s.k || 0;
+    if (peer.kills !== prevK) recomputeKing();
     if (s.n && s.n !== peer.name) { peer.name = s.n; setPeerTag(peer, s.n); renderRoster(); }
   }
   function dropPeer(id) {
@@ -839,7 +825,7 @@
       if (o.geometry) o.geometry.dispose();
       if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
     });
-    MP.peers.delete(id); renderRoster();
+    MP.peers.delete(id); recomputeKing();
   }
 
   function connectMP() {
@@ -859,6 +845,8 @@
       client.subscribe(mtopic('state/+'));
       client.subscribe(mtopic('leave'));
       client.subscribe(mtopic('hit'));
+      client.subscribe(mtopic('shot'));
+      client.subscribe(mtopic('kill'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -868,7 +856,9 @@
       let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
       if (!msg) return;
       if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
+      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) { kills++; publishState(true); recomputeKing(); } return; }
       if (!msg.id) return;
+      if (t.slice(-5) === '/shot') { if (msg.id !== MP.id) onPeerShot(msg.id); return; }
       if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
       if (msg.id === MP.id) return;
       upsertPeer(msg);
@@ -886,7 +876,7 @@
     const msg = {
       id: MP.id, n: MP.name,
       x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
-      hp: Math.round(hp),
+      hp: Math.round(hp), k: kills,
     };
     if (dead) msg.d = 1;
     if (cloak > 0) msg.iv = 1;                 // invisible to others while cloaked
@@ -937,31 +927,8 @@
   // joystick vector, normalised to [-1,1]
   const stickVec = { x: 0, y: 0, active: false };
 
-  // drop the player on grass/beach above the sea; track the best spot so we
-  // never fall back to the origin (which is underwater).
-  {
-    const clearOfRocks = (x, z) => {
-      for (let i = 0; i < rockCols.length; i++) {
-        const rk = rockCols[i];
-        const dx = x - rk.x, dz = z - rk.z, rr = rk.r + PRAD + 1.6;
-        if (dx * dx + dz * dz < rr * rr) return false;
-      }
-      return true;
-    };
-    let best = null, bestY = -Infinity, anyBest = null, anyY = -Infinity;
-    for (let i = 0; i < 1200; i++) {
-      const x = (Math.random() - 0.5) * WORLD * 0.7;
-      const z = (Math.random() - 0.5) * WORLD * 0.7;
-      const y = height(x, z);
-      if (y <= 3 || y >= 40) continue;
-      if (y > anyY) { anyY = y; anyBest = { x, z, y }; }          // any dry spot
-      if (!clearOfRocks(x, z)) continue;
-      if (y > bestY) { bestY = y; best = { x, z, y }; }           // dry + rock-clear
-      if (y > 5 && y < 30) { p.set(x, y + EYE, z); best = null; anyBest = null; break; }
-    }
-    const spot = best || anyBest;
-    if (spot) p.set(spot.x, spot.y + EYE, spot.z);                // above water, clear of rocks
-  }
+  // drop the player onto a street, clear of buildings
+  { const s = pickSpawn(); p.set(s.x, EYE, s.z); }
 
   const canvas = renderer.domElement;
   const gate = document.getElementById('gate');
@@ -977,9 +944,107 @@
   let hp = HP_MAX, dead = false;
   let fireCd = 0, fireHeld = false;
   let cloak = 0, cloakCd = 0;          // seconds of cloak left / cooldown left
-  let recoil = 0, muzzleTimer = 0, hitMarkTimer = 0, hurtT = 0;
+  let recoil = 0, muzzleTimer = 0, hitMarkTimer = 0, hurtT = 0, camShake = 0;
+  let kills = 0, lastAttacker = null, kingId = null;
 
   const isPlaying = () => gate.classList.contains('gone');
+
+  // ── audio (Web Audio, all synthesized — no external files) ──────────
+  let actx = null, master = null, noiseBuf = null;
+  let sfxOn = true, sfxVol = 0.7;
+  try {
+    const so = localStorage.getItem('contour.sfx'); if (so !== null) sfxOn = so === '1';
+    const sv = parseFloat(localStorage.getItem('contour.vol')); if (sv >= 0 && sv <= 1) sfxVol = sv;
+  } catch (e) {}
+  function initAudio() {
+    if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      actx = new AC();
+      master = actx.createGain(); master.gain.value = sfxOn ? sfxVol : 0; master.connect(actx.destination);
+      const len = Math.floor(actx.sampleRate * 0.3);
+      noiseBuf = actx.createBuffer(1, len, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    } catch (e) { actx = null; }
+  }
+  const audioReady = () => actx && sfxOn && master;
+  const applySfx = () => { if (master) master.gain.value = sfxOn ? sfxVol : 0; };
+
+  function playShot(vol, pan) {
+    if (!audioReady()) return;
+    const t = actx.currentTime, g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.001, vol), t + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(4500, t); lp.frequency.exponentialRampToValueAtTime(500, t + 0.13);
+    const osc = actx.createOscillator(); osc.type = 'sine';
+    osc.frequency.setValueAtTime(170, t); osc.frequency.exponentialRampToValueAtTime(55, t + 0.1);
+    const og = actx.createGain(); og.gain.setValueAtTime(0.6, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+    src.connect(lp); lp.connect(g); osc.connect(og); og.connect(g);
+    let out = g;
+    if (actx.createStereoPanner) { const pn = actx.createStereoPanner(); pn.pan.value = Math.max(-1, Math.min(1, pan || 0)); g.connect(pn); out = pn; }
+    out.connect(master);
+    src.start(t); src.stop(t + 0.16); osc.start(t); osc.stop(t + 0.12);
+  }
+  function playJump() {
+    if (!audioReady()) return;
+    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'triangle'; o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(680, t + 0.12);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.15);
+  }
+  function playHurt() {
+    if (!audioReady()) return;
+    const t = actx.currentTime;
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 800; bp.Q.value = 0.7;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(200, t); o.frequency.exponentialRampToValueAtTime(90, t + 0.16);
+    const og = actx.createGain(); og.gain.setValueAtTime(0.35, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    src.connect(bp); bp.connect(g); g.connect(master); o.connect(og); og.connect(master);
+    src.start(t); src.stop(t + 0.2); o.start(t); o.stop(t + 0.18);
+  }
+  function playDeath() {
+    if (!audioReady()) return;
+    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(440, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.7);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.4, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(1800, t); lp.frequency.exponentialRampToValueAtTime(300, t + 0.7);
+    o.connect(lp); lp.connect(g); g.connect(master); o.start(t); o.stop(t + 0.8);
+  }
+  // a peer's shot: louder when near, quieter when far, panned left/right
+  function onPeerShot(id) {
+    const peer = MP.peers.get(id); if (!peer) return;
+    const dx = peer.cur.x - p.x, dz = peer.cur.z - p.z;
+    const dist = Math.hypot(dx, dz) || 0.001;
+    const vol = Math.max(0, 1 - dist / 140) * 0.55;
+    if (vol <= 0.003) return;
+    const pan = Math.max(-1, Math.min(1, (dx * Math.cos(yaw) - dz * Math.sin(yaw)) / dist));
+    playShot(vol, pan);
+  }
+
+  // ── kill count + crown for the room leader ──────────────────────────
+  function crownSprite() {
+    const cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
+    const ctx = cv.getContext('2d'); ctx.font = '52px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('👑', 32, 36);
+    const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, fog: false }));
+    s.scale.set(0.75, 0.75, 1); s.position.y = 3.2; s.renderOrder = 8;
+    return s;
+  }
+  function ensureCrown(group) { if (!group.userData.crown) { const c = crownSprite(); group.add(c); group.userData.crown = c; } return group.userData.crown; }
+  function recomputeKing() {
+    let best = kills, id = kills > 0 ? MP.id : null;
+    for (const [pid, peer] of MP.peers) { if ((peer.kills || 0) > best) { best = peer.kills; id = pid; } }
+    kingId = best > 0 ? id : null;
+    ensureCrown(monkey).visible = kingId === MP.id;
+    for (const [pid, peer] of MP.peers) ensureCrown(peer.group).visible = kingId === pid;
+    renderRoster();
+  }
 
   // low-poly gun, +z = barrel; userData.tip marks the muzzle
   function makeGunModel() {
@@ -1045,17 +1110,11 @@
     if (view === 'first') fpGun.userData.tip.getWorldPosition(_mz);
     else _mz.copy(_ro).addScaledVector(_rd, 0.4);
 
-    // nearest obstacle (terrain march + rock spheres) caps the shot
+    // nearest obstacle: march the ray; buildings register via height()
     let blockDist = MAX_RANGE;
-    for (let d = 2; d < MAX_RANGE; d += 2.5) {
+    for (let d = 2; d < MAX_RANGE; d += 2.0) {
       _p2.copy(_ro).addScaledVector(_rd, d);
       if (_p2.y < height(_p2.x, _p2.z)) { blockDist = d; break; }
-    }
-    for (let i = 0; i < rockCols.length; i++) {
-      const rk = rockCols[i];
-      _cc.set(rk.x, height(rk.x, rk.z) + rk.r * 0.7, rk.z);
-      const t = raySphere(_ro, _rd, _cc, rk.r);
-      if (t > 0 && t < blockDist) blockDist = t;
     }
     // nearest targetable peer in front of that
     let hitId = null, hitDist = Infinity;
@@ -1068,6 +1127,8 @@
     _end.copy(_ro).addScaledVector(_rd, hitId ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
+    playShot(0.5, 0);                                   // own gunshot
+    if (MP.connected && MP.client) MP.client.publish(mtopic('shot'), JSON.stringify({ id: MP.id }));
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
   }
 
@@ -1076,12 +1137,14 @@
   }
   function onHitMessage(msg) {
     if (msg.t !== MP.id) return;
-    applyDamage(msg.d || 0);
+    applyDamage(msg.d || 0, msg.by);
   }
-  function applyDamage(d) {
+  function applyDamage(d, by) {
     if (dead) return;                                 // cloak hides you, but does NOT block damage
+    if (by) lastAttacker = by;
     hp = Math.max(0, hp - d);
-    showHurt(); updateHpUI();
+    showHurt(); playHurt(); camShake = 0.28;          // visual + audio + shake feedback
+    updateHpUI();
     if (hp <= 0) onDeath();
     publishState(true);
   }
@@ -1098,28 +1161,18 @@
   }
   function onDeath() {
     dead = true; fireHeld = false;
+    playDeath();
+    // credit the kill to whoever last hit us
+    if (lastAttacker && MP.connected && MP.client) MP.client.publish(mtopic('kill'), JSON.stringify({ by: lastAttacker }));
     gameoverEl.classList.add('show');
     if (mode === 'pc' && document.pointerLockElement === canvas) document.exitPointerLock();
     publishState(true);
   }
   function respawn() {
-    const clr = (x, z) => {
-      for (let i = 0; i < rockCols.length; i++) { const rk = rockCols[i]; const dx = x - rk.x, dz = z - rk.z, rr = rk.r + PRAD + 1.6; if (dx * dx + dz * dz < rr * rr) return false; }
-      return true;
-    };
-    let best = null, bestY = -Infinity, any = null, anyY = -Infinity;
-    for (let i = 0; i < 1200; i++) {
-      const x = (Math.random() - 0.5) * WORLD * 0.7, z = (Math.random() - 0.5) * WORLD * 0.7, y = height(x, z);
-      if (y <= 3 || y >= 40) continue;
-      if (y > anyY) { anyY = y; any = { x, z, y }; }
-      if (!clr(x, z)) continue;
-      if (y > bestY) { bestY = y; best = { x, z, y }; }
-      if (y > 5 && y < 30) { p.set(x, y + EYE, z); return; }
-    }
-    const s = best || any; if (s) p.set(s.x, s.y + EYE, s.z);
+    const s = pickSpawn(); p.set(s.x, EYE, s.z);
   }
   function doContinue() {
-    hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0;
+    hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0; lastAttacker = null;
     setSelfCloak(false); respawn();
     updateHpUI(); updateCloakBtn();
     gameoverEl.classList.remove('show');
@@ -1222,6 +1275,7 @@
     gate.classList.add('gone');
     hud.classList.add('live');
     document.body.classList.add('playing');
+    initAudio();                         // unlock audio within the click gesture
     applyMode();
     connectMP();
   }
@@ -1364,6 +1418,25 @@
   $('settings-close').addEventListener('click', closeSettings);
   settingsEl.addEventListener('click', (ev) => { if (ev.target === settingsEl) closeSettings(); });
 
+  // ---- settings: sound on/off + volume ----
+  const sfxToggle = $('sfx-toggle'), sfxState = $('sfx-state'), volEl = $('volume'), volVal = $('vol-val');
+  function refreshSfxUI() {
+    sfxState.textContent = sfxOn ? 'ON' : 'OFF';
+    sfxToggle.classList.toggle('off', !sfxOn);
+    volEl.value = sfxVol; volVal.textContent = Math.round(sfxVol * 100) + '%';
+  }
+  sfxToggle.addEventListener('click', () => {
+    sfxOn = !sfxOn;
+    try { localStorage.setItem('contour.sfx', sfxOn ? '1' : '0'); } catch (e) {}
+    initAudio(); applySfx(); refreshSfxUI();
+  });
+  volEl.addEventListener('input', () => {
+    sfxVol = parseFloat(volEl.value);
+    try { localStorage.setItem('contour.vol', String(sfxVol)); } catch (e) {}
+    applySfx(); volVal.textContent = Math.round(sfxVol * 100) + '%';
+  });
+  refreshSfxUI();
+
   function onResize() {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
@@ -1419,19 +1492,18 @@
     p.x = Math.max(-lim, Math.min(lim, p.x));
     p.z = Math.max(-lim, Math.min(lim, p.z));
 
-    // --- rock collision: resolve EVERY frame (2 passes) so you can't clip in ---
+    // --- building collision: AABB push-out (2 passes) against nearby blocks ---
     for (let pass = 0; pass < 2; pass++) {
-      for (let i = 0; i < rockCols.length; i++) {
-        const rk = rockCols[i];
-        let dx = p.x - rk.x, dz = p.z - rk.z;
-        const rr = rk.r + PRAD;
-        let d2 = dx * dx + dz * dz;
-        if (d2 < rr * rr) {
-          if (d2 < 1e-6) { dx = 1; dz = 0; d2 = 1; }   // dead-centre nudge
-          const d = Math.sqrt(d2);
-          const push = rr - d;
-          p.x += (dx / d) * push;
-          p.z += (dz / d) * push;
+      const ci = Math.round(p.x / CELL), cj = Math.round(p.z / CELL);
+      for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+        const b = buildings.get((ci + oi) + ',' + (cj + oj));
+        if (!b) continue;
+        const minx = b.cx - b.hw - PRAD, maxx = b.cx + b.hw + PRAD;
+        const minz = b.cz - b.hd - PRAD, maxz = b.cz + b.hd + PRAD;
+        if (p.x > minx && p.x < maxx && p.z > minz && p.z < maxz) {
+          const dxL = p.x - minx, dxR = maxx - p.x, dzL = p.z - minz, dzR = maxz - p.z;
+          if (Math.min(dxL, dxR) < Math.min(dzL, dzR)) p.x = dxL < dxR ? minx : maxx;
+          else p.z = dzL < dzR ? minz : maxz;
         }
       }
     }
@@ -1457,7 +1529,7 @@
       if (!grounded) charging = false;
       else {
         jumpCharge -= dt;
-        if (jumpCharge <= 0) { vy = JUMP; grounded = false; charging = false; }
+        if (jumpCharge <= 0) { vy = JUMP; grounded = false; charging = false; playJump(); }
       }
     }
 
@@ -1501,19 +1573,13 @@
       camera.rotation.set(pitch, yaw, roll, 'YXZ');
     }
     sky.position.set(p.x, 0, p.z);
-    water.position.set(p.x, 0, p.z);
 
-    // --- underwater: blue tint + murk when the player drops below sea level ---
-    const submerged = p.y < 0;
-    fxEl.style.opacity = submerged ? Math.min(0.30 + (-p.y) * 0.045, 0.68) : 0;
-    if (submerged) {
-      scene.fog.color.setHex(0x1A5773); scene.fog.density = 0.018;
-      terrainMat.uniforms.uFogCol.value.setHex(0x1A5773);
-      terrainMat.uniforms.uFogDens.value = 0.013;
-    } else {
-      scene.fog.color.copy(C.horizon); scene.fog.density = FOG_DENSITY;
-      terrainMat.uniforms.uFogCol.value.copy(C.horizon);
-      terrainMat.uniforms.uFogDens.value = FOG_DENSITY;
+    // --- camera shake (on taking damage) ---
+    if (camShake > 0) {
+      camera.position.x += (Math.random() - 0.5) * camShake;
+      camera.position.y += (Math.random() - 0.5) * camShake;
+      camera.position.z += (Math.random() - 0.5) * camShake;
+      camShake = Math.max(0, camShake - dt * 1.4);
     }
 
     // --- combat + multiplayer: advance others, broadcast self ---
