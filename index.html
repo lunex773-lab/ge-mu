@@ -228,11 +228,67 @@
     color: var(--ink); background: var(--grass); border: 0; border-radius: 2px; padding: 12px; cursor: pointer;
   }
 
+  /* ================= combat · HP · stealth ================= */
+  #crosshair {
+    position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%); opacity: .85; transition: transform .1s ease;
+  }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,.85); }
+  #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+  #crosshair::after  { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+  #crosshair.hit { transform: translate(-50%, -50%) scale(1.5); }
+  #crosshair.hit::before, #crosshair.hit::after { background: #ff5a4a; }
+
+  #hpwrap { position: absolute; left: calc(24px + env(safe-area-inset-left)); top: calc(112px + env(safe-area-inset-top)); width: 180px; }
+  #hp-label { color: var(--line-dim); font-size: 9px; letter-spacing: .2em; margin-bottom: 4px; }
+  #hp-bar { position: relative; height: 13px; border: 1px solid var(--line-dim); border-radius: 2px; background: rgba(11,16,20,.5); overflow: hidden; }
+  #hp-fill { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #3ea55a, #7fe06a); transition: width .18s ease; }
+  #hp-num { position: absolute; right: 6px; top: 0; font-size: 10px; font-weight: 600; color: #fff; line-height: 13px; }
+
+  #hurt {
+    position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity .3s ease;
+    background: radial-gradient(120% 120% at 50% 50%, rgba(200,30,20,0) 42%, rgba(200,30,20,.55));
+  }
+
+  /* fire / cloak (touch) */
+  #fire, #cloak {
+    position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
+    color: var(--line); font: inherit; font-weight: 600; letter-spacing: .08em;
+    border: 1px solid var(--line-dim); background: rgba(234,243,228,.06); -webkit-tap-highlight-color: transparent;
+  }
+  #touch.live #fire, #touch.live #cloak { pointer-events: auto; }
+  #fire  { right: calc(28px + env(safe-area-inset-right)); bottom: calc(110px + env(safe-area-inset-bottom)); width: 96px; height: 96px; font-size: 13px; }
+  #fire:active { background: rgba(255,90,74,.30); }
+  #cloak { right: calc(134px + env(safe-area-inset-right)); bottom: calc(152px + env(safe-area-inset-bottom)); width: 70px; height: 70px; font-size: 10px; line-height: 1.25; text-align: center; }
+  #cloak b { display: block; font-size: 9px; font-weight: 700; }
+  #cloak.cool { opacity: .45; }
+  #cloak.on { color: var(--major); border-color: var(--major); background: rgba(200,251,234,.18); }
+  /* move JUMP clear of the fire cluster; the drag layer handles looking */
+  #lookpad { display: none; }
+  #jump { right: calc(46px + env(safe-area-inset-right)) !important; bottom: calc(224px + env(safe-area-inset-bottom)) !important; width: 74px !important; height: 74px !important; }
+
+  /* game over */
+  #gameover { position: fixed; inset: 0; z-index: 16; display: none; place-items: center; background: rgba(6,10,14,.74); }
+  #gameover.show { display: grid; }
+  #gameover .panel { text-align: center; padding: 0 24px; }
+  #gameover h2 { font-size: clamp(30px, 7vw, 52px); font-weight: 300; letter-spacing: .28em; color: #ff6b5a; margin-right: -.28em; }
+  #gameover p { margin-top: 14px; color: var(--line-dim); font-size: 12px; letter-spacing: .08em; }
+  #continue {
+    margin-top: 28px; font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .22em;
+    color: var(--ink); background: var(--grass); border: 0; border-radius: 2px; padding: 14px 32px; cursor: pointer;
+  }
+  #continue:active { transform: translateY(1px); }
+
 </style>
 </head>
 <body>
 
 <div id="hud">
+  <div id="crosshair"></div>
+  <div id="hpwrap">
+    <div id="hp-label">HP</div>
+    <div id="hp-bar"><i id="hp-fill"></i><span id="hp-num">100</span></div>
+  </div>
   <div id="survey">
     <dl>
       <dt>ELEV</dt><dd id="v-elev">—</dd>
@@ -262,6 +318,8 @@
   <div id="stick"><div id="knob"></div></div>
   <div id="lookpad"><span>視点</span><div id="lookknob"></div></div>
   <button id="jump" type="button">JUMP</button>
+  <button id="fire" type="button">FIRE</button>
+  <button id="cloak" type="button">透明<b>OK</b></button>
 </div>
 
 <div id="gear" role="button" aria-label="設定">⚙</div>
@@ -273,6 +331,15 @@
       <input id="brightness" type="range" min="0.6" max="2.6" step="0.05" value="1">
     </div>
     <button class="close" id="settings-close">閉じる</button>
+  </div>
+</div>
+
+<div id="hurt"></div>
+<div id="gameover">
+  <div class="panel">
+    <h2>GAME OVER</h2>
+    <p>やられてしまった。もう一度いどむ？</p>
+    <button id="continue" type="button">コンティニュー</button>
   </div>
 </div>
 
@@ -606,9 +673,14 @@
       tail.push(n); parent = n;
     }
 
+    // a little gun in the right hand
+    const gun = makeGunModel(); gun.scale.setScalar(0.9);
+    gun.position.set(0.04, -0.52, 0.16); gun.rotation.set(-0.2, 0, 0);
+    ra.lo.add(gun);
+
     g.scale.setScalar(0.9);
     g.userData = {
-      body, torso, head, tail,
+      body, torso, head, tail, gun,
       lArm: la.arm, lArmLo: la.lo, rArm: ra.arm, rArmLo: ra.lo,
       lLeg: ll.leg, lLegLo: ll.lo, rLeg: rl.leg, rLegLo: rl.lo,
     };
@@ -708,7 +780,20 @@
     m.visible = true;
     const tag = nameSprite(name || '匿名');
     m.add(tag); m.userData.tag = tag;
+    // floating HP bar (dark backing + coloured fill), just under the name
+    const hpbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0b1014, transparent: true, opacity: 0.65, depthTest: false, fog: false }));
+    hpbg.scale.set(1.2, 0.12, 1); hpbg.position.y = 2.42; hpbg.renderOrder = 5;
+    const hpfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66DD66, depthTest: false, fog: false }));
+    hpfill.scale.set(1.16, 0.09, 1); hpfill.position.y = 2.42; hpfill.renderOrder = 6;
+    m.add(hpbg, hpfill); m.userData.hpfill = hpfill;
     return m;
+  }
+  function setPeerHp(peer) {
+    const fill = peer.group.userData.hpfill; if (!fill) return;
+    const f = Math.max(0, Math.min(1, peer.hp / 100)), W = 1.16;
+    fill.scale.x = Math.max(0.001, W * f);
+    fill.position.x = -(W * (1 - f)) / 2;                 // anchor the fill to the left
+    fill.material.color.setHex(f > 0.5 ? 0x66DD66 : f > 0.25 ? 0xE8C74C : 0xE0503F);
   }
   function setPeerTag(peer, name) {
     const old = peer.group.userData.tag;
@@ -734,6 +819,7 @@
         name: s.n || '匿名', group,
         cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
         yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
+        hp: 100, hpShown: 100, dead: false, inv: false,
       };
       MP.peers.set(s.id, peer);
       renderRoster();
@@ -741,6 +827,9 @@
     peer.tgt.set(s.x, s.y, s.z);
     peer.tgtYaw = s.r || 0;
     peer.lastSeen = performance.now();
+    if (s.hp != null) peer.hp = s.hp;
+    peer.dead = !!s.d;
+    peer.inv = !!s.iv;
     if (s.n && s.n !== peer.name) { peer.name = s.n; setPeerTag(peer, s.n); renderRoster(); }
   }
   function dropPeer(id) {
@@ -769,6 +858,7 @@
       MP.connected = true;
       client.subscribe(mtopic('state/+'));
       client.subscribe(mtopic('leave'));
+      client.subscribe(mtopic('hit'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -776,7 +866,9 @@
     client.on('error', () => {});
     client.on('message', (t, buf) => {
       let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
-      if (!msg || !msg.id) return;
+      if (!msg) return;
+      if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
+      if (!msg.id) return;
       if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
       if (msg.id === MP.id) return;
       upsertPeer(msg);
@@ -791,10 +883,14 @@
     const now = performance.now();
     if (!force && now - MP.lastPub < MP.PUB_MS) return;
     MP.lastPub = now;
-    MP.client.publish(mtopic('state/' + MP.id), JSON.stringify({
+    const msg = {
       id: MP.id, n: MP.name,
       x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
-    }));
+      hp: Math.round(hp),
+    };
+    if (dead) msg.d = 1;
+    if (cloak > 0) msg.iv = 1;                 // invisible to others while cloaked
+    MP.client.publish(mtopic('state/' + MP.id), JSON.stringify(msg));
   }
 
   // advance remote monkeys: smooth position/heading, drive the walk cycle
@@ -811,6 +907,8 @@
       if (d < -Math.PI) d += Math.PI * 2;
       peer.yaw += d * k;
       peer.group.rotation.y = peer.yaw + Math.PI;
+      peer.group.visible = !peer.dead && !peer.inv;      // hidden when cloaked or downed
+      if (peer.hp !== peer.hpShown) { peer.hpShown = peer.hp; setPeerHp(peer); }
       const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
       const air = (peer.cur.y - height(peer.cur.x, peer.cur.z)) > 0.5;
       const walk = air ? 0 : Math.min(spd / (WALK * 0.7), 1);
@@ -871,6 +969,218 @@
   const touchUI = document.getElementById('touch');
   const $ = (id) => document.getElementById(id);
 
+  // ──────────────────────────────────────────────────────────
+  //  Combat — guns, HP, stealth cloak, game over / continue
+  // ──────────────────────────────────────────────────────────
+  const HP_MAX = 100, DMG = 20, FIRE_INTERVAL = 0.22, MAX_RANGE = 300;
+  const CLOAK_DUR = 5, CLOAK_COOL = 30;
+  let hp = HP_MAX, dead = false;
+  let fireCd = 0, fireHeld = false;
+  let cloak = 0, cloakCd = 0;          // seconds of cloak left / cooldown left
+  let recoil = 0, muzzleTimer = 0, hitMarkTimer = 0, hurtT = 0;
+
+  const isPlaying = () => gate.classList.contains('gone');
+
+  // low-poly gun, +z = barrel; userData.tip marks the muzzle
+  function makeGunModel() {
+    const g = new THREE.Group();
+    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.6, metalness: 0.5, flatShading: true });
+    const dark  = new THREE.MeshStandardMaterial({ color: 0x15181c, roughness: 0.8 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 0.30), metal); body.position.set(0, 0, 0.02); g.add(body);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.34, 10), metal); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.03, 0.26); g.add(barrel);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.10), dark); grip.position.set(0, -0.13, -0.06); grip.rotation.x = -0.32; g.add(grip);
+    const tip = new THREE.Object3D(); tip.position.set(0, 0.03, 0.44); g.add(tip);
+    g.userData.tip = tip;
+    return g;
+  }
+
+  // first-person view-model gun (child of the camera)
+  const fpGun = makeGunModel();
+  fpGun.rotation.y = Math.PI;                 // barrel points along camera -Z (forward)
+  const FPGUN_Z = -0.55;
+  fpGun.position.set(0.22, -0.24, FPGUN_Z);
+  const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xFFE08A, transparent: true, opacity: 0.95, depthTest: false, fog: false, blending: THREE.AdditiveBlending }));
+  muzzle.scale.set(0.5, 0.5, 1); muzzle.position.copy(fpGun.userData.tip.position); muzzle.visible = false; fpGun.add(muzzle);
+  camera.add(fpGun);
+  scene.add(camera);                          // so the camera's child gun renders
+
+  // tracer pool (thin glowing cylinders that fade out)
+  const tracers = [];
+  for (let i = 0; i < 10; i++) {
+    const m = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 1, 6),
+      new THREE.MeshBasicMaterial({ color: 0xFFE39A, transparent: true, opacity: 0, fog: false, depthWrite: false })
+    );
+    m.visible = false; m.userData.life = 0; scene.add(m); tracers.push(m);
+  }
+  let tracerI = 0;
+  const _ta = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+  function spawnTracer(a, b) {
+    const m = tracers[tracerI = (tracerI + 1) % tracers.length];
+    _ta.subVectors(b, a); const len = _ta.length() || 0.001;
+    m.position.copy(a).addScaledVector(_ta, 0.5);
+    m.scale.set(1, len, 1);
+    m.quaternion.setFromUnitVectors(_up, _ta.normalize());
+    m.material.opacity = 0.9; m.userData.life = 0.09; m.visible = true;
+  }
+
+  const _rd = new THREE.Vector3(), _ro = new THREE.Vector3(), _mz = new THREE.Vector3();
+  const _p2 = new THREE.Vector3(), _cc = new THREE.Vector3(), _end = new THREE.Vector3();
+  function raySphere(ro, rd, c, r) {
+    const ox = ro.x - c.x, oy = ro.y - c.y, oz = ro.z - c.z;
+    const b = ox * rd.x + oy * rd.y + oz * rd.z;
+    const cc = ox * ox + oy * oy + oz * oz - r * r;
+    const disc = b * b - cc;
+    if (disc < 0) return -1;
+    return -b - Math.sqrt(disc);
+  }
+
+  function fire() {
+    if (dead || !isPlaying() || fireCd > 0) return;
+    if (mode === 'pc' && document.pointerLockElement !== canvas) return;
+    fireCd = FIRE_INTERVAL;
+    camera.updateMatrixWorld(true);
+    camera.getWorldDirection(_rd);
+    _ro.copy(camera.position);
+    if (view === 'first') fpGun.userData.tip.getWorldPosition(_mz);
+    else _mz.copy(_ro).addScaledVector(_rd, 0.4);
+
+    // nearest obstacle (terrain march + rock spheres) caps the shot
+    let blockDist = MAX_RANGE;
+    for (let d = 2; d < MAX_RANGE; d += 2.5) {
+      _p2.copy(_ro).addScaledVector(_rd, d);
+      if (_p2.y < height(_p2.x, _p2.z)) { blockDist = d; break; }
+    }
+    for (let i = 0; i < rockCols.length; i++) {
+      const rk = rockCols[i];
+      _cc.set(rk.x, height(rk.x, rk.z) + rk.r * 0.7, rk.z);
+      const t = raySphere(_ro, _rd, _cc, rk.r);
+      if (t > 0 && t < blockDist) blockDist = t;
+    }
+    // nearest targetable peer in front of that
+    let hitId = null, hitDist = Infinity;
+    for (const [id, peer] of MP.peers) {
+      if (peer.dead || peer.inv) continue;            // cloaked / downed can't be hit
+      _cc.copy(peer.cur); _cc.y += 1.15;
+      const t = raySphere(_ro, _rd, _cc, 0.95);
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; }
+    }
+    _end.copy(_ro).addScaledVector(_rd, hitId ? hitDist : blockDist);
+    spawnTracer(_mz, _end);
+    muzzle.visible = true; muzzle.scale.setScalar(0.5 + Math.random() * 0.5); muzzleTimer = 0.05; recoil = 0.05;
+    if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
+  }
+
+  function sendHit(id) {
+    if (MP.connected && MP.client) MP.client.publish(mtopic('hit'), JSON.stringify({ by: MP.id, t: id, d: DMG }));
+  }
+  function onHitMessage(msg) {
+    if (msg.t !== MP.id) return;
+    applyDamage(msg.d || 0);
+  }
+  function applyDamage(d) {
+    if (dead || cloak > 0) return;                    // cloak keeps you safe
+    hp = Math.max(0, hp - d);
+    showHurt(); updateHpUI();
+    if (hp <= 0) onDeath();
+    publishState(true);
+  }
+  function showHurt() {
+    hurtEl.style.opacity = '0.6';
+    clearTimeout(hurtT); hurtT = setTimeout(() => { hurtEl.style.opacity = '0'; }, 70);
+  }
+  function updateHpUI() {
+    const f = Math.max(0, hp) / HP_MAX;
+    hpFill.style.width = (f * 100) + '%';
+    hpFill.style.background = f > 0.5 ? 'linear-gradient(90deg,#3ea55a,#7fe06a)'
+      : f > 0.25 ? 'linear-gradient(90deg,#c9a13a,#e8c74c)' : 'linear-gradient(90deg,#a83228,#e0503f)';
+    hpNum.textContent = Math.ceil(hp);
+  }
+  function onDeath() {
+    dead = true; fireHeld = false;
+    gameoverEl.classList.add('show');
+    if (mode === 'pc' && document.pointerLockElement === canvas) document.exitPointerLock();
+    publishState(true);
+  }
+  function respawn() {
+    const clr = (x, z) => {
+      for (let i = 0; i < rockCols.length; i++) { const rk = rockCols[i]; const dx = x - rk.x, dz = z - rk.z, rr = rk.r + PRAD + 1.6; if (dx * dx + dz * dz < rr * rr) return false; }
+      return true;
+    };
+    let best = null, bestY = -Infinity, any = null, anyY = -Infinity;
+    for (let i = 0; i < 1200; i++) {
+      const x = (Math.random() - 0.5) * WORLD * 0.7, z = (Math.random() - 0.5) * WORLD * 0.7, y = height(x, z);
+      if (y <= 3 || y >= 40) continue;
+      if (y > anyY) { anyY = y; any = { x, z, y }; }
+      if (!clr(x, z)) continue;
+      if (y > bestY) { bestY = y; best = { x, z, y }; }
+      if (y > 5 && y < 30) { p.set(x, y + EYE, z); return; }
+    }
+    const s = best || any; if (s) p.set(s.x, s.y + EYE, s.z);
+  }
+  function doContinue() {
+    hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0;
+    setSelfCloak(false); respawn();
+    updateHpUI(); updateCloakBtn();
+    gameoverEl.classList.remove('show');
+    publishState(true);
+    if (mode === 'pc' && isPlaying()) applyMode();     // re-lock the mouse
+  }
+
+  function setSelfCloak(on) {
+    monkey.traverse((o) => { if (o.isMesh && o.material) { o.material.transparent = on; o.material.opacity = on ? 0.4 : 1; } });
+    fpGun.traverse((o) => { if (o.isMesh && o.material) { o.material.transparent = on; o.material.opacity = on ? 0.5 : 1; } });
+  }
+  function toggleCloak() {
+    if (dead || !isPlaying() || cloak > 0 || cloakCd > 0) return;
+    cloak = CLOAK_DUR; setSelfCloak(true); publishState(true); updateCloakBtn();
+  }
+  function updateCloakBtn() {
+    if (!cloakBtn) return;
+    if (cloak > 0) cloakBtn.className = 'on', cloakBtn.innerHTML = '透明<b>' + Math.ceil(cloak) + '</b>';
+    else if (cloakCd > 0) cloakBtn.className = 'cool', cloakBtn.innerHTML = '透明<b>' + Math.ceil(cloakCd) + '</b>';
+    else cloakBtn.className = '', cloakBtn.innerHTML = '透明<b>OK</b>';
+  }
+
+  function updateCombat(dt) {
+    if (fireCd > 0) fireCd -= dt;
+    if (fireHeld && !dead && isPlaying()) fire();
+
+    for (const m of tracers) {
+      if (m.userData.life > 0) {
+        m.userData.life -= dt;
+        m.material.opacity = Math.max(0, m.userData.life / 0.09) * 0.9;
+        if (m.userData.life <= 0) m.visible = false;
+      }
+    }
+    if (muzzleTimer > 0) { muzzleTimer -= dt; if (muzzleTimer <= 0) muzzle.visible = false; }
+    recoil += (0 - recoil) * Math.min(1, dt * 14);
+    fpGun.position.z = FPGUN_Z + recoil;
+    fpGun.visible = (view === 'first') && !dead && isPlaying();
+    if (hitMarkTimer > 0) { hitMarkTimer -= dt; if (hitMarkTimer <= 0) crosshairEl.classList.remove('hit'); }
+
+    if (cloak > 0) {
+      cloak -= dt;
+      if (cloak <= 0) { cloak = 0; cloakCd = CLOAK_COOL; setSelfCloak(false); publishState(true); }
+    } else if (cloakCd > 0) {
+      cloakCd = Math.max(0, cloakCd - dt);
+    }
+    updateCloakBtn();
+  }
+
+  // combat HUD + input
+  const crosshairEl = $('crosshair'), hurtEl = $('hurt'), hpFill = $('hp-fill'), hpNum = $('hp-num');
+  const gameoverEl = $('gameover'), fireBtn = $('fire'), cloakBtn = $('cloak');
+  fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); fireHeld = true; fire(); }, { passive: false });
+  fireBtn.addEventListener('touchend',   (e) => { e.preventDefault(); fireHeld = false; }, { passive: false });
+  fireBtn.addEventListener('touchcancel', () => { fireHeld = false; });
+  cloakBtn.addEventListener('touchstart', (e) => { e.preventDefault(); toggleCloak(); }, { passive: false });
+  cloakBtn.addEventListener('click', () => toggleCloak());
+  $('continue').addEventListener('click', doContinue);
+  addEventListener('mousedown', (e) => { if (mode === 'pc' && e.button === 0 && document.pointerLockElement === canvas && !dead) { fireHeld = true; fire(); } });
+  addEventListener('mouseup',   (e) => { if (e.button === 0) fireHeld = false; });
+  updateHpUI(); updateCloakBtn();
+
   // route look input: first-person aims the player, third-person orbits the camera
   function applyLook(dx, dy) {
     if (view === 'third') {
@@ -921,9 +1231,11 @@
 
   // ---- keyboard (used only in PC mode) ----
   addEventListener('keydown', (ev) => {
+    if (ev.code === 'Enter' && dead) { doContinue(); return; }
     if (mode !== 'pc') return;
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
+    if (ev.code === 'KeyQ' && !ev.repeat) toggleCloak();      // stealth cloak
   });
   addEventListener('keyup', (ev) => { keys[ev.code] = false; });
 
@@ -1094,7 +1406,7 @@
     if (fdot < -0.12) strideDir = -1; else if (fdot > 0.12) strideDir = 1;
 
     const mag = Math.min(mv.length(), 1);
-    const moving = mag > 0.06;
+    const moving = mag > 0.06 && !dead;
     const running = kbRun || mag > 0.85;
     if (moving) {
       const speed = running ? RUN : WALK;
@@ -1138,7 +1450,7 @@
     if (grounded && moving) stridePhase += dt * (running ? 13 : 9) * strideDir;
 
     // --- jump with a short pre-jump crouch (anticipation) ---
-    const jumpPressed = keys['Space'] || wantJump;
+    const jumpPressed = (keys['Space'] || wantJump) && !dead;
     wantJump = false;
     if (grounded && jumpPressed && !charging) { charging = true; jumpCharge = PREJUMP; }
     if (charging) {
@@ -1204,7 +1516,8 @@
       terrainMat.uniforms.uFogDens.value = FOG_DENSITY;
     }
 
-    // --- multiplayer: advance others, broadcast self ---
+    // --- combat + multiplayer: advance others, broadcast self ---
+    updateCombat(dt);
     updatePeers(dt, now);
     publishState(false);
 
