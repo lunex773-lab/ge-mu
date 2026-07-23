@@ -398,47 +398,82 @@
   const SUN_DIR = new THREE.Vector3(0.5, 0.62, -0.42).normalize();
 
   const WORLD = 700;          // metres across (movement clamp)
-  const CELL = 60;            // city block + street pitch
-  const GRID_N = 5;           // blocks from -N..N
-  const buildings = new Map();   // "ci,cj" -> { cx, cz, hw, hd, h, mat }
+  const N = 5;                // road intersections at i,j in -N..N
+  const PITCH = 66;           // block + street pitch
+  const RW = 8;               // road half-width (road ≈ 16 m, two lanes)
+  const SWW = 5;              // sidewalk width
+  const HALF = RW + SWW;      // road centre → building frontage
+  const LANE = 3.4;           // driving lane offset from the road centre
 
   // ──────────────────────────────────────────────────────────
-  //  City grid — flat streets with a box building on each block.
-  //  Seeded so every player shares the same skyline + collision.
+  //  City — a Shibuya-style grid: streets between blocks, a
+  //  scramble crossing at the centre. Seeded, so all players share
+  //  the same skyline + collision. Buildings are bucketed per cell.
   // ──────────────────────────────────────────────────────────
+  const buildingList = [];
+  const bBucket = new Map();
+  const bkey = (x, z) => Math.round(x / PITCH) + ',' + Math.round(z / PITCH);
+  function addBuilding(cx, cz, hw, hd, h, mat) {
+    const b = { cx, cz, hw, hd, h, mat }; buildingList.push(b);
+    const k = bkey(cx, cz); let a = bBucket.get(k); if (!a) { a = []; bBucket.set(k, a); } a.push(b); return b;
+  }
   const mulberry32 = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   const rrand = mulberry32(0x51742C17);
-  for (let ci = -GRID_N; ci <= GRID_N; ci++) {
-    for (let cj = -GRID_N; cj <= GRID_N; cj++) {
-      if (ci === 0 && cj === 0) continue;               // open plaza at the centre
-      if (rrand() < 0.12) continue;                     // occasional empty lot
-      const hw = 9 + rrand() * 8, hd = 9 + rrand() * 8;
-      const h = 9 + Math.pow(rrand(), 1.7) * 64;
-      buildings.set(ci + ',' + cj, { cx: ci * CELL, cz: cj * CELL, hw, hd, h, mat: (rrand() * 4) | 0 });
+  for (let bi = -N; bi < N; bi++) for (let bj = -N; bj < N; bj++) {
+    if (rrand() < 0.05) continue;                                  // rare vacant lot
+    const x0 = bi * PITCH + HALF, x1 = (bi + 1) * PITCH - HALF;
+    const z0 = bj * PITCH + HALF, z1 = (bj + 1) * PITCH - HALF;
+    const central = (bi === 0 || bi === -1) && (bj === 0 || bj === -1);  // low near the crossing
+    const nx = 1 + (rrand() < 0.45 ? 1 : 0), nz = 1 + (rrand() < 0.45 ? 1 : 0);
+    for (let ix = 0; ix < nx; ix++) for (let iz = 0; iz < nz; iz++) {
+      const g = 1.3;
+      const sx0 = x0 + (x1 - x0) * ix / nx + g, sx1 = x0 + (x1 - x0) * (ix + 1) / nx - g;
+      const sz0 = z0 + (z1 - z0) * iz / nz + g, sz1 = z0 + (z1 - z0) * (iz + 1) / nz - g;
+      const hw = (sx1 - sx0) / 2, hd = (sz1 - sz0) / 2;
+      if (hw < 3 || hd < 3) continue;
+      const h = central ? 5 + rrand() * 7 : 10 + Math.pow(rrand(), 1.9) * 74;
+      addBuilding((sx0 + sx1) / 2, (sz0 + sz1) / 2, hw, hd, h, (rrand() * 4) | 0);
     }
   }
-  // ground height: 0 on the street, the roof height inside a footprint (this
-  // also blocks shots and keeps you from walking through a tower)
+  // 0 on the street, roof height inside a footprint (blocks shots + walls off towers)
   function height(x, z) {
-    const b = buildings.get(Math.round(x / CELL) + ',' + Math.round(z / CELL));
-    if (b && Math.abs(x - b.cx) <= b.hw && Math.abs(z - b.cz) <= b.hd) return b.h;
-    return 0;
-  }
-  function onStreet(x, z, margin) {
-    const ci = Math.round(x / CELL), cj = Math.round(z / CELL);
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH); let h = 0;
     for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
-      const b = buildings.get((ci + oi) + ',' + (cj + oj)); if (!b) continue;
-      if (Math.abs(x - b.cx) < b.hw + margin && Math.abs(z - b.cz) < b.hd + margin) return false;
+      const a = bBucket.get((bi + oi) + ',' + (bj + oj)); if (!a) continue;
+      for (const b of a) if (Math.abs(x - b.cx) <= b.hw && Math.abs(z - b.cz) <= b.hd && b.h > h) h = b.h;
+    }
+    return h;
+  }
+  function clearAt(x, z, margin) {
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+      const a = bBucket.get((bi + oi) + ',' + (bj + oj)); if (!a) continue;
+      for (const b of a) if (Math.abs(x - b.cx) < b.hw + margin && Math.abs(z - b.cz) < b.hd + margin) return false;
     }
     return true;
   }
   function pickSpawn() {
-    const R = (GRID_N + 0.5) * CELL;
+    const R = (N - 0.5) * PITCH;
     for (let i = 0; i < 3000; i++) {
       const x = (Math.random() * 2 - 1) * R, z = (Math.random() * 2 - 1) * R;
-      if (onStreet(x, z, 2.0)) return { x, z };
+      if (clearAt(x, z, 1.5)) return { x, z };
     }
-    return { x: CELL * 0.5, z: CELL * 0.5 };
+    return { x: PITCH * 0.5, z: 0 };
+  }
+
+  // ---- traffic-signal phase on a shared clock (2 = green, 1 = yellow, 0 = red) ----
+  let cityT = 0;
+  const SIG = { g: 7, y: 2, ar: 1.3, scr: 5 };
+  const CYCLE = SIG.g * 2 + SIG.y * 2 + SIG.ar * 2 + SIG.scr;
+  function signalPhase(t) {
+    t = ((t % CYCLE) + CYCLE) % CYCLE;
+    if (t < SIG.g) return { ns: 2, ew: 0, ped: 0 };                 t -= SIG.g;
+    if (t < SIG.y) return { ns: 1, ew: 0, ped: 0 };                 t -= SIG.y;
+    if (t < SIG.ar) return { ns: 0, ew: 0, ped: 0 };                t -= SIG.ar;
+    if (t < SIG.g) return { ns: 0, ew: 2, ped: 0 };                 t -= SIG.g;
+    if (t < SIG.y) return { ns: 0, ew: 1, ped: 0 };                 t -= SIG.y;
+    if (t < SIG.ar) return { ns: 0, ew: 0, ped: 0 };
+    return { ns: 0, ew: 0, ped: 1 };                                // pedestrian scramble
   }
 
   // ──────────────────────────────────────────────────────────
@@ -490,33 +525,36 @@
   scene.add(sky);
 
   // ──────────────────────────────────────────────────────────
-  //  Ground — asphalt streets on a grid, with painted centre lines
+  //  Ground — roads, sidewalks, crosswalks, and a centre scramble
   // ──────────────────────────────────────────────────────────
   const groundMat = new THREE.ShaderMaterial({
     uniforms: {
       uRoad: { value: C.road }, uCurb: { value: C.curb }, uPaint: { value: C.paint },
-      uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY }, uCell: { value: CELL },
+      uZebra: { value: new THREE.Color(0xE8ECEF) },
+      uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
+      uPitch: { value: PITCH }, uRW: { value: RW }, uHalf: { value: HALF },
     },
     vertexShader: `
       varying vec3 vW; varying float vFog;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vW = wp.xyz;
-        vec4 mv = viewMatrix * wp; vFog = -mv.z;
-        gl_Position = projectionMatrix * mv;
-      }`,
+      void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vW = wp.xyz; vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `
-      uniform vec3 uRoad, uCurb, uPaint, uFogCol; uniform float uFogDens, uCell;
+      uniform vec3 uRoad, uCurb, uPaint, uZebra, uFogCol; uniform float uFogDens, uPitch, uRW, uHalf;
       varying vec3 vW; varying float vFog;
       void main() {
-        float sx = abs(fract(vW.x / uCell + 0.5) - 0.5) * uCell;   // dist to nearest N-S street centre
-        float sz = abs(fract(vW.z / uCell + 0.5) - 0.5) * uCell;   // dist to nearest E-W street centre
-        float onRoad = (sx < 9.0 || sz < 9.0) ? 1.0 : 0.0;
-        vec3 col = mix(uCurb, uRoad, onRoad);
-        float cl = 0.0;
-        if (sx < 0.35 && fract(vW.z / 7.0) < 0.5) cl = 1.0;         // dashed lane lines
-        if (sz < 0.35 && fract(vW.x / 7.0) < 0.5) cl = 1.0;
-        col = mix(col, uPaint, cl * onRoad);
+        float dx = abs(vW.x - uPitch * floor(vW.x / uPitch + 0.5));   // dist to nearest N-S road centre
+        float dz = abs(vW.z - uPitch * floor(vW.z / uPitch + 0.5));   // dist to nearest E-W road centre
+        bool roadX = dx < uRW, roadZ = dz < uRW;
+        bool road = roadX || roadZ;
+        bool sidewalk = (dx < uHalf || dz < uHalf) && !road;
+        vec3 col = road ? uRoad : (sidewalk ? uCurb : uCurb * 0.82);
+        // dashed lane centre line
+        if (roadX && dx < 0.32 && fract(vW.z / 6.0) < 0.5) col = uPaint;
+        if (roadZ && dz < 0.32 && fract(vW.x / 6.0) < 0.5) col = uPaint;
+        // crosswalk zebra at every intersection approach
+        if (roadX && dz > uRW && dz < uRW + 3.0 && fract(vW.x / 1.7) < 0.55) col = uZebra;
+        if (roadZ && dx > uRW && dx < uRW + 3.0 && fract(vW.z / 1.7) < 0.55) col = uZebra;
+        // centre scramble: extra diagonal crossing
+        if (abs(vW.x) < uRW + 3.0 && abs(vW.z) < uRW + 3.0 && fract((vW.x + vW.z) / 1.9) < 0.5) col = uZebra;
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
       }`
@@ -528,7 +566,7 @@
   // ---- lighting ----
   const light = new THREE.DirectionalLight(0xfff2dc, 1.05);
   light.position.copy(SUN_DIR).multiplyScalar(100);
-  scene.add(light, new THREE.HemisphereLight(0xC6D2DB, 0x3a3f45, 0.75));
+  scene.add(light, new THREE.HemisphereLight(0xC6D2DB, 0x3a3f45, 0.8));
 
   // ---- buildings: box towers with procedural windows ----
   const B_WALL = [0x9aa1a8, 0xb8ab97, 0x7f8a93, 0x6f7681];
@@ -543,25 +581,17 @@
       },
       vertexShader: `
         varying vec3 vW; varying vec3 vN; varying float vFog;
-        void main() {
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vW = wp.xyz; vN = normalize(mat3(modelMatrix) * normal);
-          vec4 mv = viewMatrix * wp; vFog = -mv.z;
-          gl_Position = projectionMatrix * mv;
-        }`,
+        void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vW = wp.xyz; vN = normalize(mat3(modelMatrix) * normal); vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv; }`,
       fragmentShader: `
         uniform vec3 uWall, uWin, uRoof, uSunDir, uFogCol; uniform float uFogDens;
         varying vec3 vW; varying vec3 vN; varying float vFog;
         void main() {
-          vec3 n = normalize(vN);
-          vec3 col;
+          vec3 n = normalize(vN); vec3 col;
           if (n.y > 0.5) { col = uRoof; }
           else {
-            float hc = abs(n.x) > abs(n.z) ? vW.z : vW.x;   // run windows along the face
-            float wx = fract(hc / 4.2);
-            float wy = fract(vW.y / 3.6);
-            float win = step(0.16, wx) * step(wx, 0.84) * step(0.18, wy) * step(wy, 0.80);
-            win *= step(4.5, vW.y);                          // no windows on the ground floor
+            float hc = abs(n.x) > abs(n.z) ? vW.z : vW.x;
+            float win = step(0.16, fract(hc / 4.2)) * step(fract(hc / 4.2), 0.84) * step(0.18, fract(vW.y / 3.6)) * step(fract(vW.y / 3.6), 0.80);
+            win *= step(4.5, vW.y);
             col = mix(uWall, uWin, win);
           }
           float ndl = max(dot(n, uSunDir), 0.0);
@@ -572,11 +602,182 @@
     }));
   }
   const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);   // base at y=0
-  for (const b of buildings.values()) {
+  for (const b of buildingList) {
     const m = new THREE.Mesh(boxGeo, buildMats[b.mat]);
-    m.scale.set(b.hw * 2, b.h, b.hd * 2);
-    m.position.set(b.cx, 0, b.cz);
-    scene.add(m);
+    m.scale.set(b.hw * 2, b.h, b.hd * 2); m.position.set(b.cx, 0, b.cz); scene.add(m);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  Street furniture (instanced) + traffic signals
+  // ──────────────────────────────────────────────────────────
+  const _d = new THREE.Object3D();
+  const setInst = (inst, k, x, y, z, ry, sx, sy, sz) => {
+    _d.position.set(x, y, z); _d.rotation.set(0, ry || 0, 0); _d.scale.set(sx, sy, sz); _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
+  };
+  const near = (v) => Math.abs(v - PITCH * Math.round(v / PITCH)) < RW + 4;   // near an intersection?
+
+  // trees line the avenues, street lights the cross-streets
+  const treeXY = [], lightXY = [];
+  for (let i = -N; i <= N; i++) { const c = i * PITCH; for (let z = -N * PITCH + 13; z < N * PITCH; z += 24) { if (near(z)) continue; treeXY.push([c - (RW + 2.2), z]); treeXY.push([c + (RW + 2.2), z]); } }
+  for (let j = -N; j <= N; j++) { const c = j * PITCH; for (let x = -N * PITCH + 15; x < N * PITCH; x += 30) { if (near(x)) continue; lightXY.push([x, c - (RW + 2.2)]); lightXY.push([x, c + (RW + 2.2)]); } }
+
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6b5842 });
+  const leafMat  = new THREE.MeshLambertMaterial({ color: 0x4f7a3a });
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.24, 2.4, 6), trunkMat, treeXY.length);
+  const leaves = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1.5, 0), leafMat, treeXY.length);
+  treeXY.forEach(([x, z], k) => { const s = 0.8 + Math.random() * 0.5; setInst(trunks, k, x, 1.2, z, 0, 1, 1, 1); setInst(leaves, k, x, 3.1 + s, z, Math.random() * 3, s, s * 1.2, s); });
+  scene.add(trunks, leaves);
+
+  const poleMat = new THREE.MeshLambertMaterial({ color: 0x3a3f45 });
+  const lampMat = new THREE.MeshLambertMaterial({ color: 0xffe9b0, emissive: 0x554824 });
+  const slPole = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 5.4, 0.16), poleMat, lightXY.length);
+  const slHead = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.3, 1.3), lampMat, lightXY.length);
+  lightXY.forEach(([x, z], k) => { const dir = z > PITCH * Math.round(z / PITCH) ? -1 : 1; setInst(slPole, k, x, 2.7, z, 0, 1, 1, 1); setInst(slHead, k, x, 5.3, z + dir * 0.7, 0, 1, 1, 1); });
+  scene.add(slPole, slHead);
+
+  // traffic-light poles at central intersections; lenses recolour with the phase
+  const sigXY = [];
+  for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) sigXY.push([i * PITCH, j * PITCH]);
+  const sigPole = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 5.6, 0.2), poleMat, sigXY.length);
+  const lensGeo = new THREE.SphereGeometry(0.45, 8, 8);
+  const sigNS = new THREE.InstancedMesh(lensGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), sigXY.length);
+  const sigEW = new THREE.InstancedMesh(lensGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), sigXY.length);
+  sigXY.forEach(([x, z], k) => {
+    setInst(sigPole, k, x + RW + 1.2, 2.8, z + RW + 1.2, 0, 1, 1, 1);
+    setInst(sigNS, k, x + RW + 1.2, 5.4, z + RW + 1.2, 0, 1, 1, 1);
+    setInst(sigEW, k, x + RW + 1.9, 5.0, z + RW + 1.2, 0, 1, 1, 1);
+  });
+  scene.add(sigPole, sigNS, sigEW);
+  const SIGCOL = [new THREE.Color(0xff2e2e), new THREE.Color(0xffc400), new THREE.Color(0x1fdd4a)]; // red, yellow, green
+  let lastNS = -1, lastEW = -1;
+  function updateSignalLenses(ph) {
+    if (ph.ns !== lastNS) { for (let k = 0; k < sigXY.length; k++) sigNS.setColorAt(k, SIGCOL[ph.ns]); sigNS.instanceColor.needsUpdate = true; lastNS = ph.ns; }
+    if (ph.ew !== lastEW) { for (let k = 0; k < sigXY.length; k++) sigEW.setColorAt(k, SIGCOL[ph.ew]); sigEW.instanceColor.needsUpdate = true; lastEW = ph.ew; }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  Traffic — cars, a drifting sports car, and pedestrians
+  //  moving along the road / sidewalk graph, obeying the signals.
+  // ──────────────────────────────────────────────────────────
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  function randEdge() {
+    let i, j, d;
+    do { i = (Math.random() * (2 * N + 1) | 0) - N; j = (Math.random() * (2 * N + 1) | 0) - N; d = DIRS[Math.random() * 4 | 0]; } while (Math.abs(i + d[0]) > N || Math.abs(j + d[1]) > N);
+    return { i, j, di: d[0], dj: d[1], s: Math.random() };
+  }
+  function advanceNode(a) {
+    a.i += a.di; a.j += a.dj; a.s -= 1; if (a.s < 0) a.s = 0;
+    const opts = [];
+    for (const [ndi, ndj] of DIRS) { if (ndi === -a.di && ndj === -a.dj) continue; if (Math.abs(a.i + ndi) > N || Math.abs(a.j + ndj) > N) continue; opts.push([ndi, ndj]); }
+    if (!opts.length) { a.di = -a.di; a.dj = -a.dj; return false; }
+    const straight = opts.find((o) => o[0] === a.di && o[1] === a.dj);
+    const ch = (straight && Math.random() < (a.ped ? 0.55 : 0.68)) ? straight : opts[Math.random() * opts.length | 0];
+    const turned = ch[0] !== a.di || ch[1] !== a.dj;
+    a.turnSign = Math.sign(a.di * ch[1] - a.dj * ch[0]) || 1;
+    a.di = ch[0]; a.dj = ch[1];
+    return turned;
+  }
+
+  // cars (instanced body + cabin, per-instance colour)
+  const carColors = [0xdedee2, 0x2a2d33, 0x8a929c, 0x2f4d78, 0x7a2b2b, 0xb8a84a, 0x36584a];
+  const NUMCARS = 18;
+  const cars = [];
+  for (let k = 0; k < NUMCARS; k++) { const e = randEdge(); e.speed = 6; e.cruise = 7 + Math.random() * 3; e.turnSign = 1; e.drift = 0; cars.push(e); }
+  const carBody = new THREE.InstancedMesh(new THREE.BoxGeometry(2.0, 1.0, 4.4), new THREE.MeshLambertMaterial({}), NUMCARS);
+  const carCabin = new THREE.InstancedMesh(new THREE.BoxGeometry(1.7, 0.85, 2.2), new THREE.MeshLambertMaterial({ color: 0x20242a }), NUMCARS);
+  cars.forEach((c, k) => carBody.setColorAt(k, new THREE.Color(carColors[k % carColors.length])));
+  scene.add(carBody, carCabin);
+
+  // the sports car — faster, red, drifts through corners
+  const sports = randEdge(); sports.speed = 8; sports.cruise = 15; sports.turnSign = 1; sports.drift = 0; sports.sports = true;
+  const sportsMesh = new THREE.Group();
+  const scBody = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.6, 4.6), new THREE.MeshStandardMaterial({ color: 0xd8261c, roughness: 0.35, metalness: 0.5 }));
+  scBody.position.y = 0.5; sportsMesh.add(scBody);
+  const scCab = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 1.9), new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.2 }));
+  scCab.position.set(0, 0.95, -0.2); sportsMesh.add(scCab);
+  const scWing = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), new THREE.MeshStandardMaterial({ color: 0x14161a }));
+  scWing.position.set(0, 0.95, -2.1); sportsMesh.add(scWing);
+  scene.add(sportsMesh);
+
+  // skid-mark pool for the drift
+  const skidMat = new THREE.MeshBasicMaterial({ color: 0x101216, transparent: true, opacity: 0, depthWrite: false });
+  const skids = [];
+  for (let i = 0; i < 44; i++) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 2.2), skidMat.clone()); m.rotation.x = -Math.PI / 2; m.visible = false; m.userData.life = 0; scene.add(m); skids.push(m); }
+  let skidI = 0;
+  function spawnSkid(x, z, heading) { const m = skids[skidI = (skidI + 1) % skids.length]; m.position.set(x, 0.03, z); m.rotation.z = heading; m.material.opacity = 0.45; m.visible = true; m.userData.life = 4; }
+
+  // pedestrians (instanced body + head), some walking, some running
+  const pedColors = [0x33507a, 0x7a3340, 0x2f6b4a, 0x8a7a30, 0x555a63, 0x86502f];
+  const NUMPED = 40;
+  const peds = [];
+  for (let k = 0; k < NUMPED; k++) { const e = randEdge(); e.ped = true; e.side = Math.random() < 0.5 ? 1 : -1; e.running = Math.random() < 0.32; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; peds.push(e); }
+  const pedBody = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.28, 1.25, 6), new THREE.MeshLambertMaterial({}), NUMPED);
+  const pedHead = new THREE.InstancedMesh(new THREE.SphereGeometry(0.2, 8, 6), new THREE.MeshLambertMaterial({ color: 0xcaa98c }), NUMPED);
+  peds.forEach((p2, k) => pedBody.setColorAt(k, new THREE.Color(pedColors[k % pedColors.length])));
+  scene.add(pedBody, pedHead);
+
+  function updateCar(car, dt, ph, k) {
+    const go = (car.di !== 0 ? ph.ew : ph.ns) === 2;
+    let ahead = Infinity;
+    for (const o of cars) { if (o !== car && o.i === car.i && o.j === car.j && o.di === car.di && o.dj === car.dj && o.s > car.s) ahead = Math.min(ahead, (o.s - car.s) * PITCH); }
+    if (sports.i === car.i && sports.j === car.j && sports.di === car.di && sports.dj === car.dj && sports.s > car.s) ahead = Math.min(ahead, (sports.s - car.s) * PITCH);
+    let target = car.cruise;
+    const distToNode = (1 - car.s) * PITCH, stopS = 1 - (RW + 3) / PITCH;
+    if (!go && distToNode < RW + 6) target = 0;
+    if (ahead < 8) target = Math.min(target, Math.max(0, (ahead - 4.5) * 1.5));
+    car.speed += (target - car.speed) * Math.min(1, dt * 2.5);
+    car.s += car.speed * dt / PITCH;
+    if (!go) car.s = Math.min(car.s, stopS);
+    if (car.s >= 1) advanceNode(car);
+    const bx = (car.i + car.s * car.di) * PITCH + car.dj * LANE, bz = (car.j + car.s * car.dj) * PITCH - car.di * LANE;
+    const heading = Math.atan2(car.di, car.dj);
+    setInst(carBody, k, bx, 0.6, bz, heading, 1, 1, 1);
+    setInst(carCabin, k, bx, 1.28, bz - 0.2 * car.dj, heading, 1, 1, 1);
+  }
+  function updateSports(dt, ph) {
+    const a = sports;
+    const go = (a.di !== 0 ? ph.ew : ph.ns) === 2;
+    let target = a.cruise;
+    const distToNode = (1 - a.s) * PITCH, stopS = 1 - (RW + 3) / PITCH;
+    if (!go && distToNode < RW + 7) target = 0;
+    a.speed += (target - a.speed) * Math.min(1, dt * 2.2);
+    a.s += a.speed * dt / PITCH;
+    if (!go) a.s = Math.min(a.s, stopS);
+    if (a.s >= 1) { if (advanceNode(a)) a.drift = 0.85; }
+    const bx = (a.i + a.s * a.di) * PITCH + a.dj * LANE, bz = (a.j + a.s * a.dj) * PITCH - a.di * LANE;
+    const heading = Math.atan2(a.di, a.dj);
+    let slip = 0;
+    if (a.drift > 0) { slip = Math.sin((a.drift / 0.85) * Math.PI) * 0.7 * a.turnSign; a.drift = Math.max(0, a.drift - dt); if (a.speed > 5) spawnSkid(bx, bz, heading); }
+    sportsMesh.position.set(bx, 0, bz);
+    sportsMesh.rotation.y = heading + slip;
+  }
+  function updatePed(ped, dt, ph, k) {
+    const canCross = ph.ped === 1 || (ped.di !== 0 ? ph.ns !== 2 : ph.ew !== 2);
+    let target = ped.speed;
+    const distToNode = (1 - ped.s) * PITCH, stopS = 1 - (RW + 2.5) / PITCH;
+    if (!canCross && distToNode < RW + 3) target = 0;
+    ped.pspeed += (target - ped.pspeed) * Math.min(1, dt * 4);
+    ped.s += ped.pspeed * dt / PITCH;
+    if (!canCross) ped.s = Math.min(ped.s, stopS);
+    if (ped.s >= 1) advanceNode(ped);
+    const off = ped.side * (RW + SWW * 0.55);
+    const bx = (ped.i + ped.s * ped.di) * PITCH + ped.dj * off, bz = (ped.j + ped.s * ped.dj) * PITCH - ped.di * off;
+    const heading = Math.atan2(ped.di, ped.dj);
+    ped.phase += dt * (ped.running ? 11 : 7) * (ped.pspeed > 0.3 ? 1 : 0);
+    const bob = Math.abs(Math.sin(ped.phase)) * (ped.running ? 0.13 : 0.06);
+    setInst(pedBody, k, bx, 0.82 + bob, bz, heading, 1, 1, 1);
+    setInst(pedHead, k, bx, 1.5 + bob, bz, heading, 1, 1, 1);
+  }
+  function updateCity(dt) {
+    cityT += dt;
+    const ph = signalPhase(cityT);
+    updateSignalLenses(ph);
+    for (let k = 0; k < cars.length; k++) updateCar(cars[k], dt, ph, k);
+    updateSports(dt, ph);
+    for (let k = 0; k < peds.length; k++) updatePed(peds[k], dt, ph, k);
+    for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
+    carBody.instanceMatrix.needsUpdate = true; carCabin.instanceMatrix.needsUpdate = true;
+    pedBody.instanceMatrix.needsUpdate = true; pedHead.instanceMatrix.needsUpdate = true;
   }
 
   // ---- monkey avatar (rigged; shown in third-person view) ----
@@ -1494,16 +1695,18 @@
 
     // --- building collision: AABB push-out (2 passes) against nearby blocks ---
     for (let pass = 0; pass < 2; pass++) {
-      const ci = Math.round(p.x / CELL), cj = Math.round(p.z / CELL);
+      const bi = Math.round(p.x / PITCH), bj = Math.round(p.z / PITCH);
       for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
-        const b = buildings.get((ci + oi) + ',' + (cj + oj));
-        if (!b) continue;
-        const minx = b.cx - b.hw - PRAD, maxx = b.cx + b.hw + PRAD;
-        const minz = b.cz - b.hd - PRAD, maxz = b.cz + b.hd + PRAD;
-        if (p.x > minx && p.x < maxx && p.z > minz && p.z < maxz) {
-          const dxL = p.x - minx, dxR = maxx - p.x, dzL = p.z - minz, dzR = maxz - p.z;
-          if (Math.min(dxL, dxR) < Math.min(dzL, dzR)) p.x = dxL < dxR ? minx : maxx;
-          else p.z = dzL < dzR ? minz : maxz;
+        const arr = bBucket.get((bi + oi) + ',' + (bj + oj));
+        if (!arr) continue;
+        for (const b of arr) {
+          const minx = b.cx - b.hw - PRAD, maxx = b.cx + b.hw + PRAD;
+          const minz = b.cz - b.hd - PRAD, maxz = b.cz + b.hd + PRAD;
+          if (p.x > minx && p.x < maxx && p.z > minz && p.z < maxz) {
+            const dxL = p.x - minx, dxR = maxx - p.x, dzL = p.z - minz, dzR = maxz - p.z;
+            if (Math.min(dxL, dxR) < Math.min(dzL, dzR)) p.x = dxL < dxR ? minx : maxx;
+            else p.z = dzL < dzR ? minz : maxz;
+          }
         }
       }
     }
@@ -1582,7 +1785,8 @@
       camShake = Math.max(0, camShake - dt * 1.4);
     }
 
-    // --- combat + multiplayer: advance others, broadcast self ---
+    // --- city traffic + combat + multiplayer ---
+    updateCity(dt);
     updateCombat(dt);
     updatePeers(dt, now);
     publishState(false);
