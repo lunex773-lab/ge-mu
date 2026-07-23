@@ -999,8 +999,8 @@
   fpGun.rotation.y = Math.PI;                 // barrel points along camera -Z (forward)
   const FPGUN_Z = -0.55;
   fpGun.position.set(0.22, -0.24, FPGUN_Z);
-  const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xFFE08A, transparent: true, opacity: 0.95, depthTest: false, fog: false, blending: THREE.AdditiveBlending }));
-  muzzle.scale.set(0.5, 0.5, 1); muzzle.position.copy(fpGun.userData.tip.position); muzzle.visible = false; fpGun.add(muzzle);
+  const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xFFD98A, transparent: true, opacity: 0.5, depthTest: false, fog: false, blending: THREE.AdditiveBlending }));
+  muzzle.scale.set(0.16, 0.16, 1); muzzle.position.copy(fpGun.userData.tip.position); muzzle.visible = false; fpGun.add(muzzle);
   camera.add(fpGun);
   scene.add(camera);                          // so the camera's child gun renders
 
@@ -1019,9 +1019,9 @@
     const m = tracers[tracerI = (tracerI + 1) % tracers.length];
     _ta.subVectors(b, a); const len = _ta.length() || 0.001;
     m.position.copy(a).addScaledVector(_ta, 0.5);
-    m.scale.set(1, len, 1);
+    m.scale.set(0.55, len, 0.55);
     m.quaternion.setFromUnitVectors(_up, _ta.normalize());
-    m.material.opacity = 0.9; m.userData.life = 0.09; m.visible = true;
+    m.material.opacity = 0.5; m.userData.life = 0.07; m.visible = true;
   }
 
   const _rd = new THREE.Vector3(), _ro = new THREE.Vector3(), _mz = new THREE.Vector3();
@@ -1060,14 +1060,14 @@
     // nearest targetable peer in front of that
     let hitId = null, hitDist = Infinity;
     for (const [id, peer] of MP.peers) {
-      if (peer.dead || peer.inv) continue;            // cloaked / downed can't be hit
+      if (peer.dead) continue;                        // cloaked players are hidden but still hittable
       _cc.copy(peer.cur); _cc.y += 1.15;
       const t = raySphere(_ro, _rd, _cc, 0.95);
       if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; }
     }
     _end.copy(_ro).addScaledVector(_rd, hitId ? hitDist : blockDist);
     spawnTracer(_mz, _end);
-    muzzle.visible = true; muzzle.scale.setScalar(0.5 + Math.random() * 0.5); muzzleTimer = 0.05; recoil = 0.05;
+    muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
   }
 
@@ -1079,7 +1079,7 @@
     applyDamage(msg.d || 0);
   }
   function applyDamage(d) {
-    if (dead || cloak > 0) return;                    // cloak keeps you safe
+    if (dead) return;                                 // cloak hides you, but does NOT block damage
     hp = Math.max(0, hp - d);
     showHurt(); updateHpUI();
     if (hp <= 0) onDeath();
@@ -1149,7 +1149,7 @@
     for (const m of tracers) {
       if (m.userData.life > 0) {
         m.userData.life -= dt;
-        m.material.opacity = Math.max(0, m.userData.life / 0.09) * 0.9;
+        m.material.opacity = Math.max(0, m.userData.life / 0.07) * 0.5;
         if (m.userData.life <= 0) m.visible = false;
       }
     }
