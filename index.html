@@ -722,23 +722,48 @@
     return turned;
   }
 
-  // ---- cars: instanced so we can flood the map (body + cabin + dark base) ----
+  // ---- cars: instanced, but detailed — body + glass cabin + 4 wheels + head/tail
+  //  lights, and varied silhouettes (sedan / kei / van / taxi) via per-instance scale ----
   const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.3, 8); wheelGeo.rotateZ(Math.PI / 2);
   const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111318 });
-  const carBodyGeo = new THREE.BoxGeometry(1.9, 0.72, 4.4); carBodyGeo.translate(0, 0.72, 0);
-  const carCabGeo = new THREE.BoxGeometry(1.55, 0.62, 2.0); carCabGeo.translate(0, 1.36, -0.25);
-  const carBaseGeo = new THREE.BoxGeometry(2.02, 0.36, 4.2); carBaseGeo.translate(0, 0.18, 0);
+  const carUnit = new THREE.BoxGeometry(1, 1, 1);
+  const carGlassMat = new THREE.MeshLambertMaterial({ color: 0x9fbdcf });
+  const carHeadMat = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
+  const carTailMat = new THREE.MeshBasicMaterial({ color: 0xd83030 });
+  const carSignGeo = new THREE.BoxGeometry(0.5, 0.2, 0.34);
+  const carSignMat = new THREE.MeshLambertMaterial({ color: 0xf0d000, emissive: 0x4a3c00 });
   const carPaint = [0xdedee2, 0x2a2d33, 0x8a929c, 0x2f4d78, 0x7a2b2b, 0xb8a84a, 0x36584a, 0xe0e2e6, 0x243a2c, 0x8a5a2a];
-  const NUMCARS = 140;
-  const carBodyI = new THREE.InstancedMesh(carBodyGeo, new THREE.MeshLambertMaterial({}), NUMCARS);
-  const carCabI = new THREE.InstancedMesh(carCabGeo, new THREE.MeshLambertMaterial({ color: 0x2a2f36 }), NUMCARS);
-  const carBaseI = new THREE.InstancedMesh(carBaseGeo, new THREE.MeshLambertMaterial({ color: 0x14161a }), NUMCARS);
-  const cars = [];
-  for (let k = 0; k < NUMCARS; k++) {
-    const e = randEdge(); e.speed = 6; e.cruise = 7 + Math.random() * 3; e.turnSign = 1; e.drift = 0; e.halfW = 0.98; e.halfL = 2.2;
-    cars.push(e); carBodyI.setColorAt(k, new THREE.Color(carPaint[Math.random() * carPaint.length | 0]));
+  const carTypes = ['sedan', 'sedan', 'sedan', 'kei', 'van', 'taxi'];
+  const NUMCARS = 140, CWY = 0.34;
+  const carBodyI = new THREE.InstancedMesh(carUnit, new THREE.MeshLambertMaterial({}), NUMCARS);
+  const carCabI = new THREE.InstancedMesh(carUnit, carGlassMat, NUMCARS);
+  const carWheelI = new THREE.InstancedMesh(wheelGeo, wheelMat, NUMCARS * 4);
+  const carHeadI = new THREE.InstancedMesh(carUnit, carHeadMat, NUMCARS);
+  const carTailI = new THREE.InstancedMesh(carUnit, carTailMat, NUMCARS);
+  const carSignI = new THREE.InstancedMesh(carSignGeo, carSignMat, NUMCARS);
+  [carBodyI, carCabI, carWheelI, carHeadI, carTailI, carSignI].forEach((m) => { m.frustumCulled = false; });
+  // place a part instance at a car-local offset (lx right, ly up, lz forward) ----
+  function setPart(inst, k, bx, bz, di, dj, ry, lx, ly, lz, sx, sy, sz) {
+    _d.position.set(bx + lx * dj + lz * di, ly, bz - lx * di + lz * dj);
+    _d.rotation.set(0, ry, 0); _d.scale.set(sx, sy, sz); _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
   }
-  scene.add(carBodyI, carCabI, carBaseI);
+  const cars = [];
+  { const hide = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+    for (let k = 0; k < NUMCARS; k++) carSignI.setMatrixAt(k, hide); }   // only taxis re-place their roof sign
+  for (let k = 0; k < NUMCARS; k++) {
+    const e = randEdge(); e.speed = 6; e.cruise = 7 + Math.random() * 3; e.turnSign = 1; e.drift = 0;
+    const type = carTypes[Math.random() * carTypes.length | 0];
+    let W = 1.9, H = 0.75, L = 4.4, cabH = 0.72, cabL = 2.0, cabZ = -0.15, taxi = false;
+    if (type === 'kei') { W = 1.7; H = 1.15; L = 3.3; cabH = 0.55; cabL = 1.5; cabZ = 0; }
+    else if (type === 'van') { W = 2.0; H = 1.5; L = 4.9; cabH = 0; cabL = 0; }
+    else if (type === 'taxi') { taxi = true; }
+    e.W = W; e.H = H; e.L = L; e.cabH = cabH; e.cabL = cabL; e.cabZ = cabZ; e.taxi = taxi;
+    e.halfW = W / 2; e.halfL = L / 2;
+    cars.push(e);
+    carBodyI.setColorAt(k, new THREE.Color(taxi ? 0x1a1d22 : carPaint[Math.random() * carPaint.length | 0]));
+  }
+  carBodyI.instanceColor.needsUpdate = true;
+  scene.add(carBodyI, carCabI, carWheelI, carHeadI, carTailI, carSignI);
 
   // ---- Ferraris: rare, detailed, ~3× the speed of normal cars, drift corners ----
   function makeFerrari() {
@@ -753,8 +778,13 @@
   }
   const AVGCRUISE = 8.5;
   const ferraris = [];
-  for (let k = 0; k < 3; k++) {
+  for (let k = 0; k < 6; k++) {
     const e = randEdge(); e.speed = 12; e.cruise = AVGCRUISE * 3; e.turnSign = 1; e.drift = 0;   // 3× normal
+    // seed their start nodes across every quarter of the grid so they roam the whole city
+    e.i = Math.max(-(N - 1), Math.min(N - 1, ((k % 3) - 1) * (N - 1)));
+    e.j = Math.max(-(N - 1), Math.min(N - 1, (k < 3 ? -1 : 1) * (N - 2)));
+    if (Math.abs(e.i + e.di) > N) e.di = -e.di;
+    if (Math.abs(e.j + e.dj) > N) e.dj = -e.dj;
     e.mesh = makeFerrari(); scene.add(e.mesh); ferraris.push(e);
   }
 
@@ -765,22 +795,39 @@
   let skidI = 0;
   function spawnSkid(x, z, heading) { const m = skids[skidI = (skidI + 1) % skids.length]; m.position.set(x, 0.03, z); m.rotation.z = heading; m.material.opacity = 0.45; m.visible = true; m.userData.life = 4; }
 
-  // ---- pedestrians: instanced articulated humans (limbs swing via per-limb
-  //  instance matrices) plus a few real monkey rigs like us ----
-  const setLimb = (inst, k, x, y, z, swing, heading) => {
-    _d.position.set(x, y, z); _d.rotation.set(swing, heading, 0, 'YXZ'); _d.scale.set(1, 1, 1); _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
-  };
-  const NUMHUMAN = 215, NUMMONKEY = 5;
+  // ---- pedestrians: instanced *2-segment* articulated humans (thigh + shin and
+  //  upper-arm + forearm that bend at the knee/elbow, plus feet and hair) — the
+  //  earlier detailed look, but drawn with instancing so the crowd stays cheap ----
+  const NUMHUMAN = 215, NUMMONKEY = 12;
   const SKINc = [0xE7B98F, 0xC98A5A, 0x8D5A3B], SHIRTc = [0x3a6ea5, 0xb04a4a, 0x3a8a5a, 0xcaa63a, 0x9a9aa2, 0xd8d8dc, 0x6a4a8a, 0x2f4d5a];
   const PANTSc = [0x2a2f3a, 0x4a4034, 0x33384a, 0x22252b, 0x555a63];
-  const geoT = new THREE.BoxGeometry(0.4, 0.42, 0.22); geoT.translate(0, 1.27, 0);
-  const geoHi = new THREE.BoxGeometry(0.38, 0.3, 0.22); geoHi.translate(0, 0.9, 0);
-  const geoHd = new THREE.SphereGeometry(0.145, 10, 8); geoHd.translate(0, 1.63, 0);
-  const geoLeg = new THREE.BoxGeometry(0.14, 0.86, 0.14); geoLeg.translate(0, -0.43, 0);
-  const geoArm = new THREE.BoxGeometry(0.1, 0.58, 0.1); geoArm.translate(0, -0.29, 0);
-  const im = (g) => new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({}), NUMHUMAN);
-  const torsoI = im(geoT), hipI = im(geoHi), headI = im(geoHd), legLI = im(geoLeg), legRI = im(geoLeg), armLI = im(geoArm), armRI = im(geoArm);
-  scene.add(torsoI, hipI, headI, legLI, legRI, armLI, armRI);
+  const HAIRc = [0x1a1712, 0x2a2018, 0x4a3a2a, 0x101014];
+  const geoT = new THREE.BoxGeometry(0.4, 0.52, 0.22); geoT.translate(0, 1.22, 0);            // chest
+  const geoHi = new THREE.BoxGeometry(0.38, 0.26, 0.22); geoHi.translate(0, 0.94, 0);          // hips
+  const geoHd = new THREE.SphereGeometry(0.135, 10, 8); geoHd.translate(0, 1.62, 0);           // head
+  const geoHair = new THREE.SphereGeometry(0.14, 10, 8, 0, 6.3, 0, 1.9); geoHair.translate(0, 1.645, 0);
+  const geoLegU = new THREE.BoxGeometry(0.14, 0.44, 0.14); geoLegU.translate(0, -0.22, 0);     // thigh
+  const geoLegL = new THREE.BoxGeometry(0.12, 0.42, 0.12); geoLegL.translate(0, -0.21, 0);     // shin
+  const geoArmU = new THREE.BoxGeometry(0.10, 0.30, 0.10); geoArmU.translate(0, -0.15, 0);     // upper arm
+  const geoArmL = new THREE.BoxGeometry(0.09, 0.28, 0.09); geoArmL.translate(0, -0.14, 0);     // forearm
+  const geoFoot = new THREE.BoxGeometry(0.16, 0.10, 0.30); geoFoot.translate(0, -0.05, 0.06);  // shoe
+  const im = (g) => { const m = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({}), NUMHUMAN); m.frustumCulled = false; return m; };
+  const shoeMatH = new THREE.MeshLambertMaterial({ color: 0x1a1a1e });
+  const imShoe = (g) => { const m = new THREE.InstancedMesh(g, shoeMatH, NUMHUMAN); m.frustumCulled = false; return m; };
+  const torsoI = im(geoT), hipI = im(geoHi), headI = im(geoHd), hairI = im(geoHair);
+  const legLuI = im(geoLegU), legRuI = im(geoLegU), legLlI = im(geoLegL), legRlI = im(geoLegL);
+  const armLuI = im(geoArmU), armRuI = im(geoArmU), armLlI = im(geoArmL), armRlI = im(geoArmL);
+  const footLI = imShoe(geoFoot), footRI = imShoe(geoFoot);
+  const humanI = [torsoI, hipI, headI, hairI, legLuI, legRuI, legLlI, legRlI, armLuI, armRuI, armLlI, armRlI, footLI, footRI];
+  scene.add(...humanI);
+
+  // one reusable skeleton solves each walker's knee/elbow joints via matrixWorld ----
+  const _mk = (par, x, y, z) => { const o = new THREE.Object3D(); o.position.set(x, y, z); par.add(o); return o; };
+  const _sk = new THREE.Object3D();
+  const _legLu = _mk(_sk, -0.1, 0.9, 0), _legLl = _mk(_legLu, 0, -0.44, 0), _footLn = _mk(_legLl, 0, -0.42, 0);
+  const _legRu = _mk(_sk, 0.1, 0.9, 0), _legRl = _mk(_legRu, 0, -0.44, 0), _footRn = _mk(_legRl, 0, -0.42, 0);
+  const _armLu = _mk(_sk, -0.25, 1.44, 0), _armLl = _mk(_armLu, 0, -0.30, 0);
+  const _armRu = _mk(_sk, 0.25, 1.44, 0), _armRl = _mk(_armRu, 0, -0.30, 0);
 
   const peds = [];
   for (let k = 0; k < NUMHUMAN; k++) {
@@ -788,11 +835,13 @@
     e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; e.hidx = k;
     const shirt = new THREE.Color(SHIRTc[Math.random() * SHIRTc.length | 0]);
     const pants = new THREE.Color(PANTSc[Math.random() * PANTSc.length | 0]);
-    torsoI.setColorAt(k, shirt); armLI.setColorAt(k, shirt); armRI.setColorAt(k, shirt);
-    hipI.setColorAt(k, pants); legLI.setColorAt(k, pants); legRI.setColorAt(k, pants);
+    torsoI.setColorAt(k, shirt); armLuI.setColorAt(k, shirt); armRuI.setColorAt(k, shirt); armLlI.setColorAt(k, shirt); armRlI.setColorAt(k, shirt);
+    hipI.setColorAt(k, pants); legLuI.setColorAt(k, pants); legRuI.setColorAt(k, pants); legLlI.setColorAt(k, pants); legRlI.setColorAt(k, pants);
     headI.setColorAt(k, new THREE.Color(SKINc[Math.random() * SKINc.length | 0]));
+    hairI.setColorAt(k, new THREE.Color(HAIRc[Math.random() * HAIRc.length | 0]));
     peds.push(e);
   }
+  for (const m of humanI) if (m.instanceColor) m.instanceColor.needsUpdate = true;
   // a few monkeys among the crowd (rigged, can turn hostile if you shoot them)
   const monkeyPeds = [];
   for (let k = 0; k < NUMMONKEY; k++) {
@@ -866,10 +915,19 @@
     for (const o of cars) { if (o !== car && o.i === car.i && o.j === car.j && o.di === car.di && o.dj === car.dj && o.s > car.s) ahead = Math.min(ahead, (o.s - car.s) * PITCH); }
     driveAgent(car, dt, ahead, 6);
     const bx = (car.i + car.s * car.di) * PITCH + car.dj * LANE, bz = (car.j + car.s * car.dj) * PITCH - car.di * LANE;
-    const heading = Math.atan2(car.di, car.dj);
-    setInst(carBodyI, k, bx, 0, bz, heading, 1, 1, 1);
-    setInst(carCabI, k, bx, 0, bz, heading, 1, 1, 1);
-    setInst(carBaseI, k, bx, 0, bz, heading, 1, 1, 1);
+    const di = car.di, dj = car.dj, heading = Math.atan2(di, dj);
+    const W = car.W, H = car.H, L = car.L;
+    _d.position.set(bx, CWY + H / 2, bz); _d.rotation.set(0, heading, 0); _d.scale.set(W, H, L); _d.updateMatrix(); carBodyI.setMatrixAt(k, _d.matrix);
+    if (car.cabL > 0) setPart(carCabI, k, bx, bz, di, dj, heading, 0, CWY + H + car.cabH / 2 - 0.04, car.cabZ, W * 0.86, car.cabH, car.cabL);
+    else setPart(carCabI, k, bx, bz, di, dj, heading, 0, -50, 0, 0.0001, 0.0001, 0.0001);   // vans have no greenhouse
+    const wxo = W / 2 - 0.02, wzo = L / 2 - 0.95;
+    setPart(carWheelI, k * 4 + 0, bx, bz, di, dj, heading, -wxo, CWY, wzo, 1, 1, 1);
+    setPart(carWheelI, k * 4 + 1, bx, bz, di, dj, heading, wxo, CWY, wzo, 1, 1, 1);
+    setPart(carWheelI, k * 4 + 2, bx, bz, di, dj, heading, -wxo, CWY, -wzo, 1, 1, 1);
+    setPart(carWheelI, k * 4 + 3, bx, bz, di, dj, heading, wxo, CWY, -wzo, 1, 1, 1);
+    setPart(carHeadI, k, bx, bz, di, dj, heading, 0, CWY + 0.32, L / 2, W * 0.72, 0.14, 0.08);
+    setPart(carTailI, k, bx, bz, di, dj, heading, 0, CWY + 0.30, -L / 2, W * 0.72, 0.12, 0.08);
+    if (car.taxi) setPart(carSignI, k, bx, bz, di, dj, heading, 0, CWY + H + car.cabH + 0.12, car.cabZ, 1, 1, 1);
     runOver(bx, bz, heading, car.halfW, car.halfL, car.speed, 32);
   }
   function updateFerraris(dt) {
@@ -905,16 +963,23 @@
     }
     const { bx, bz, heading, walk } = pedGraphStep(ped, dt);
     ped.phase += dt * (ped.running ? 12 : 7.5) * (walk > 0.05 ? 1 : 0);
-    const sw = Math.sin(ped.phase), bob = Math.abs(sw) * 0.03 * walk;
-    const co = Math.cos(heading), si = Math.sin(heading), k = ped.hidx;
+    const sw = Math.sin(ped.phase), swc = Math.cos(ped.phase), amp = ped.running ? 1.35 : 1;
+    const bob = Math.abs(sw) * 0.03 * walk, k = ped.hidx;
     setInst(torsoI, k, bx, bob, bz, heading, 1, 1, 1);
     setInst(hipI, k, bx, bob, bz, heading, 1, 1, 1);
     setInst(headI, k, bx, bob, bz, heading, 1, 1, 1);
-    const la = 0.72 * walk * (ped.running ? 1.3 : 1), aa = 0.5 * walk * (ped.running ? 1.3 : 1);
-    setLimb(legLI, k, bx - 0.1 * co, bob + 0.9, bz + 0.1 * si, sw * la, heading);
-    setLimb(legRI, k, bx + 0.1 * co, bob + 0.9, bz - 0.1 * si, -sw * la, heading);
-    setLimb(armLI, k, bx - 0.25 * co, bob + 1.44, bz + 0.25 * si, -sw * aa, heading);
-    setLimb(armRI, k, bx + 0.25 * co, bob + 1.44, bz - 0.25 * si, sw * aa, heading);
+    setInst(hairI, k, bx, bob, bz, heading, 1, 1, 1);
+    const la = 0.72 * walk * amp, aa = 0.5 * walk * amp;
+    _sk.position.set(bx, bob, bz); _sk.rotation.set(0, heading, 0);
+    _legLu.rotation.x = sw * la; _legLl.rotation.x = Math.max(0, -swc) * 0.85 * walk;
+    _legRu.rotation.x = -sw * la; _legRl.rotation.x = Math.max(0, swc) * 0.85 * walk;
+    _armLu.rotation.x = -sw * aa; _armLl.rotation.x = 0.28;
+    _armRu.rotation.x = sw * aa; _armRl.rotation.x = 0.28;
+    _sk.updateMatrixWorld(true);
+    legLuI.setMatrixAt(k, _legLu.matrixWorld); legLlI.setMatrixAt(k, _legLl.matrixWorld); footLI.setMatrixAt(k, _footLn.matrixWorld);
+    legRuI.setMatrixAt(k, _legRu.matrixWorld); legRlI.setMatrixAt(k, _legRl.matrixWorld); footRI.setMatrixAt(k, _footRn.matrixWorld);
+    armLuI.setMatrixAt(k, _armLu.matrixWorld); armLlI.setMatrixAt(k, _armLl.matrixWorld);
+    armRuI.setMatrixAt(k, _armRu.matrixWorld); armRlI.setMatrixAt(k, _armRl.matrixWorld);
   }
   function updateCity(dt) {
     cityT += dt;
@@ -923,9 +988,9 @@
     for (let k = 0; k < cars.length; k++) updateCar(cars[k], dt, k);
     updateFerraris(dt);
     for (let k = 0; k < peds.length; k++) updatePed(peds[k], dt);
-    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carBaseI.instanceMatrix.needsUpdate = true;
-    torsoI.instanceMatrix.needsUpdate = hipI.instanceMatrix.needsUpdate = headI.instanceMatrix.needsUpdate = true;
-    legLI.instanceMatrix.needsUpdate = legRI.instanceMatrix.needsUpdate = armLI.instanceMatrix.needsUpdate = armRI.instanceMatrix.needsUpdate = true;
+    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carWheelI.instanceMatrix.needsUpdate = true;
+    carHeadI.instanceMatrix.needsUpdate = carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
+    for (const m of humanI) m.instanceMatrix.needsUpdate = true;
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
     for (const nf of neonFlicker) nf.mesh.material.opacity = 0.72 + 0.28 * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
   }
@@ -1391,6 +1456,86 @@
     playShot(vol, pan);
   }
 
+  // ── background music: mellow (ほのぼの) normally, intense death-rock when a
+  //  rival player comes within ~45 m; the two layers crossfade. Everything is
+  //  synthesised (no asset files), routed under the SFX master gain. ──────────
+  let inGame = false;
+  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null;
+  let musicStep = 0, musicNext = 0, musicIntensity = 0;
+  const MSTEP = 0.15;                                   // seconds per 8th-note step
+  function makeDistCurve(k) {
+    const n = 256, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = (3 + k) * x * 0.7 / (Math.PI + k * Math.abs(x)); }
+    return c;
+  }
+  function ensureMusic() {
+    if (musicInit || !actx) return;
+    musicGain = actx.createGain(); musicGain.gain.value = 0.5; musicGain.connect(master);
+    calmGain = actx.createGain(); calmGain.gain.value = 1; calmGain.connect(musicGain);
+    intenseGain = actx.createGain(); intenseGain.gain.value = 0.0001; intenseGain.connect(musicGain);
+    const dist = actx.createWaveShaper(); dist.curve = makeDistCurve(28); dist.oversample = '2x';
+    const distOut = actx.createGain(); distOut.gain.value = 0.9;
+    dist.connect(distOut); distOut.connect(intenseGain);
+    intenseBus = dist;                                  // palm-muted chugs run through the distortion
+    musicInit = true; musicNext = actx.currentTime + 0.1;
+  }
+  function mtone(dest, freq, t, dur, type, vol, atk) {
+    const o = actx.createOscillator(); o.type = type; o.frequency.value = freq;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + (atk || 0.02));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.03);
+  }
+  // calm: C major I–V–vi–IV, one chord per 16-step bar, 64-step loop
+  const calmChords = [
+    [261.63, 329.63, 392.00], [196.00, 246.94, 293.66],
+    [220.00, 261.63, 329.63], [174.61, 220.00, 261.63],
+  ];
+  const calmArp = [0, 2, 1, 2];
+  function calmStep(step, t) {
+    const ch = calmChords[(step >> 4) & 3];
+    if ((step & 15) === 0) for (const f of ch) mtone(calmGain, f, t, MSTEP * 15, 'sine', 0.05, 0.4);        // soft pad
+    if ((step & 3) === 0) mtone(calmGain, ch[calmArp[(step >> 2) & 3]] * 2, t, 0.5, 'triangle', 0.055, 0.01); // bell
+  }
+  // intense: E-minor palm-muted riff + driving kick, backbeat snare, lead stabs
+  const emRiff = [82.41, 82.41, 98.00, 82.41, 110.00, 82.41, 73.42, 92.50];
+  function intenseStep(step, t) {
+    const r = emRiff[step & 7];
+    mtone(intenseBus, r, t, MSTEP * 0.92, 'sawtooth', 0.5, 0.005);           // chug root
+    mtone(intenseBus, r * 1.5, t, MSTEP * 0.92, 'sawtooth', 0.35, 0.005);    // power fifth
+    if ((step & 1) === 0) {                                                  // kick
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.11);
+      g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      o.connect(g); g.connect(intenseGain); o.start(t); o.stop(t + 0.16);
+    }
+    if ((step & 7) === 4 && noiseBuf) {                                      // snare
+      const s = actx.createBufferSource(); s.buffer = noiseBuf;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1900; bp.Q.value = 0.6;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      s.connect(bp); bp.connect(g); g.connect(intenseGain); s.start(t); s.stop(t + 0.22);
+    }
+    if ((step & 15) === 8) mtone(intenseGain, r * 4, t, 0.35, 'square', 0.12, 0.01);   // lead stab
+  }
+  function updateMusic() {
+    if (!inGame || !audioReady()) return;
+    ensureMusic();
+    let nearest = Infinity;
+    for (const [, peer] of MP.peers) { if (peer.dead) continue; const dx = peer.cur.x - p.x, dz = peer.cur.z - p.z; const d = Math.hypot(dx, dz); if (d < nearest) nearest = d; }
+    const target = nearest < 45 ? 1 : 0;
+    musicIntensity += (target - musicIntensity) * 0.05;
+    const t = actx.currentTime;
+    intenseGain.gain.setTargetAtTime(Math.max(0.0001, musicIntensity), t, 0.4);
+    calmGain.gain.setTargetAtTime(Math.max(0.0001, 1 - musicIntensity), t, 0.4);
+    if (musicNext < t) musicNext = t + 0.05;                 // resync after any pause (tab hidden / SFX off)
+    while (musicNext < t + 0.25) {
+      if (musicIntensity < 0.985) calmStep(musicStep, musicNext);
+      if (musicIntensity > 0.015) intenseStep(musicStep, musicNext);
+      musicStep = (musicStep + 1) & 63; musicNext += MSTEP;
+    }
+  }
+
   // ── kill count + crown for the room leader ──────────────────────────
   function crownSprite() {
     const cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
@@ -1648,6 +1793,7 @@
     gate.classList.add('gone');
     hud.classList.add('live');
     document.body.classList.add('playing');
+    inGame = true;
     initAudio();                         // unlock audio within the click gesture
     applyMode();
     connectMP();
@@ -1961,6 +2107,7 @@
     updateCity(dt);
     updateCombat(dt);
     updatePeers(dt, now);
+    updateMusic();
     publishState(false);
 
     renderer.render(scene, camera);
