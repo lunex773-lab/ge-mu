@@ -639,37 +639,45 @@
   const sigOffset = (i, j) => (i * 2 + j * 3) * 1.7;
   const phaseAt = (i, j) => signalPhase(cityT + sigOffset(i, j));
 
-  // detailed signals: a horizontal 3-lens vehicle head (green·yellow·red, red
-  // on the right, Japanese style) + a 2-lens pedestrian head, instanced.
-  const sigIJ = [], sigXY = [];
-  for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) { sigIJ.push([i, j]); sigXY.push([i * PITCH, j * PITCH]); }
-  const NSIG = sigXY.length;
-  const sigPole = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 6.2, 0.2), poleMat, NSIG);
-  const sigArm  = new THREE.InstancedMesh(new THREE.BoxGeometry(RW + 1.0, 0.16, 0.16), poleMat, NSIG);
+  // detailed signals — FOUR per intersection, one on each corner. Two show the
+  // N-S state, two the E-W state (Japanese horizontal 3-lens head + ped head).
+  const sigIJ = [], sigAxis = [];
+  const NSIG = 7 * 7 * 4;
   const caseMat = new THREE.MeshLambertMaterial({ color: 0x1c2024 });
+  const bmat = () => new THREE.MeshBasicMaterial({ toneMapped: false });
+  const sigPole = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 6.2, 0.2), poleMat, NSIG);
   const sigCase = new THREE.InstancedMesh(new THREE.BoxGeometry(2.7, 0.8, 0.5), caseMat, NSIG);
   const lensGeo = new THREE.SphereGeometry(0.27, 10, 8);
-  const sigGrn = new THREE.InstancedMesh(lensGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), NSIG);
-  const sigYel = new THREE.InstancedMesh(lensGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), NSIG);
-  const sigRed = new THREE.InstancedMesh(lensGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), NSIG);
+  const sigGrn = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
+  const sigYel = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
+  const sigRed = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
   const pedCase = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1.0, 0.3), caseMat, NSIG);
   const pedGeo = new THREE.SphereGeometry(0.17, 10, 8);
-  const pedRedI = new THREE.InstancedMesh(pedGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), NSIG);
-  const pedGrnI = new THREE.InstancedMesh(pedGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), NSIG);
-  sigXY.forEach(([x, z], k) => {
-    const px = x + RW + 1.4, pz = z + RW + 1.4;              // pole at the corner
-    const hx = x + RW * 0.4, hz = z + RW + 1.4, hy = 5.6;    // vehicle head over the approach
-    setInst(sigPole, k, px, 3.1, pz, 0, 1, 1, 1);
-    setInst(sigArm,  k, (px + hx) / 2, hy, pz, 0, 1, 1, 1);
-    setInst(sigCase, k, hx, hy, hz, 0, 1, 1, 1);
-    setInst(sigGrn,  k, hx - 0.8, hy, hz - 0.28, 0, 1, 1, 1);
-    setInst(sigYel,  k, hx,       hy, hz - 0.28, 0, 1, 1, 1);
-    setInst(sigRed,  k, hx + 0.8, hy, hz - 0.28, 0, 1, 1, 1);
-    setInst(pedCase, k, px, 3.0, pz - 0.2, 0, 1, 1, 1);
-    setInst(pedRedI, k, px, 3.28, pz - 0.36, 0, 1, 1, 1);
-    setInst(pedGrnI, k, px, 2.78, pz - 0.36, 0, 1, 1, 1);
-  });
-  scene.add(sigPole, sigArm, sigCase, sigGrn, sigYel, sigRed, pedCase, pedRedI, pedGrnI);
+  const pedRedI = new THREE.InstancedMesh(pedGeo, bmat(), NSIG);
+  const pedGrnI = new THREE.InstancedMesh(pedGeo, bmat(), NSIG);
+  const cC = RW + 1.5, hy = 5.4;
+  const HCFG = [[cC, cC, Math.PI], [-cC, cC, -Math.PI / 2], [-cC, -cC, 0], [cC, -cC, Math.PI / 2]];
+  let K = 0;
+  for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) {
+    const cx = i * PITCH, cz = j * PITCH;
+    for (let m = 0; m < 4; m++) {
+      const [dx, dz, rot] = HCFG[m], px = cx + dx, pz = cz + dz;
+      const co = Math.cos(rot), si = Math.sin(rot);
+      setInst(sigPole, K, px, 3.1, pz, rot, 1, 1, 1);
+      setInst(sigCase, K, px, hy, pz, rot, 1, 1, 1);
+      for (let li = 0; li < 3; li++) {
+        const lx = [-0.8, 0, 0.8][li];
+        const wx = px + lx * co + (-0.32) * si, wz = pz - lx * si + (-0.32) * co;
+        setInst([sigGrn, sigYel, sigRed][li], K, wx, hy, wz, 0, 1, 1, 1);
+      }
+      setInst(pedCase, K, px + (-0.32) * si, 3.0, pz + (-0.32) * co, rot, 1, 1, 1);
+      setInst(pedRedI, K, px - 0.5 * si, 3.28, pz - 0.5 * co, 0, 1, 1, 1);
+      setInst(pedGrnI, K, px - 0.5 * si, 2.78, pz - 0.5 * co, 0, 1, 1, 1);
+      sigIJ.push([i, j]); sigAxis.push((rot === 0 || rot === Math.PI) ? 0 : 1);   // 0 = N-S, 1 = E-W
+      K++;
+    }
+  }
+  scene.add(sigPole, sigCase, sigGrn, sigYel, sigRed, pedCase, pedRedI, pedGrnI);
   const LC = {
     rOn: new THREE.Color(0xff2e2e), rOff: new THREE.Color(0x360a0a),
     yOn: new THREE.Color(0xffc400), yOff: new THREE.Color(0x322800),
@@ -680,9 +688,10 @@
   function updateSignalLenses() {
     for (let k = 0; k < NSIG; k++) {
       const P = phaseAt(sigIJ[k][0], sigIJ[k][1]);
-      sigGrn.setColorAt(k, P.ns === 2 ? LC.gOn : LC.gOff);
-      sigYel.setColorAt(k, P.ns === 1 ? LC.yOn : LC.yOff);
-      sigRed.setColorAt(k, P.ns === 0 ? LC.rOn : LC.rOff);
+      const st = sigAxis[k] === 0 ? P.ns : P.ew;                 // this head's road
+      sigGrn.setColorAt(k, st === 2 ? LC.gOn : LC.gOff);
+      sigYel.setColorAt(k, st === 1 ? LC.yOn : LC.yOff);
+      sigRed.setColorAt(k, st === 0 ? LC.rOn : LC.rOff);
       pedRedI.setColorAt(k, P.ped ? LC.pROff : LC.pROn);
       pedGrnI.setColorAt(k, P.ped ? LC.pGOn : LC.pGOff);
     }
@@ -713,56 +722,41 @@
     return turned;
   }
 
-  // ---- cars: several models (sedan / kei / van / taxi), individual meshes ----
-  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.3, 8); wheelGeo.rotateZ(Math.PI / 2);   // roll axis along x
+  // ---- cars: instanced so we can flood the map (body + cabin + dark base) ----
+  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.3, 8); wheelGeo.rotateZ(Math.PI / 2);
   const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111318 });
-  const glassMat = new THREE.MeshLambertMaterial({ color: 0x9fbdcf });
-  const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
-  const tailMat = new THREE.MeshBasicMaterial({ color: 0xd83030 });
-  function makeCar(type, color) {
-    const g = new THREE.Group();
-    let L = 4.4, W = 1.9, H = 0.75, cabH = 0.72, cabL = 2.0, cabZ = -0.15;
-    if (type === 'van') { L = 4.9; W = 2.0; H = 1.5; cabH = 0; cabL = 0; }
-    if (type === 'kei') { L = 3.3; W = 1.7; H = 1.15; cabH = 0.55; cabL = 1.5; cabZ = 0; }
-    const wy = 0.34, bodyMat = new THREE.MeshLambertMaterial({ color });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, L), bodyMat); body.position.y = wy + H / 2; g.add(body);
-    if (cabL > 0) {
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, cabH, cabL), glassMat); glass.position.set(0, wy + H + cabH / 2 - 0.04, cabZ); g.add(glass);
-      const cab = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, cabH, cabL * 0.5), bodyMat); cab.position.set(0, wy + H + cabH / 2 - 0.04, cabZ - cabL * 0.28); g.add(cab);
-    } else {
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.55, L * 0.5), glassMat); glass.position.set(0, wy + H - 0.4, L * 0.18); g.add(glass);
-    }
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(sx * (W / 2 - 0.02), wy, sz * (L / 2 - 0.95)); g.add(w); }
-    for (const sx of [-1, 1]) {
-      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.08), headMat); hl.position.set(sx * (W / 2 - 0.32), wy + 0.32, L / 2); g.add(hl);
-      const tl = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.08), tailMat); tl.position.set(sx * (W / 2 - 0.32), wy + 0.32, -L / 2); g.add(tl);
-    }
-    if (type === 'taxi') { const sign = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.34), new THREE.MeshLambertMaterial({ color: 0xf0d000, emissive: 0x4a3c00 })); sign.position.set(0, wy + H + cabH + 0.12, cabZ); g.add(sign); }
-    g.userData.halfW = W / 2; g.userData.halfL = L / 2;
-    return g;
-  }
-  const carTypes = ['sedan', 'sedan', 'kei', 'van', 'taxi', 'sedan'];
-  const carPaint = [0xdedee2, 0x2a2d33, 0x8a929c, 0x2f4d78, 0x7a2b2b, 0xb8a84a, 0x36584a, 0xe0e2e6];
-  const NUMCARS = 14;
+  const carBodyGeo = new THREE.BoxGeometry(1.9, 0.72, 4.4); carBodyGeo.translate(0, 0.72, 0);
+  const carCabGeo = new THREE.BoxGeometry(1.55, 0.62, 2.0); carCabGeo.translate(0, 1.36, -0.25);
+  const carBaseGeo = new THREE.BoxGeometry(2.02, 0.36, 4.2); carBaseGeo.translate(0, 0.18, 0);
+  const carPaint = [0xdedee2, 0x2a2d33, 0x8a929c, 0x2f4d78, 0x7a2b2b, 0xb8a84a, 0x36584a, 0xe0e2e6, 0x243a2c, 0x8a5a2a];
+  const NUMCARS = 140;
+  const carBodyI = new THREE.InstancedMesh(carBodyGeo, new THREE.MeshLambertMaterial({}), NUMCARS);
+  const carCabI = new THREE.InstancedMesh(carCabGeo, new THREE.MeshLambertMaterial({ color: 0x2a2f36 }), NUMCARS);
+  const carBaseI = new THREE.InstancedMesh(carBaseGeo, new THREE.MeshLambertMaterial({ color: 0x14161a }), NUMCARS);
   const cars = [];
   for (let k = 0; k < NUMCARS; k++) {
-    const e = randEdge(); e.speed = 6; e.cruise = 7 + Math.random() * 3; e.turnSign = 1; e.drift = 0;
-    const type = carTypes[Math.random() * carTypes.length | 0];
-    e.group = makeCar(type, type === 'taxi' ? 0x1a1d22 : carPaint[Math.random() * carPaint.length | 0]);
-    scene.add(e.group); cars.push(e);
+    const e = randEdge(); e.speed = 6; e.cruise = 7 + Math.random() * 3; e.turnSign = 1; e.drift = 0; e.halfW = 0.98; e.halfL = 2.2;
+    cars.push(e); carBodyI.setColorAt(k, new THREE.Color(carPaint[Math.random() * carPaint.length | 0]));
   }
+  scene.add(carBodyI, carCabI, carBaseI);
 
-  // the sports car — faster, red, drifts through corners
-  const sports = randEdge(); sports.speed = 8; sports.cruise = 15; sports.turnSign = 1; sports.drift = 0; sports.sports = true;
-  const sportsMesh = new THREE.Group();
-  const scBody = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.6, 4.6), new THREE.MeshStandardMaterial({ color: 0xd8261c, roughness: 0.35, metalness: 0.5 }));
-  scBody.position.y = 0.5; sportsMesh.add(scBody);
-  const scCab = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 1.9), new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.2 }));
-  scCab.position.set(0, 0.95, -0.2); sportsMesh.add(scCab);
-  const scWing = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), new THREE.MeshStandardMaterial({ color: 0x14161a }));
-  scWing.position.set(0, 0.95, -2.1); sportsMesh.add(scWing);
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(sx * 0.92, 0.34, sz * 1.55); sportsMesh.add(w); }
-  scene.add(sportsMesh);
+  // ---- Ferraris: rare, detailed, ~3× the speed of normal cars, drift corners ----
+  function makeFerrari() {
+    const g = new THREE.Group();
+    const red = new THREE.MeshStandardMaterial({ color: 0xe10600, roughness: 0.3, metalness: 0.55 });
+    const dk = new THREE.MeshStandardMaterial({ color: 0x101216, roughness: 0.2 });
+    const b = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.55, 4.7), red); b.position.y = 0.5; g.add(b);
+    const c = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.46, 1.9), dk); c.position.set(0, 0.92, -0.15); g.add(c);
+    const w = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.09, 0.5), dk); w.position.set(0, 0.95, -2.15); g.add(w);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const wh = new THREE.Mesh(wheelGeo, wheelMat); wh.position.set(sx * 0.94, 0.34, sz * 1.6); g.add(wh); }
+    return g;
+  }
+  const AVGCRUISE = 8.5;
+  const ferraris = [];
+  for (let k = 0; k < 3; k++) {
+    const e = randEdge(); e.speed = 12; e.cruise = AVGCRUISE * 3; e.turnSign = 1; e.drift = 0;   // 3× normal
+    e.mesh = makeFerrari(); scene.add(e.mesh); ferraris.push(e);
+  }
 
   // skid-mark pool for the drift
   const skidMat = new THREE.MeshBasicMaterial({ color: 0x101216, transparent: true, opacity: 0, depthWrite: false });
@@ -771,56 +765,56 @@
   let skidI = 0;
   function spawnSkid(x, z, heading) { const m = skids[skidI = (skidI + 1) % skids.length]; m.position.set(x, 0.03, z); m.rotation.z = heading; m.material.opacity = 0.45; m.visible = true; m.userData.life = 4; }
 
-  // ---- pedestrians: articulated humans (and, rarely, monkeys like us) ----
-  const lm = (c) => new THREE.MeshLambertMaterial({ color: c });
-  const skinMats = [0xE7B98F, 0xC98A5A, 0x8D5A3B].map(lm);
-  const shirtMats = [0x3a6ea5, 0xb04a4a, 0x3a8a5a, 0xcaa63a, 0x9a9aa2, 0xd8d8dc, 0x6a4a8a].map(lm);
-  const pantsMats = [0x2a2f3a, 0x4a4034, 0x33384a, 0x22252b].map(lm);
-  const hairMats = [0x1a1712, 0x2a2018, 0x4a3a2a, 0x101014].map(lm);
-  const shoeMat = lm(0x1a1a1e);
-  const ri = (arr) => arr[Math.random() * arr.length | 0];
-  function seg2(px, py, upLen, loLen, w, mat, footMat) {
-    const up = new THREE.Group(); up.position.set(px, py, 0);
-    const um = new THREE.Mesh(new THREE.BoxGeometry(w, upLen, w), mat); um.position.y = -upLen / 2; up.add(um);
-    const lo = new THREE.Group(); lo.position.y = -upLen; up.add(lo);
-    const lmm = new THREE.Mesh(new THREE.BoxGeometry(w * 0.88, loLen, w * 0.88), mat); lmm.position.y = -loLen / 2; lo.add(lmm);
-    if (footMat) { const ft = new THREE.Mesh(new THREE.BoxGeometry(w * 1.15, 0.1, w * 2.1), footMat); ft.position.set(0, -loLen, 0.06); lo.add(ft); }
-    return { up, lo };
-  }
-  function makePerson() {
-    const g = new THREE.Group();
-    const sk = ri(skinMats), sh = ri(shirtMats), pa = ri(pantsMats), ha = ri(hairMats);
-    const torso = new THREE.Group(); g.add(torso);
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.52, 0.22), sh); chest.position.y = 1.22; torso.add(chest);
-    const hip = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.26, 0.22), pa); hip.position.y = 0.94; torso.add(hip);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.135, 10, 8), sk); head.position.y = 1.62; torso.add(head);
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8, 0, 6.3, 0, 1.9), ha); hair.position.y = 1.645; torso.add(hair);
-    const armL = seg2(-0.25, 1.44, 0.3, 0.28, 0.1, sh); torso.add(armL.up);
-    const armR = seg2(0.25, 1.44, 0.3, 0.28, 0.1, sh); torso.add(armR.up);
-    const legL = seg2(-0.1, 0.94, 0.44, 0.42, 0.14, pa, shoeMat); torso.add(legL.up);
-    const legR = seg2(0.1, 0.94, 0.44, 0.42, 0.14, pa, shoeMat); torso.add(legR.up);
-    g.userData.rig = { torso, armL, armR, legL, legR, phase: Math.random() * 6 };
-    return g;
-  }
-  function posePerson(g, dt, walk, running) {
-    const r = g.userData.rig; if (!r) return 0;
-    r.phase += dt * (running ? 12 : 7.5) * (walk > 0.05 ? 1 : 0);
-    const sw = Math.sin(r.phase), swc = Math.cos(r.phase), amp = running ? 1.35 : 1;
-    r.legL.up.rotation.x = sw * 0.72 * walk * amp; r.legR.up.rotation.x = -sw * 0.72 * walk * amp;
-    r.legL.lo.rotation.x = Math.max(0, -swc) * 0.85 * walk; r.legR.lo.rotation.x = Math.max(0, swc) * 0.85 * walk;
-    r.armL.up.rotation.x = -sw * 0.5 * walk * amp; r.armR.up.rotation.x = sw * 0.5 * walk * amp;
-    r.armL.lo.rotation.x = 0.28; r.armR.lo.rotation.x = 0.28;
-    r.torso.rotation.x = walk * 0.05 + (running ? 0.16 : 0);
-    return Math.abs(sw) * 0.03 * walk;
-  }
-  const NUMPED = 22, NUMMONKEY = 3;
+  // ---- pedestrians: instanced articulated humans (limbs swing via per-limb
+  //  instance matrices) plus a few real monkey rigs like us ----
+  const setLimb = (inst, k, x, y, z, swing, heading) => {
+    _d.position.set(x, y, z); _d.rotation.set(swing, heading, 0, 'YXZ'); _d.scale.set(1, 1, 1); _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
+  };
+  const NUMHUMAN = 215, NUMMONKEY = 5;
+  const SKINc = [0xE7B98F, 0xC98A5A, 0x8D5A3B], SHIRTc = [0x3a6ea5, 0xb04a4a, 0x3a8a5a, 0xcaa63a, 0x9a9aa2, 0xd8d8dc, 0x6a4a8a, 0x2f4d5a];
+  const PANTSc = [0x2a2f3a, 0x4a4034, 0x33384a, 0x22252b, 0x555a63];
+  const geoT = new THREE.BoxGeometry(0.4, 0.42, 0.22); geoT.translate(0, 1.27, 0);
+  const geoHi = new THREE.BoxGeometry(0.38, 0.3, 0.22); geoHi.translate(0, 0.9, 0);
+  const geoHd = new THREE.SphereGeometry(0.145, 10, 8); geoHd.translate(0, 1.63, 0);
+  const geoLeg = new THREE.BoxGeometry(0.14, 0.86, 0.14); geoLeg.translate(0, -0.43, 0);
+  const geoArm = new THREE.BoxGeometry(0.1, 0.58, 0.1); geoArm.translate(0, -0.29, 0);
+  const im = (g) => new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({}), NUMHUMAN);
+  const torsoI = im(geoT), hipI = im(geoHi), headI = im(geoHd), legLI = im(geoLeg), legRI = im(geoLeg), armLI = im(geoArm), armRI = im(geoArm);
+  scene.add(torsoI, hipI, headI, legLI, legRI, armLI, armRI);
+
   const peds = [];
-  for (let k = 0; k < NUMPED; k++) {
+  for (let k = 0; k < NUMHUMAN; k++) {
     const e = randEdge(); e.ped = true; e.side = Math.random() < 0.5 ? 1 : -1;
+    e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; e.hidx = k;
+    const shirt = new THREE.Color(SHIRTc[Math.random() * SHIRTc.length | 0]);
+    const pants = new THREE.Color(PANTSc[Math.random() * PANTSc.length | 0]);
+    torsoI.setColorAt(k, shirt); armLI.setColorAt(k, shirt); armRI.setColorAt(k, shirt);
+    hipI.setColorAt(k, pants); legLI.setColorAt(k, pants); legRI.setColorAt(k, pants);
+    headI.setColorAt(k, new THREE.Color(SKINc[Math.random() * SKINc.length | 0]));
+    peds.push(e);
+  }
+  // a few monkeys among the crowd (rigged, can turn hostile if you shoot them)
+  const monkeyPeds = [];
+  for (let k = 0; k < NUMMONKEY; k++) {
+    const e = randEdge(); e.ped = true; e.isMonkey = true; e.side = Math.random() < 0.5 ? 1 : -1;
     e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6;
-    e.isMonkey = k < NUMMONKEY;
-    e.group = e.isMonkey ? makeMonkey() : makePerson();
-    scene.add(e.group); peds.push(e);
+    e.hp = 60; e.aggro = false; e.meleeCd = 0; e.wx = 0; e.wz = 0;
+    e.group = makeMonkey(); scene.add(e.group); peds.push(e); monkeyPeds.push(e);
+  }
+
+  function pedGraphStep(ped, dt) {
+    const P = phaseAt(ped.i + ped.di, ped.j + ped.dj);
+    const canCross = P.ped === 1 || (ped.di !== 0 ? P.ns !== 2 : P.ew !== 2);
+    let target = ped.speed;
+    const distToNode = (1 - ped.s) * PITCH, stopS = 1 - (RW + 2.5) / PITCH;
+    if (!canCross && distToNode < RW + 3) target = 0;
+    ped.pspeed += (target - ped.pspeed) * Math.min(1, dt * 4);
+    ped.s += ped.pspeed * dt / PITCH;
+    if (!canCross) ped.s = Math.min(ped.s, stopS);
+    if (ped.s >= 1) advanceNode(ped);
+    const off = ped.side * (RW + SWW * 0.55);
+    const bx = (ped.i + ped.s * ped.di) * PITCH + ped.dj * off, bz = (ped.j + ped.s * ped.dj) * PITCH - ped.di * off;
+    return { bx, bz, heading: Math.atan2(ped.di, ped.dj), walk: ped.pspeed > 0.3 ? Math.min(ped.pspeed / ped.speed, 1) : 0 };
   }
 
   // ---- neon signs on the taller buildings (some flicker) ----
@@ -867,58 +861,71 @@
     if (!go) a.s = Math.min(a.s, stopS);
     return a.s >= 1 ? advanceNode(a) : false;   // returns whether a turn happened
   }
-  function updateCar(car, dt) {
+  function updateCar(car, dt, k) {
     let ahead = Infinity;
     for (const o of cars) { if (o !== car && o.i === car.i && o.j === car.j && o.di === car.di && o.dj === car.dj && o.s > car.s) ahead = Math.min(ahead, (o.s - car.s) * PITCH); }
-    if (sports.i === car.i && sports.j === car.j && sports.di === car.di && sports.dj === car.dj && sports.s > car.s) ahead = Math.min(ahead, (sports.s - car.s) * PITCH);
     driveAgent(car, dt, ahead, 6);
     const bx = (car.i + car.s * car.di) * PITCH + car.dj * LANE, bz = (car.j + car.s * car.dj) * PITCH - car.di * LANE;
     const heading = Math.atan2(car.di, car.dj);
-    car.group.position.set(bx, 0, bz); car.group.rotation.y = heading;
-    runOver(bx, bz, heading, car.group.userData.halfW, car.group.userData.halfL, car.speed, 32);
+    setInst(carBodyI, k, bx, 0, bz, heading, 1, 1, 1);
+    setInst(carCabI, k, bx, 0, bz, heading, 1, 1, 1);
+    setInst(carBaseI, k, bx, 0, bz, heading, 1, 1, 1);
+    runOver(bx, bz, heading, car.halfW, car.halfL, car.speed, 32);
   }
-  function updateSports(dt) {
-    const a = sports;
-    if (driveAgent(a, dt, Infinity, 7)) a.drift = 0.9;         // drift out of every corner
-    const bx = (a.i + a.s * a.di) * PITCH + a.dj * LANE, bz = (a.j + a.s * a.dj) * PITCH - a.di * LANE;
-    const heading = Math.atan2(a.di, a.dj);
-    let slip = 0;
-    if (a.drift > 0) { slip = Math.sin((a.drift / 0.9) * Math.PI) * 0.7 * a.turnSign; a.drift = Math.max(0, a.drift - dt); if (a.speed > 5) spawnSkid(bx, bz, heading); }
-    sportsMesh.position.set(bx, 0, bz); sportsMesh.rotation.y = heading + slip;
-    runOver(bx, bz, heading, 1.0, 2.3, a.speed, 60);
+  function updateFerraris(dt) {
+    for (const a of ferraris) {
+      if (driveAgent(a, dt, Infinity, 7)) a.drift = 0.9;       // drift out of every corner
+      const bx = (a.i + a.s * a.di) * PITCH + a.dj * LANE, bz = (a.j + a.s * a.dj) * PITCH - a.di * LANE;
+      const heading = Math.atan2(a.di, a.dj);
+      let slip = 0;
+      if (a.drift > 0) { slip = Math.sin((a.drift / 0.9) * Math.PI) * 0.7 * a.turnSign; a.drift = Math.max(0, a.drift - dt); if (a.speed > 5) spawnSkid(bx, bz, heading); }
+      a.mesh.position.set(bx, 0, bz); a.mesh.rotation.y = heading + slip;
+      runOver(bx, bz, heading, 1.0, 2.35, a.speed, 60);
+    }
   }
   function updatePed(ped, dt) {
-    const P = phaseAt(ped.i + ped.di, ped.j + ped.dj);
-    const canCross = P.ped === 1 || (ped.di !== 0 ? P.ns !== 2 : P.ew !== 2);
-    let target = ped.speed;
-    const distToNode = (1 - ped.s) * PITCH, stopS = 1 - (RW + 2.5) / PITCH;
-    if (!canCross && distToNode < RW + 3) target = 0;
-    ped.pspeed += (target - ped.pspeed) * Math.min(1, dt * 4);
-    ped.s += ped.pspeed * dt / PITCH;
-    if (!canCross) ped.s = Math.min(ped.s, stopS);
-    if (ped.s >= 1) advanceNode(ped);
-    const off = ped.side * (RW + SWW * 0.55);
-    const bx = (ped.i + ped.s * ped.di) * PITCH + ped.dj * off, bz = (ped.j + ped.s * ped.dj) * PITCH - ped.di * off;
-    const heading = Math.atan2(ped.di, ped.dj);
-    const walk = ped.pspeed > 0.3 ? Math.min(ped.pspeed / ped.speed, 1) : 0;
-    let bob = 0;
     if (ped.isMonkey) {
-      ped.phase += dt * (ped.running ? 13 : 9) * (walk > 0.05 ? 1 : 0);
-      poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: ped.running, air: 0, crouch: 0, land: 0, time: cityT });
-      ped.group.rotation.y = heading + Math.PI;
-    } else {
-      bob = posePerson(ped.group, dt, walk, ped.running);
-      ped.group.rotation.y = heading;
+      if (ped.hp <= 0) { ped.group.visible = false; return; }
+      let heading, walk = 1, running = ped.running;
+      if (ped.aggro && !dead) {                                 // shot at us → charge and swipe
+        const dx = p.x - ped.wx, dz = p.z - ped.wz, d = Math.hypot(dx, dz) || 1;
+        if (d > 1.3) { ped.wx += dx / d * 4.6 * dt; ped.wz += dz / d * 4.6 * dt; }
+        heading = Math.atan2(dx, dz); running = true;
+        ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
+        if (d < 1.9 && ped.meleeCd <= 0) { applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; camShake = Math.max(camShake, 0.22); }
+        ped.phase += dt * 13;
+      } else {
+        const s = pedGraphStep(ped, dt); ped.wx = s.bx; ped.wz = s.bz; heading = s.heading; walk = s.walk;
+        ped.phase += dt * (running ? 13 : 9) * (walk > 0.05 ? 1 : 0);
+      }
+      poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: running, air: 0, crouch: 0, land: 0, time: cityT });
+      ped.group.position.set(ped.wx, 0, ped.wz);
+      ped.group.rotation.y = heading;                           // face forward (nose points along travel)
+      return;
     }
-    ped.group.position.set(bx, bob, bz);
+    const { bx, bz, heading, walk } = pedGraphStep(ped, dt);
+    ped.phase += dt * (ped.running ? 12 : 7.5) * (walk > 0.05 ? 1 : 0);
+    const sw = Math.sin(ped.phase), bob = Math.abs(sw) * 0.03 * walk;
+    const co = Math.cos(heading), si = Math.sin(heading), k = ped.hidx;
+    setInst(torsoI, k, bx, bob, bz, heading, 1, 1, 1);
+    setInst(hipI, k, bx, bob, bz, heading, 1, 1, 1);
+    setInst(headI, k, bx, bob, bz, heading, 1, 1, 1);
+    const la = 0.72 * walk * (ped.running ? 1.3 : 1), aa = 0.5 * walk * (ped.running ? 1.3 : 1);
+    setLimb(legLI, k, bx - 0.1 * co, bob + 0.9, bz + 0.1 * si, sw * la, heading);
+    setLimb(legRI, k, bx + 0.1 * co, bob + 0.9, bz - 0.1 * si, -sw * la, heading);
+    setLimb(armLI, k, bx - 0.25 * co, bob + 1.44, bz + 0.25 * si, -sw * aa, heading);
+    setLimb(armRI, k, bx + 0.25 * co, bob + 1.44, bz - 0.25 * si, sw * aa, heading);
   }
   function updateCity(dt) {
     cityT += dt;
     if (carHitCd > 0) carHitCd -= dt;
     updateSignalLenses();
-    for (let k = 0; k < cars.length; k++) updateCar(cars[k], dt);
-    updateSports(dt);
+    for (let k = 0; k < cars.length; k++) updateCar(cars[k], dt, k);
+    updateFerraris(dt);
     for (let k = 0; k < peds.length; k++) updatePed(peds[k], dt);
+    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carBaseI.instanceMatrix.needsUpdate = true;
+    torsoI.instanceMatrix.needsUpdate = hipI.instanceMatrix.needsUpdate = headI.instanceMatrix.needsUpdate = true;
+    legLI.instanceMatrix.needsUpdate = legRI.instanceMatrix.needsUpdate = armLI.instanceMatrix.needsUpdate = armRI.instanceMatrix.needsUpdate = true;
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
     for (const nf of neonFlicker) nf.mesh.material.opacity = 0.72 + 0.28 * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
   }
@@ -1108,9 +1115,10 @@
     const tag = nameSprite(name || '匿名');
     m.add(tag); m.userData.tag = tag;
     // floating HP bar (dark backing + coloured fill), just under the name
-    const hpbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0b1014, transparent: true, opacity: 0.65, depthTest: false, fog: false }));
+    // depthTest true → the bar is hidden when the peer is behind a building
+    const hpbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0b1014, transparent: true, opacity: 0.65, depthTest: true, depthWrite: false, fog: false }));
     hpbg.scale.set(1.2, 0.12, 1); hpbg.position.y = 2.42; hpbg.renderOrder = 5;
-    const hpfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66DD66, depthTest: false, fog: false }));
+    const hpfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66DD66, depthTest: true, depthWrite: false, fog: false }));
     hpfill.scale.set(1.16, 0.09, 1); hpfill.position.y = 2.42; hpfill.renderOrder = 6;
     m.add(hpbg, hpfill); m.userData.hpfill = hpfill;
     return m;
@@ -1474,19 +1482,27 @@
       if (_p2.y < height(_p2.x, _p2.z)) { blockDist = d; break; }
     }
     // nearest targetable peer in front of that
-    let hitId = null, hitDist = Infinity;
+    let hitId = null, hitDist = Infinity, hitMonkey = null;
     for (const [id, peer] of MP.peers) {
       if (peer.dead) continue;                        // cloaked players are hidden but still hittable
       _cc.copy(peer.cur); _cc.y += 1.15;
       const t = raySphere(_ro, _rd, _cc, 0.95);
-      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; }
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; hitMonkey = null; }
     }
-    _end.copy(_ro).addScaledVector(_rd, hitId ? hitDist : blockDist);
+    // NPC monkeys are shootable too — shoot one and it turns hostile
+    for (const mk of monkeyPeds) {
+      if (mk.hp <= 0) continue;
+      _cc.set(mk.wx, 1.0, mk.wz);
+      const t = raySphere(_ro, _rd, _cc, 0.85);
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = mk; }
+    }
+    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     playShot(0.5, 0);                                   // own gunshot
     if (MP.connected && MP.client) MP.client.publish(mtopic('shot'), JSON.stringify({ id: MP.id }));
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
+    if (hitMonkey) { hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
   }
 
   function sendHit(id) {
