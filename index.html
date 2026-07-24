@@ -285,12 +285,80 @@
   }
   #continue:active { transform: translateY(1px); }
 
+  /* ---- minimap (top-left) + move survey/HP below it ---- */
+  #minimap {
+    position: absolute; left: calc(18px + env(safe-area-inset-left)); top: calc(18px + env(safe-area-inset-top));
+    width: 108px; height: 108px; border: 1px solid var(--line-dim); border-radius: 4px;
+    background: rgba(8,12,16,.62); pointer-events: none; -webkit-tap-highlight-color: transparent;
+    box-shadow: inset 0 0 18px rgba(0,0,0,.4);
+  }
+  #hud.live #minimap { pointer-events: auto; cursor: pointer; }
+  #hpwrap { top: calc(140px + env(safe-area-inset-top)) !important; }
+  #survey { top: calc(190px + env(safe-area-inset-top)) !important; }
+
+  /* full-screen map (tap minimap) */
+  #mapview { position: fixed; inset: 0; z-index: 17; display: none; place-items: center; background: rgba(6,10,14,.82); }
+  #mapview.open { display: grid; }
+  #mapview canvas { width: min(88vw, 88vh); height: min(88vw, 88vh); border: 1px solid var(--line-dim); border-radius: 6px; background: rgba(8,12,16,.7); }
+  #mapview .cap { position: absolute; bottom: calc(26px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; color: var(--line-dim); font-size: 11px; letter-spacing: .2em; }
+
+  /* ---- chat ---- */
+  #chatbtn {
+    position: absolute; z-index: 2; pointer-events: none;
+    left: calc(30px + env(safe-area-inset-left)); bottom: calc(196px + env(safe-area-inset-bottom));
+    width: 62px; height: 62px; border-radius: 50%; font-size: 22px;
+    border: 1px solid var(--line-dim); background: rgba(11,16,20,.5); color: var(--line);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #touch.live #chatbtn { pointer-events: auto; }
+  #chatbtn:active { background: rgba(234,243,228,.18); }
+  #chatbtn i { position: absolute; top: -3px; right: -3px; width: 12px; height: 12px; border-radius: 50%; background: #ff6b5a; display: none; }
+  #chatbtn.unread i { display: block; }
+
+  #chatfeed {
+    position: absolute; left: calc(20px + env(safe-area-inset-left)); bottom: calc(270px + env(safe-area-inset-bottom));
+    max-width: 60vw; pointer-events: none; display: flex; flex-direction: column; gap: 3px;
+  }
+  #chatfeed div {
+    align-self: flex-start; color: var(--line); font-size: 11px; line-height: 1.5; letter-spacing: .02em;
+    background: rgba(8,12,16,.6); padding: 3px 8px; border-radius: 3px; border: 1px solid rgba(234,243,228,.14);
+  }
+  #chatfeed div b { color: var(--grass); font-weight: 600; }
+
+  #chat { position: fixed; inset: 0; z-index: 18; display: none; background: rgba(6,10,14,.55); }
+  #chat.open { display: block; }
+  #chat .panel {
+    position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: min(460px, 100vw);
+    background: #0f1a16; border: 1px solid rgba(234,243,228,.24); border-radius: 8px 8px 0 0;
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px;
+  }
+  #chat .head { display: flex; justify-content: space-between; align-items: center; }
+  #chat h2 { font-size: 12px; font-weight: 600; letter-spacing: .22em; color: var(--major); }
+  #chat .x { font-size: 18px; color: var(--line-dim); cursor: pointer; padding: 0 6px; }
+  #chat-log { height: 40vh; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+  #chat-log div { color: var(--line); font-size: 13px; line-height: 1.5; }
+  #chat-log div b { color: var(--grass); font-weight: 600; margin-right: 6px; }
+  #chat-log div.me b { color: var(--major); }
+  #chat-log div.sys { color: var(--line-dim); font-size: 11px; letter-spacing: .06em; }
+  #chat .row2 { display: flex; gap: 8px; }
+  #chat-input {
+    flex: 1; font: inherit; font-size: 14px; color: var(--major); background: rgba(234,243,228,.06);
+    border: 1px solid rgba(234,243,228,.28); border-radius: 3px; padding: 10px 12px; outline: none;
+  }
+  #chat-input:focus { border-color: var(--line); }
+  #chat-send {
+    font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .12em; color: var(--ink);
+    background: var(--grass); border: 0; border-radius: 3px; padding: 0 18px; cursor: pointer;
+  }
+
 </style>
 </head>
 <body>
 
 <div id="hud">
   <div id="crosshair"></div>
+  <canvas id="minimap" width="216" height="216"></canvas>
+  <div id="chatfeed"></div>
   <div id="hpwrap">
     <div id="hp-label">HP</div>
     <div id="hp-bar"><i id="hp-fill"></i><span id="hp-num">100</span></div>
@@ -326,6 +394,7 @@
   <button id="jump" type="button">JUMP</button>
   <button id="fire" type="button">FIRE</button>
   <button id="cloak" type="button">透明<b>OK</b></button>
+  <button id="chatbtn" type="button" aria-label="チャット">💬<i></i></button>
 </div>
 
 <div id="gear" role="button" aria-label="設定">⚙</div>
@@ -341,10 +410,30 @@
       <button id="sfx-toggle" class="toggle" type="button">ON / OFF</button>
     </div>
     <div class="row">
-      <div class="lbl"><span>音量 · VOLUME</span><b id="vol-val">70%</b></div>
+      <div class="lbl"><span>効果音の音量 · SFX VOLUME</span><b id="vol-val">70%</b></div>
       <input id="volume" type="range" min="0" max="1" step="0.05" value="0.7">
     </div>
+    <div class="row">
+      <div class="lbl"><span>音楽の音量 · BGM VOLUME</span><b id="bgm-val">50%</b></div>
+      <input id="bgm" type="range" min="0" max="1" step="0.05" value="0.5">
+    </div>
     <button class="close" id="settings-close">閉じる</button>
+  </div>
+</div>
+
+<div id="mapview">
+  <canvas id="bigmap" width="720" height="720"></canvas>
+  <div class="cap">タップで閉じる</div>
+</div>
+
+<div id="chat">
+  <div class="panel">
+    <div class="head"><h2>チャット · CHAT</h2><span class="x" id="chat-close">✕</span></div>
+    <div id="chat-log"></div>
+    <div class="row2">
+      <input id="chat-input" maxlength="120" placeholder="メッセージを入力…" autocomplete="off">
+      <button id="chat-send" type="button">送信</button>
+    </div>
   </div>
 </div>
 
@@ -887,6 +976,39 @@
     }
   }
 
+  // ---- bananas: a few healing pickups on the sidewalks (respawn after a while) ----
+  const BANANA_HEAL = 40, BANANA_RESPAWN = 22, NUM_BANANA = 8;
+  const bananaMat = new THREE.MeshStandardMaterial({ color: 0xF6D21C, emissive: 0x3a3005, roughness: 0.45, metalness: 0.05, flatShading: true });
+  function makeBanana() {
+    const g = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.09, 7, 16, Math.PI * 1.1), bananaMat);
+    m.rotation.x = Math.PI * 0.5; g.add(m);
+    return g;
+  }
+  const bananas = [];
+  for (let n = 0; n < NUM_BANANA; n++) {
+    const e = randEdge(), s = 0.2 + Math.random() * 0.6, side = Math.random() < 0.5 ? 1 : -1, off = side * (RW + SWW * 0.5);
+    const cx = (e.i + s * e.di) * PITCH + e.dj * off, cz = (e.j + s * e.dj) * PITCH - e.di * off;
+    const g = makeBanana(), by = height(cx, cz) + 0.7;
+    g.position.set(cx, by, cz); scene.add(g);
+    bananas.push({ mesh: g, x: cx, z: cz, y: by, active: true, respawn: 0, ph: Math.random() * 6 });
+  }
+  function updateBananas(dt) {
+    for (const b of bananas) {
+      if (!b.active) { b.respawn -= dt; if (b.respawn <= 0) { b.active = true; b.mesh.visible = true; } continue; }
+      b.ph += dt;
+      b.mesh.position.y = b.y + Math.sin(b.ph * 2) * 0.12;
+      b.mesh.rotation.y += dt * 1.6;
+      if (!dead && hp < HP_MAX) {
+        const dx = p.x - b.x, dz = p.z - b.z;
+        if (dx * dx + dz * dz < 3.24) {                 // within ~1.8 m
+          hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
+          b.active = false; b.mesh.visible = false; b.respawn = BANANA_RESPAWN;
+        }
+      }
+    }
+  }
+
   // player run-over: if a fast car's box overlaps the player, hurt + knock back
   let carHitCd = 0;
   function runOver(bx, bz, heading, hw, hl, speed, dmg) {
@@ -904,16 +1026,22 @@
     let target = a.cruise;
     const distToNode = (1 - a.s) * PITCH, stopS = 1 - (RW + 3) / PITCH;
     if (!go && distToNode < RW + stopExtra) target = 0;
-    if (followAhead < 8) target = Math.min(target, Math.max(0, (followAhead - 4.5) * 1.5));
+    if (followAhead < 9) target = Math.min(target, Math.max(0, (followAhead - 5.5) * 1.4));   // keep a car-length gap
     a.speed += (target - a.speed) * Math.min(1, dt * 2.4);
     a.s += a.speed * dt / PITCH;
     if (!go) a.s = Math.min(a.s, stopS);
     return a.s >= 1 ? advanceNode(a) : false;   // returns whether a turn happened
   }
-  function updateCar(car, dt, k) {
+  // nearest vehicle ahead on the same edge+direction — cars AND Ferraris, so
+  // neither clips into the other (Ferraris fall in behind slower traffic).
+  function gapAhead(a) {
     let ahead = Infinity;
-    for (const o of cars) { if (o !== car && o.i === car.i && o.j === car.j && o.di === car.di && o.dj === car.dj && o.s > car.s) ahead = Math.min(ahead, (o.s - car.s) * PITCH); }
-    driveAgent(car, dt, ahead, 6);
+    for (const o of cars) { if (o !== a && o.i === a.i && o.j === a.j && o.di === a.di && o.dj === a.dj && o.s > a.s) ahead = Math.min(ahead, (o.s - a.s) * PITCH); }
+    for (const o of ferraris) { if (o !== a && o.i === a.i && o.j === a.j && o.di === a.di && o.dj === a.dj && o.s > a.s) ahead = Math.min(ahead, (o.s - a.s) * PITCH); }
+    return ahead;
+  }
+  function updateCar(car, dt, k) {
+    driveAgent(car, dt, gapAhead(car), 6);
     const bx = (car.i + car.s * car.di) * PITCH + car.dj * LANE, bz = (car.j + car.s * car.dj) * PITCH - car.di * LANE;
     const di = car.di, dj = car.dj, heading = Math.atan2(di, dj);
     const W = car.W, H = car.H, L = car.L;
@@ -932,7 +1060,7 @@
   }
   function updateFerraris(dt) {
     for (const a of ferraris) {
-      if (driveAgent(a, dt, Infinity, 7)) a.drift = 0.9;       // drift out of every corner
+      if (driveAgent(a, dt, gapAhead(a), 7)) a.drift = 0.9;    // follow traffic, drift out of every corner
       const bx = (a.i + a.s * a.di) * PITCH + a.dj * LANE, bz = (a.j + a.s * a.dj) * PITCH - a.di * LANE;
       const heading = Math.atan2(a.di, a.dj);
       let slip = 0;
@@ -993,6 +1121,7 @@
     for (const m of humanI) m.instanceMatrix.needsUpdate = true;
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
     for (const nf of neonFlicker) nf.mesh.material.opacity = 0.72 + 0.28 * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
+    updateBananas(dt);
   }
 
   // ---- monkey avatar (rigged; shown in third-person view) ----
@@ -1266,6 +1395,7 @@
       client.subscribe(mtopic('hit'));
       client.subscribe(mtopic('shot'));
       client.subscribe(mtopic('kill'));
+      client.subscribe(mtopic('chat'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -1275,7 +1405,8 @@
       let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
       if (!msg) return;
       if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
-      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) { kills++; publishState(true); recomputeKing(); } return; }
+      if (t.slice(-5) === '/chat') { onChat(msg); return; }
+      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) { kills++; renderRoster(); publishState(true); recomputeKing(); } return; }
       if (!msg.id) return;
       if (t.slice(-5) === '/shot') { if (msg.id !== MP.id) onPeerShot(msg.id); return; }
       if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
@@ -1381,10 +1512,11 @@
 
   // ── audio (Web Audio, all synthesized — no external files) ──────────
   let actx = null, master = null, noiseBuf = null;
-  let sfxOn = true, sfxVol = 0.7;
+  let sfxOn = true, sfxVol = 0.7, bgmVol = 0.5;
   try {
     const so = localStorage.getItem('contour.sfx'); if (so !== null) sfxOn = so === '1';
     const sv = parseFloat(localStorage.getItem('contour.vol')); if (sv >= 0 && sv <= 1) sfxVol = sv;
+    const bv = parseFloat(localStorage.getItem('contour.bgm')); if (bv >= 0 && bv <= 1) bgmVol = bv;
   } catch (e) {}
   function initAudio() {
     if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
@@ -1399,7 +1531,8 @@
     } catch (e) { actx = null; }
   }
   const audioReady = () => actx && sfxOn && master;
-  const applySfx = () => { if (master) master.gain.value = sfxOn ? sfxVol : 0; };
+  const applyBgm = () => { if (musicGain) musicGain.gain.value = sfxOn ? bgmVol : 0; };   // BGM has its own volume
+  const applySfx = () => { if (master) master.gain.value = sfxOn ? sfxVol : 0; applyBgm(); };
 
   function playShot(vol, pan) {
     if (!audioReady()) return;
@@ -1425,6 +1558,16 @@
     o.type = 'triangle'; o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(680, t + 0.12);
     g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
     o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.15);
+  }
+  function playHeal() {                                  // rising chime for a banana pickup
+    if (!audioReady()) return;
+    const t = actx.currentTime, notes = [523.25, 659.25, 783.99];
+    for (let i = 0; i < notes.length; i++) {
+      const tt = t + i * 0.07, o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = notes[i];
+      g.gain.setValueAtTime(0.0001, tt); g.gain.exponentialRampToValueAtTime(0.26, tt + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, tt + 0.2);
+      o.connect(g); g.connect(master); o.start(tt); o.stop(tt + 0.22);
+    }
   }
   function playHurt() {
     if (!audioReady()) return;
@@ -1470,7 +1613,9 @@
   }
   function ensureMusic() {
     if (musicInit || !actx) return;
-    musicGain = actx.createGain(); musicGain.gain.value = 0.5; musicGain.connect(master);
+    // BGM bus runs straight to the destination with its own volume (SFX VOLUME
+    // no longer scales it); SOUND off still mutes it.
+    musicGain = actx.createGain(); musicGain.gain.value = sfxOn ? bgmVol : 0; musicGain.connect(actx.destination);
     calmGain = actx.createGain(); calmGain.gain.value = 1; calmGain.connect(musicGain);
     intenseGain = actx.createGain(); intenseGain.gain.value = 0.0001; intenseGain.connect(musicGain);
     const dist = actx.createWaveShaper(); dist.curve = makeDistCurve(28); dist.oversample = '2x';
@@ -1647,7 +1792,12 @@
     playShot(0.5, 0);                                   // own gunshot
     if (MP.connected && MP.client) MP.client.publish(mtopic('shot'), JSON.stringify({ id: MP.id }));
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
-    if (hitMonkey) { hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
+    if (hitMonkey) {
+      hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12;
+      if (hitMonkey.hp <= 0 && !hitMonkey.killed) {     // count the monkey as a kill (works solo too)
+        hitMonkey.killed = true; kills++; renderRoster(); recomputeKing(); publishState(true);
+      }
+    }
   }
 
   function sendHit(id) {
@@ -1803,14 +1953,16 @@
   roomEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') start(); });
 
   // ---- keyboard (used only in PC mode) ----
+  const typing = () => document.activeElement === chatInput;
   addEventListener('keydown', (ev) => {
+    if (typing()) return;                                    // don't drive the game while typing chat
     if (ev.code === 'Enter' && dead) { doContinue(); return; }
     if (mode !== 'pc') return;
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
     if (ev.code === 'KeyQ' && !ev.repeat) toggleCloak();      // stealth cloak
   });
-  addEventListener('keyup', (ev) => { keys[ev.code] = false; });
+  addEventListener('keyup', (ev) => { if (typing()) return; keys[ev.code] = false; });
 
   // ---- mouse look (PC mode) via pointer lock ----
   canvas.addEventListener('click', () => {
@@ -1939,10 +2091,12 @@
 
   // ---- settings: sound on/off + volume ----
   const sfxToggle = $('sfx-toggle'), sfxState = $('sfx-state'), volEl = $('volume'), volVal = $('vol-val');
+  const bgmEl = $('bgm'), bgmVal = $('bgm-val');
   function refreshSfxUI() {
     sfxState.textContent = sfxOn ? 'ON' : 'OFF';
     sfxToggle.classList.toggle('off', !sfxOn);
     volEl.value = sfxVol; volVal.textContent = Math.round(sfxVol * 100) + '%';
+    bgmEl.value = bgmVol; bgmVal.textContent = Math.round(bgmVol * 100) + '%';
   }
   sfxToggle.addEventListener('click', () => {
     sfxOn = !sfxOn;
@@ -1954,7 +2108,91 @@
     try { localStorage.setItem('contour.vol', String(sfxVol)); } catch (e) {}
     applySfx(); volVal.textContent = Math.round(sfxVol * 100) + '%';
   });
+  bgmEl.addEventListener('input', () => {
+    bgmVol = parseFloat(bgmEl.value);
+    try { localStorage.setItem('contour.bgm', String(bgmVol)); } catch (e) {}
+    applyBgm(); bgmVal.textContent = Math.round(bgmVol * 100) + '%';
+  });
   refreshSfxUI();
+
+  // ── minimap (top-left) + full-screen map ───────────────────────────
+  const miniCv = $('minimap'), miniCtx = miniCv.getContext('2d');
+  const bigCv = $('bigmap'), bigCtx = bigCv.getContext('2d');
+  const mapviewEl = $('mapview');
+  const MAP_R = (N + 0.6) * PITCH;                          // world half-extent shown
+  const w2m = (x, z, size) => [(x / (2 * MAP_R) + 0.5) * size, (z / (2 * MAP_R) + 0.5) * size];  // north (−z) up, east (+x) right
+  function drawMap(ctx, size, full) {
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = full ? 'rgba(12,18,16,0.92)' : 'rgba(12,18,16,0.55)';
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = 'rgba(150,170,120,0.45)'; ctx.lineWidth = full ? 4 : 2;
+    for (let i = -N; i <= N; i++) {
+      const ux = w2m(i * PITCH, 0, size)[0], vz = w2m(0, i * PITCH, size)[1];
+      ctx.beginPath(); ctx.moveTo(ux, 0); ctx.lineTo(ux, size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, vz); ctx.lineTo(size, vz); ctx.stroke();
+    }
+    ctx.fillStyle = '#F6D21C';                              // bananas
+    for (const b of bananas) { if (!b.active) continue; const m = w2m(b.x, b.z, size); ctx.beginPath(); ctx.arc(m[0], m[1], full ? 7 : 3.2, 0, 6.3); ctx.fill(); }
+    for (const [, peer] of MP.peers) {                      // other players
+      const m = w2m(peer.cur.x, peer.cur.z, size); ctx.fillStyle = peer.dead ? '#777' : '#ff6b5a';
+      ctx.beginPath(); ctx.arc(m[0], m[1], full ? 8 : 4.2, 0, 6.3); ctx.fill();
+    }
+    const pm = w2m(p.x, p.z, size), fx = -Math.sin(yaw), fz = -Math.cos(yaw), r = full ? 13 : 7;   // player arrow
+    ctx.fillStyle = '#8ff06a'; ctx.beginPath();
+    ctx.moveTo(pm[0] + fx * r, pm[1] + fz * r);
+    ctx.lineTo(pm[0] - fx * r * 0.62 - fz * r * 0.6, pm[1] - fz * r * 0.62 + fx * r * 0.6);
+    ctx.lineTo(pm[0] - fx * r * 0.62 + fz * r * 0.6, pm[1] - fz * r * 0.62 - fx * r * 0.6);
+    ctx.closePath(); ctx.fill();
+  }
+  let mapOpen = false, mapAcc = 0;
+  miniCv.addEventListener('click', (ev) => { ev.stopPropagation(); mapOpen = true; mapviewEl.classList.add('open'); drawMap(bigCtx, bigCv.width, true); });
+  mapviewEl.addEventListener('click', () => { mapOpen = false; mapviewEl.classList.remove('open'); });
+  function updateMinimap(dt) {
+    if (!inGame) return;
+    mapAcc += dt;
+    if (mapAcc < 0.1) return;
+    mapAcc = 0; drawMap(miniCtx, miniCv.width, false);
+    if (mapOpen) drawMap(bigCtx, bigCv.width, true);
+  }
+
+  // ── chat ───────────────────────────────────────────────────────────
+  const chatEl = $('chat'), chatLog = $('chat-log'), chatInput = $('chat-input'), chatBtn = $('chatbtn'), chatFeed = $('chatfeed');
+  function openChat() { chatEl.classList.add('open'); chatBtn.classList.remove('unread'); setTimeout(() => chatInput.focus(), 30); }
+  function closeChat() { chatEl.classList.remove('open'); chatInput.blur(); }
+  chatBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openChat(); });
+  $('chat-close').addEventListener('click', closeChat);
+  chatEl.addEventListener('click', (ev) => { if (ev.target === chatEl) closeChat(); });
+  function pushFeed(name, text) {
+    const d = document.createElement('div');
+    d.innerHTML = '<b>' + escHtml(name) + '</b> ' + escHtml(text);
+    chatFeed.appendChild(d);
+    while (chatFeed.children.length > 4) chatFeed.removeChild(chatFeed.firstChild);
+    setTimeout(() => { if (d.parentNode) d.parentNode.removeChild(d); }, 6500);
+  }
+  function appendChat(name, text, me) {
+    const d = document.createElement('div');
+    if (me) d.className = 'me';
+    d.innerHTML = '<b>' + escHtml(name) + '</b>' + escHtml(text);
+    chatLog.appendChild(d);
+    while (chatLog.children.length > 80) chatLog.removeChild(chatLog.firstChild);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+  function onChat(msg) {
+    if (!msg || !msg.m) return;
+    const me = msg.id === MP.id, name = msg.n || '匿名', text = String(msg.m).slice(0, 120);
+    appendChat(name, text, me);
+    if (!(me && MP.connected)) pushFeed(name, text);
+    if (!me && !chatEl.classList.contains('open')) chatBtn.classList.add('unread');
+  }
+  function sendChat() {
+    const text = (chatInput.value || '').trim().slice(0, 120);
+    if (!text) return;
+    chatInput.value = '';
+    if (MP.connected && MP.client) MP.client.publish(mtopic('chat'), JSON.stringify({ id: MP.id, n: MP.name, m: text }));
+    else { appendChat(MP.name, text, true); pushFeed(MP.name, text); }   // solo echo
+  }
+  $('chat-send').addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') { ev.preventDefault(); sendChat(); } });
 
   function onResize() {
     camera.aspect = innerWidth / innerHeight;
@@ -2108,6 +2346,7 @@
     updateCombat(dt);
     updatePeers(dt, now);
     updateMusic();
+    updateMinimap(dt);
     publishState(false);
 
     renderer.render(scene, camera);
