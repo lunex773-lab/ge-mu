@@ -351,6 +351,48 @@
     background: var(--grass); border: 0; border-radius: 3px; padding: 0 18px; cursor: pointer;
   }
 
+  /* ---- scope button + ADS overlay ---- */
+  #scopebtn {
+    position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
+    right: calc(150px + env(safe-area-inset-right)); bottom: calc(96px + env(safe-area-inset-bottom));
+    width: 62px; height: 62px; font-size: 22px; color: var(--line);
+    border: 1px solid var(--line-dim); background: rgba(234,243,228,.06); -webkit-tap-highlight-color: transparent;
+  }
+  #touch.live #scopebtn { pointer-events: auto; }
+  #scopebtn.on { color: var(--major); border-color: var(--major); background: rgba(200,251,234,.18); }
+  #scope { position: fixed; inset: 0; z-index: 3; pointer-events: none; display: none; }
+  #scope.on { display: block; }
+  #scope::before {   /* darkened surround with a clear circular sight */
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 26%, rgba(0,0,0,0.55) 30%, rgba(0,0,0,0.9) 41%);
+  }
+  #scope .ring { position: absolute; left: 50%; top: 50%; width: min(58vh,58vw); height: min(58vh,58vw); transform: translate(-50%,-50%); border: 2px solid rgba(0,0,0,.7); border-radius: 50%; }
+  #scope .mv, #scope .mh { position: absolute; left: 50%; top: 50%; background: rgba(20,30,20,.85); }
+  #scope .mv { width: 1px; height: min(58vh,58vw); transform: translate(-50%,-50%); }
+  #scope .mh { height: 1px; width: min(58vh,58vw); transform: translate(-50%,-50%); }
+
+  /* ---- button-layout editor ---- */
+  #settings .two { display: flex; gap: 8px; }
+  #settings .two .toggle { flex: 1; }
+  #settings .toggle {
+    width: 100%; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .12em;
+    color: var(--line); background: rgba(234,243,228,.06); border: 1px solid var(--line-dim); border-radius: 3px; padding: 10px; cursor: pointer;
+  }
+  #settings .toggle.off { opacity: .5; }
+  #layout-bar {
+    position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 22;
+    display: none; align-items: center; gap: 14px; padding: 8px 10px 8px 16px;
+    background: rgba(15,26,22,.94); border: 1px solid var(--line-dim); border-radius: 6px;
+    color: var(--line); font-size: 12px; letter-spacing: .06em;
+  }
+  #layout-bar.on { display: flex; }
+  #layout-bar button { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .16em; color: var(--ink); background: var(--grass); border: 0; border-radius: 3px; padding: 8px 16px; cursor: pointer; }
+  body.editlayout #touch { opacity: 1 !important; }
+  body.editlayout #stick, body.editlayout #jump, body.editlayout #fire,
+  body.editlayout #cloak, body.editlayout #chatbtn, body.editlayout #scopebtn {
+    pointer-events: auto !important; outline: 2px dashed var(--amber); outline-offset: 3px; touch-action: none;
+  }
+
 </style>
 </head>
 <body>
@@ -363,21 +405,13 @@
     <div id="hp-label">HP</div>
     <div id="hp-bar"><i id="hp-fill"></i><span id="hp-num">100</span></div>
   </div>
-  <div id="survey">
-    <dl>
-      <dt>ELEV</dt><dd id="v-elev">—</dd>
-      <dt>BRG</dt><dd id="v-brg">—</dd>
-      <dt>E</dt><dd id="v-e">—</dd>
-      <dt>N</dt><dd id="v-n">—</dd>
-    </dl>
-  </div>
   <div id="net">
     <div id="net-status">NET <b>—</b></div>
     <div id="net-list"></div>
   </div>
   <div id="meta">
     <div id="m-help">左スティック 移動 · ドラッグ 視点 · JUMP 跳ぶ</div>
-    <div>CI 4 m &nbsp;·&nbsp; <b id="v-fps">--</b> FPS</div>
+    <div><b id="v-fps">--</b> FPS</div>
   </div>
   <div id="toolbar">
     <button id="b-view" type="button">3人称</button>
@@ -394,8 +428,16 @@
   <button id="jump" type="button">JUMP</button>
   <button id="fire" type="button">FIRE</button>
   <button id="cloak" type="button">透明<b>OK</b></button>
+  <button id="scopebtn" type="button" aria-label="スコープ">🔭</button>
   <button id="chatbtn" type="button" aria-label="チャット">💬<i></i></button>
 </div>
+
+<div id="scope">
+  <div class="ring"></div>
+  <div class="mv"></div><div class="mh"></div>
+</div>
+
+<div id="layout-bar"><span>ボタンをドラッグして配置を変更</span><button id="layout-done" type="button">完了</button></div>
 
 <div id="gear" role="button" aria-label="設定">⚙</div>
 <div id="settings">
@@ -416,6 +458,10 @@
     <div class="row">
       <div class="lbl"><span>音楽の音量 · BGM VOLUME</span><b id="bgm-val">50%</b></div>
       <input id="bgm" type="range" min="0" max="1" step="0.05" value="0.5">
+    </div>
+    <div class="row">
+      <div class="lbl"><span>ボタン配置 · BUTTON LAYOUT</span></div>
+      <div class="two"><button id="layout-edit" class="toggle" type="button">配置を編集</button><button id="layout-reset" class="toggle" type="button">リセット</button></div>
     </div>
     <button class="close" id="settings-close">閉じる</button>
   </div>
@@ -524,6 +570,51 @@
       addBuilding((sx0 + sx1) / 2, (sz0 + sz1) / 2, hw, hd, h, (rrand() * 4) | 0);
     }
   }
+
+  // ── enterable towers: convert a handful of roomy blocks into open, multi-floor
+  //  structures you can walk into and climb (2–3 floors + roof, stairs, railings).
+  //  They are pulled OUT of buildingList so they get their own floor/wall physics
+  //  instead of the solid-box collision. ──────────────────────────────────────
+  const towers = [];               // built later, once the scene + materials exist
+  const towerSpecs = [];
+  const FH = 3.5;                                   // floor-to-floor height
+  {
+    const cand = buildingList.filter((b) => b.hw >= 7 && b.hd >= 7 && b.h >= 10 && b.h <= 46);
+    cand.sort(() => rrand() - 0.5);
+    const chosen = [];
+    for (const b of cand) {
+      if (chosen.length >= 9) break;
+      if (chosen.some((c) => Math.abs(c.cx - b.cx) < PITCH * 1.1 && Math.abs(c.cz - b.cz) < PITCH * 1.1)) continue;   // spread them out
+      chosen.push(b);
+    }
+    for (const b of chosen) {
+      const idx = buildingList.indexOf(b); if (idx >= 0) buildingList.splice(idx, 1);
+      const arr = bBucket.get(bkey(b.cx, b.cz)); if (arr) { const ai = arr.indexOf(b); if (ai >= 0) arr.splice(ai, 1); }
+      towerSpecs.push({ cx: b.cx, cz: b.cz, hw: b.hw, hd: b.hd, floors: 2 + (rrand() < 0.5 ? 1 : 0) });
+    }
+  }
+  const towerAt = (x, z) => {
+    for (const t of towers) if (Math.abs(x - t.cx) <= t.hw + 0.7 && Math.abs(z - t.cz) <= t.hd + 0.7) return t;
+    return null;
+  };
+  // highest walkable surface at (x,z) not more than a small step above the feet
+  function supportHeight(x, z, feetY) {
+    let s = height(x, z);
+    const t = towerAt(x, z);
+    if (t) {
+      const step = 0.62;
+      for (const b of t.slabBoxes) if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && b.y1 <= feetY + step && b.y1 > s) s = b.y1;
+      for (const r of t.ramps) {
+        if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) {
+          const f = r.axis === 'z' ? (z - r.z0) / (r.z1 - r.z0) : (x - r.x0) / (r.x1 - r.x0);
+          const ry = r.yA + (r.yB - r.yA) * Math.max(0, Math.min(1, f));
+          if (ry <= feetY + step && ry > s) s = ry;
+        }
+      }
+    }
+    return s;
+  }
+
   // 0 on the street, roof height inside a footprint (blocks shots + walls off towers)
   function height(x, z) {
     const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH); let h = 0;
@@ -545,7 +636,7 @@
     const R = (N - 0.5) * PITCH;
     for (let i = 0; i < 3000; i++) {
       const x = (Math.random() * 2 - 1) * R, z = (Math.random() * 2 - 1) * R;
-      if (clearAt(x, z, 1.5)) return { x, z };
+      if (clearAt(x, z, 1.5) && !towerAt(x, z)) return { x, z };
     }
     return { x: PITCH * 0.5, z: 0 };
   }
@@ -691,9 +782,75 @@
     }));
   }
   const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);   // base at y=0
+  const boxGeoC = new THREE.BoxGeometry(1, 1, 1);                               // centred (for ramps)
   for (const b of buildingList) {
     const m = new THREE.Mesh(boxGeo, buildMats[b.mat]);
     m.scale.set(b.hw * 2, b.h, b.hd * 2); m.position.set(b.cx, 0, b.cz); scene.add(m);
+  }
+
+  // ── build the enterable towers selected earlier ─────────────────────
+  const towerConcrete = new THREE.MeshLambertMaterial({ color: 0x8a8f96 });
+  const towerFloor = new THREE.MeshLambertMaterial({ color: 0x70757c });
+  const towerRail = new THREE.MeshLambertMaterial({ color: 0x3a3f45 });
+  const towerRamp = new THREE.MeshLambertMaterial({ color: 0x7a7f86 });
+  function buildTower(cx, cz, hw, hd, floors) {
+    const t = { cx, cz, hw, hd, floors, slabBoxes: [], wallBoxes: [], ramps: [], shotBoxes: [] };
+    const X0 = cx - hw, X1 = cx + hw, Z0 = cz - hd, Z1 = cz + hd, WT = 0.3, top = floors * FH;
+    const RWr = Math.max(1.7, Math.min(hw, hd) * 0.5);          // stairwell shaft width (x)
+    const RL = Math.max(4.2, Math.min(2 * hd - 1.4, 8));        // shaft length (z)
+    const sx0 = X0, sx1 = X0 + RWr, sz0 = cz - RL / 2, sz1 = cz + RL / 2;
+    const box = (x0, x1, z0, z1, y0, y1, m) => {
+      const g = new THREE.Mesh(boxGeo, m);
+      g.scale.set(Math.max(0.02, x1 - x0), Math.max(0.02, y1 - y0), Math.max(0.02, z1 - z0));
+      g.position.set((x0 + x1) / 2, y0, (z0 + z1) / 2); scene.add(g);
+    };
+    const slab = (x0, x1, z0, z1, y) => { if (x1 - x0 < 0.06 || z1 - z0 < 0.06) return; const b = { x0, x1, z0, z1, y0: y - 0.28, y1: y }; t.slabBoxes.push(b); t.shotBoxes.push(b); box(x0, x1, z0, z1, y - 0.28, y, towerFloor); };
+    const wall = (x0, x1, y0, y1, z0, z1, m) => { const b = { x0, x1, y0, y1, z0, z1 }; t.wallBoxes.push(b); t.shotBoxes.push(b); box(x0, x1, z0, z1, y0, y1, m || towerConcrete); };
+    // upper floor slabs + roof (footprint minus the stairwell shaft)
+    for (let L = 1; L <= floors; L++) { const y = L * FH; slab(sx1, X1, Z0, Z1, y); slab(sx0, sx1, Z0, sz0, y); slab(sx0, sx1, sz1, Z1, y); }
+    // ground-floor walls with a doorway gap on the +z face
+    const DW = 2.6;
+    wall(X0, X1, 0, FH, Z0 - WT, Z0);
+    wall(X0, cx - DW / 2, 0, FH, Z1, Z1 + WT);
+    wall(cx + DW / 2, X1, 0, FH, Z1, Z1 + WT);
+    wall(X0 - WT, X0, 0, FH, Z0, Z1);
+    wall(X1, X1 + WT, 0, FH, Z0, Z1);
+    // low railings around every upper floor + roof (shoot over them)
+    for (let L = 1; L <= floors; L++) {
+      const y = L * FH, RHy = 1.05;
+      wall(X0, X1, y, y + RHy, Z0 - WT, Z0, towerRail);
+      wall(X0, X1, y, y + RHy, Z1, Z1 + WT, towerRail);
+      wall(X0 - WT, X0, y, y + RHy, Z0, Z1, towerRail);
+      wall(X1, X1 + WT, y, y + RHy, Z0, Z1, towerRail);
+    }
+    for (const xx of [X0, X1]) for (const zz of [Z0, Z1]) wall(xx - 0.16, xx + 0.16, 0, top, zz - 0.16, zz + 0.16, towerConcrete);   // columns
+    // switchback stairs filling the shaft
+    for (let L = 1; L <= floors; L++) {
+      const yLow = (L - 1) * FH, yHigh = L * FH, up = (L % 2 === 1);
+      t.ramps.push({ x0: sx0 + 0.05, x1: sx1 - 0.05, z0: sz0, z1: sz1, axis: 'z', yA: up ? yLow : yHigh, yB: up ? yHigh : yLow });
+      t.shotBoxes.push({ x0: sx0, x1: sx1, z0: sz0, z1: sz1, y0: yLow - 0.1, y1: yHigh });
+      const len = Math.hypot(RL, FH), ang = Math.atan2(FH, RL) * (up ? -1 : 1);
+      const rm = new THREE.Mesh(boxGeoC, towerRamp);
+      rm.scale.set(RWr - 0.1, 0.16, len); rm.position.set((sx0 + sx1) / 2, (yLow + yHigh) / 2, cz); rm.rotation.x = ang; scene.add(rm);
+    }
+    return t;
+  }
+  for (const s of towerSpecs) towers.push(buildTower(s.cx, s.cz, s.hw, s.hd, s.floors));
+
+  // ray vs a tower AABB (slab method); ignores boxes the origin sits inside
+  function rayAabb(ro, rd, b) {
+    let tmin = 0, tmax = Infinity;
+    const lo = [b.x0, b.y0, b.z0], hi = [b.x1, b.y1, b.z1], o = [ro.x, ro.y, ro.z], d = [rd.x, rd.y, rd.z];
+    for (let a = 0; a < 3; a++) {
+      if (Math.abs(d[a]) < 1e-9) { if (o[a] < lo[a] || o[a] > hi[a]) return Infinity; }
+      else { let t1 = (lo[a] - o[a]) / d[a], t2 = (hi[a] - o[a]) / d[a]; if (t1 > t2) { const s = t1; t1 = t2; t2 = s; } if (t1 > tmin) tmin = t1; if (t2 < tmax) tmax = t2; if (tmin > tmax) return Infinity; }
+    }
+    return tmin > 0.05 ? tmin : Infinity;
+  }
+  function rayTowers(ro, rd) {
+    let best = Infinity;
+    for (const t of towers) for (const b of t.shotBoxes) { const d = rayAabb(ro, rd, b); if (d < best) best = d; }
+    return best;
   }
 
   // ──────────────────────────────────────────────────────────
@@ -1478,6 +1635,9 @@
   let yaw = 0, pitch = -0.04, vy = 0, grounded = false, bob = 0, wantJump = false;
   let stridePhase = 0, jumpCharge = 0, charging = false, landTimer = 0, prevGrounded = true, strideDir = 1;
   let orbitYaw = 0, orbitPitch = 0.18;
+  let scoped = false;                          // aiming down the scope (zoomed)
+  let editLayout = false;                      // dragging touch buttons to reposition them
+  const BASE_FOV = 72, SCOPE_FOV = 28;
   const PREJUMP = 0.11;
   const keys = Object.create(null);
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1765,12 +1925,14 @@
     if (view === 'first') fpGun.userData.tip.getWorldPosition(_mz);
     else _mz.copy(_ro).addScaledVector(_rd, 0.4);
 
-    // nearest obstacle: march the ray; buildings register via height()
+    // nearest obstacle: march the ray for terrain/solid buildings, plus an exact
+    // ray-vs-box test against tower floors/walls (so floors give real cover).
     let blockDist = MAX_RANGE;
     for (let d = 2; d < MAX_RANGE; d += 2.0) {
       _p2.copy(_ro).addScaledVector(_rd, d);
       if (_p2.y < height(_p2.x, _p2.z)) { blockDist = d; break; }
     }
+    blockDist = Math.min(blockDist, rayTowers(_ro, _rd));
     // nearest targetable peer in front of that
     let hitId = null, hitDist = Infinity, hitMonkey = null;
     for (const [id, peer] of MP.peers) {
@@ -1829,6 +1991,7 @@
   }
   function onDeath() {
     dead = true; fireHeld = false;
+    setScope(false);
     playDeath();
     // credit the kill to whoever last hit us
     if (lastAttacker && MP.connected && MP.client) MP.client.publish(mtopic('kill'), JSON.stringify({ by: lastAttacker }));
@@ -1892,11 +2055,11 @@
   // combat HUD + input
   const crosshairEl = $('crosshair'), hurtEl = $('hurt'), hpFill = $('hp-fill'), hpNum = $('hp-num');
   const gameoverEl = $('gameover'), fireBtn = $('fire'), cloakBtn = $('cloak');
-  fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); fireHeld = true; fire(); }, { passive: false });
+  fireBtn.addEventListener('touchstart', (e) => { if (editLayout) return; e.preventDefault(); fireHeld = true; fire(); }, { passive: false });
   fireBtn.addEventListener('touchend',   (e) => { e.preventDefault(); fireHeld = false; }, { passive: false });
   fireBtn.addEventListener('touchcancel', () => { fireHeld = false; });
-  cloakBtn.addEventListener('touchstart', (e) => { e.preventDefault(); toggleCloak(); }, { passive: false });
-  cloakBtn.addEventListener('click', () => toggleCloak());
+  cloakBtn.addEventListener('touchstart', (e) => { if (editLayout) return; e.preventDefault(); toggleCloak(); }, { passive: false });
+  cloakBtn.addEventListener('click', () => { if (editLayout) return; toggleCloak(); });
   $('continue').addEventListener('click', doContinue);
   addEventListener('mousedown', (e) => { if (mode === 'pc' && e.button === 0 && document.pointerLockElement === canvas && !dead) { fireHeld = true; fire(); } });
   addEventListener('mouseup',   (e) => { if (e.button === 0) fireHeld = false; });
@@ -1904,6 +2067,7 @@
 
   // route look input: first-person aims the player, third-person orbits the camera
   function applyLook(dx, dy) {
+    if (scoped) { dx *= 0.42; dy *= 0.42; }        // steadier aim while zoomed
     if (view === 'third') {
       orbitYaw  -= dx;
       orbitPitch = Math.max(-0.25, Math.min(1.3, orbitPitch - dy));
@@ -1911,6 +2075,70 @@
       yaw   -= dx;
       pitch = Math.max(-1.55, Math.min(1.55, pitch - dy));
     }
+  }
+
+  // ---- scope (aim down sights): zoom the FOV + show the sight overlay ----
+  const scopeBtn = $('scopebtn'), scopeEl = $('scope');
+  function setScope(on) {
+    if (on && (view !== 'first' || dead || !isPlaying())) return;
+    scoped = on;
+    camera.fov = on ? SCOPE_FOV : BASE_FOV; camera.updateProjectionMatrix();
+    scopeEl.classList.toggle('on', on);
+    scopeBtn.classList.toggle('on', on);
+    crosshairEl.style.visibility = on ? 'hidden' : '';
+  }
+  scopeBtn.addEventListener('touchstart', (e) => { if (editLayout) return; e.preventDefault(); setScope(!scoped); }, { passive: false });
+  scopeBtn.addEventListener('click', () => { if (editLayout) return; setScope(!scoped); });
+  addEventListener('mousedown', (e) => { if (mode === 'pc' && e.button === 2 && document.pointerLockElement === canvas) { e.preventDefault(); setScope(true); } });
+  addEventListener('mouseup',   (e) => { if (e.button === 2) setScope(false); });
+  addEventListener('contextmenu', (e) => { if (mode === 'pc' && isPlaying()) e.preventDefault(); });
+
+  // ---- button-layout editor: drag the touch controls, saved per browser ----
+  const DRAG_IDS = ['stick', 'jump', 'fire', 'cloak', 'scopebtn', 'chatbtn'];
+  let layout = {};
+  try { layout = JSON.parse(localStorage.getItem('contour.layout') || '{}') || {}; } catch (e) { layout = {}; }
+  function applyLayout() {
+    for (const id of DRAG_IDS) {
+      const el = $(id); if (!el) continue;
+      const pos = layout[id];
+      if (pos) { el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto'; }
+      else { el.style.left = el.style.top = el.style.right = el.style.bottom = ''; }
+    }
+  }
+  applyLayout();
+  function setEditLayout(on) {
+    editLayout = on;
+    document.body.classList.toggle('editlayout', on);
+    $('layout-bar').classList.toggle('on', on);
+    if (on) { closeSettings(); if (document.pointerLockElement === canvas) document.exitPointerLock(); }
+  }
+  $('layout-edit').addEventListener('click', () => setEditLayout(true));
+  $('layout-done').addEventListener('click', () => setEditLayout(false));
+  $('layout-reset').addEventListener('click', () => {
+    layout = {}; try { localStorage.removeItem('contour.layout'); } catch (e) {}
+    applyLayout();
+  });
+  for (const id of DRAG_IDS) {
+    const el = $(id); if (!el) continue;
+    el.addEventListener('pointerdown', (ev) => {
+      if (!editLayout) return;
+      ev.preventDefault(); ev.stopPropagation();
+      const r = el.getBoundingClientRect(), offx = ev.clientX - r.left, offy = ev.clientY - r.top;
+      try { el.setPointerCapture(ev.pointerId); } catch (e) {}
+      const move = (e) => {
+        const x = Math.max(2, Math.min(innerWidth - r.width - 2, e.clientX - offx));
+        const y = Math.max(2, Math.min(innerHeight - r.height - 2, e.clientY - offy));
+        el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto';
+        layout[id] = { x, y };
+      };
+      const up = () => {
+        el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+        try { localStorage.setItem('contour.layout', JSON.stringify(layout)); } catch (e) {}
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
   }
 
   function applyMode() {
@@ -2003,6 +2231,7 @@
   }
 
   stick.addEventListener('touchstart', (ev) => {
+    if (editLayout) return;
     ev.preventDefault();
     const t = ev.changedTouches[0];
     moveId = t.identifier;
@@ -2056,13 +2285,13 @@
   document.addEventListener('touchend', endTouch);
   document.addEventListener('touchcancel', endTouch);
 
-  jumpBtn.addEventListener('touchstart', (ev) => { ev.preventDefault(); wantJump = true; }, { passive: false });
+  jumpBtn.addEventListener('touchstart', (ev) => { if (editLayout) return; ev.preventDefault(); wantJump = true; }, { passive: false });
   jumpBtn.addEventListener('click', () => { wantJump = true; });
 
   // ---- toolbar toggles ----
   $('b-view').addEventListener('click', () => {
     view = view === 'first' ? 'third' : 'first';
-    if (view === 'third') { orbitYaw = yaw; orbitPitch = 0.18; }
+    if (view === 'third') { orbitYaw = yaw; orbitPitch = 0.18; setScope(false); }   // no scope in third-person
     $('b-view').textContent = view === 'first' ? '3人称' : '1人称';
   });
   $('b-mode').addEventListener('click', () => {
@@ -2159,7 +2388,7 @@
   const chatEl = $('chat'), chatLog = $('chat-log'), chatInput = $('chat-input'), chatBtn = $('chatbtn'), chatFeed = $('chatfeed');
   function openChat() { chatEl.classList.add('open'); chatBtn.classList.remove('unread'); setTimeout(() => chatInput.focus(), 30); }
   function closeChat() { chatEl.classList.remove('open'); chatInput.blur(); }
-  chatBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openChat(); });
+  chatBtn.addEventListener('click', (ev) => { if (editLayout) return; ev.stopPropagation(); openChat(); });
   $('chat-close').addEventListener('click', closeChat);
   chatEl.addEventListener('click', (ev) => { if (ev.target === chatEl) closeChat(); });
   function pushFeed(name, text) {
@@ -2266,11 +2495,26 @@
         }
       }
     }
+    // --- tower walls/railings: push out only where the body overlaps vertically ---
+    { const t = towerAt(p.x, p.z);
+      if (t) {
+        const feet = p.y - EYE, head = feet + 1.7;
+        for (let pass = 0; pass < 2; pass++) for (const b of t.wallBoxes) {
+          if (head <= b.y0 || feet >= b.y1) continue;               // no vertical overlap → walk past (doorways, over railings)
+          const minx = b.x0 - PRAD, maxx = b.x1 + PRAD, minz = b.z0 - PRAD, maxz = b.z1 + PRAD;
+          if (p.x > minx && p.x < maxx && p.z > minz && p.z < maxz) {
+            const dxL = p.x - minx, dxR = maxx - p.x, dzL = p.z - minz, dzR = maxz - p.z;
+            if (Math.min(dxL, dxR) < Math.min(dzL, dzR)) p.x = dxL < dxR ? minx : maxx;
+            else p.z = dzL < dzR ? minz : maxz;
+          }
+        }
+      }
+    }
 
-    // --- gravity + ground ---
+    // --- gravity + ground (terrain, building roofs, or tower floors/stairs) ---
     vy -= GRAV * dt;
     p.y += vy * dt;
-    const floor = height(p.x, p.z) + EYE;
+    const floor = supportHeight(p.x, p.z, p.y - EYE) + EYE;
     if (p.y <= floor) { p.y = floor; vy = 0; grounded = true; }
     else grounded = false;
 
@@ -2323,7 +2567,7 @@
       const cx = p.x + Math.sin(orbitYaw) * cp * cdist;
       const cz = p.z + Math.cos(orbitYaw) * cp * cdist;
       let cy = p.y + 0.4 + Math.sin(orbitPitch) * cdist;
-      const camFloor = height(cx, cz) + 0.6;
+      const camFloor = supportHeight(cx, cz, cy - 0.6) + 0.6;
       if (cy < camFloor) cy = camFloor;
       camera.position.set(cx, cy, cz);
       camera.lookAt(p.x, p.y + 0.2, p.z);
@@ -2351,16 +2595,9 @@
 
     renderer.render(scene, camera);
 
-    // --- survey readout ---
+    // --- FPS readout ---
     fpsN++; fpsT += dt;
     if (fpsT >= 0.4) {
-      const elev = p.y - EYE;
-      $('v-elev').textContent = elev.toFixed(1) + ' m';
-      $('v-elev').className = elev > 45 ? 'up' : '';
-      let brg = (-yaw * 180 / Math.PI) % 360; if (brg < 0) brg += 360;
-      $('v-brg').textContent = brg.toFixed(0).padStart(3, '0') + '°';
-      $('v-e').textContent = p.x.toFixed(0);
-      $('v-n').textContent = (-p.z).toFixed(0);
       $('v-fps').textContent = Math.round(fpsN / fpsT);
       fpsN = 0; fpsT = 0;
     }
