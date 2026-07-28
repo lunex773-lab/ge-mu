@@ -560,6 +560,7 @@
   const MID_T  = ['office', 'hotel', 'hospital', 'commercial', 'apartment'];
   const LOW_T  = ['apartment', 'school', 'warehouse', 'factory', 'parking', 'commercial'];
   const FH = 3.5;                                        // floor-to-floor height
+  const WGRID_H = 3.6, WGRID_V = 3.5;                    // facade window grid (must match the shader)
   for (let bi = -N; bi < N; bi++) for (let bj = -N; bj < N; bj++) {
     if (rrand() < 0.05) continue;                                  // rare vacant lot
     const x0 = bi * PITCH + HALF, x1 = (bi + 1) * PITCH - HALF;
@@ -835,33 +836,55 @@
       const y = L * FH;
       slab(sx1, X1, Z0, Z1, y); slab(sx0, sx1, Z0, sz0, y); slab(sx0, sx1, sz1, Z1, y);
     }
+    // ---- facade ----------------------------------------------------------
+    // The accessible floors wear the SAME shader material as the mass above and
+    // are cut on the shader's own window grid, so the whole tower reads as one
+    // building. Spandrel + header + piers are solid; the pane rectangles between
+    // them are genuine holes, which is what you see through and shoot through.
+    const facKey = 'fac' + (b.mat < 0 ? 0 : b.mat);
+    const mrg = 0.30 + (0.06 - 0.30) * (B_LOOK[b.type] ? B_LOOK[b.type].glass : 0.4);
+    const PW = 2 * mrg * WGRID_H;                        // pier width on the grid
+    const SILLH = 0.20 * WGRID_V, HEADY = 0.86 * WGRID_V;  // window band within a floor
+    const piers = (a0, a1) => {                          // solid segments on the column grid
+      const out = [];
+      for (let k = Math.floor(a0 / WGRID_H) - 1; k <= Math.ceil(a1 / WGRID_H) + 1; k++) {
+        const c = k * WGRID_H, q0 = Math.max(a0, c - PW / 2), q1 = Math.min(a1, c + PW / 2);
+        if (q1 - q0 > 0.06) out.push([q0, q1]);
+      }
+      return out;
+    };
     // ground floor: solid shell with a doorway on the +z face
     const DW = 3.2;
-    wall('wall', X0 - WT, X1 + WT, 0, FH, Z0 - WT, Z0);
-    wall('wall', X0 - WT, b.cx - DW / 2, 0, FH, Z1, Z1 + WT);
-    wall('wall', b.cx + DW / 2, X1 + WT, 0, FH, Z1, Z1 + WT);
-    wall('wall', X0 - WT, X0, 0, FH, Z0, Z1);
-    wall('wall', X1, X1 + WT, 0, FH, Z0, Z1);
-    // upper floors: sills + piers leave window bands to shoot through
-    const SH = 1.1, PH = FH - 0.26, topL = openTop ? acc : acc - 1;
-    for (let L = 1; L <= topL; L++) {
-      const y = L * FH, roofL = openTop && L === acc;
-      const hgt = roofL ? 1.15 : SH;                     // top level gets a parapet instead
-      wall('sill', X0 - WT, X1 + WT, y, y + hgt, Z0 - WT, Z0);
-      wall('sill', X0 - WT, X1 + WT, y, y + hgt, Z1, Z1 + WT);
-      wall('sill', X0 - WT, X0, y, y + hgt, Z0, Z1);
-      wall('sill', X1, X1 + WT, y, y + hgt, Z0, Z1);
-      if (roofL) continue;
-      for (const t of [0.34, 0.66]) {                    // piers between the windows
-        const px = X0 + 2 * b.hw * t, pz = Z0 + 2 * b.hd * t;
-        wall('pier', px - 0.6, px + 0.6, y + SH, y + PH, Z0 - WT, Z0);
-        wall('pier', px - 0.6, px + 0.6, y + SH, y + PH, Z1, Z1 + WT);
-        wall('pier', X0 - WT, X0, y + SH, y + PH, pz - 0.6, pz + 0.6);
-        wall('pier', X1, X1 + WT, y + SH, y + PH, pz - 0.6, pz + 0.6);
+    wall(facKey, X0 - WT, X1 + WT, 0, FH, Z0 - WT, Z0);
+    wall(facKey, X0 - WT, b.cx - DW / 2, 0, FH, Z1, Z1 + WT);
+    wall(facKey, b.cx + DW / 2, X1 + WT, 0, FH, Z1, Z1 + WT);
+    wall(facKey, X0 - WT, X0, 0, FH, Z0, Z1);
+    wall(facKey, X1, X1 + WT, 0, FH, Z0, Z1);
+    // upper rooms: spandrel below the glass, header above it, piers between panes
+    for (let L = 1; L <= acc - 1; L++) {
+      const y = L * FH;
+      for (const q of [[y, y + SILLH], [y + HEADY, y + FH]]) {     // spandrel + header
+        wall(facKey, X0 - WT, X1 + WT, q[0], q[1], Z0 - WT, Z0);
+        wall(facKey, X0 - WT, X1 + WT, q[0], q[1], Z1, Z1 + WT);
+        wall(facKey, X0 - WT, X0, q[0], q[1], Z0, Z1);
+        wall(facKey, X1, X1 + WT, q[0], q[1], Z0, Z1);
+      }
+      for (const [q0, q1] of piers(X0 - WT, X1 + WT)) {             // ±z faces
+        wall(facKey, q0, q1, y + SILLH, y + HEADY, Z0 - WT, Z0);
+        wall(facKey, q0, q1, y + SILLH, y + HEADY, Z1, Z1 + WT);
+      }
+      for (const [q0, q1] of piers(Z0, Z1)) {                       // ±x faces
+        wall(facKey, X0 - WT, X0, y + SILLH, y + HEADY, q0, q1);
+        wall(facKey, X1, X1 + WT, y + SILLH, y + HEADY, q0, q1);
       }
     }
-    // corner columns tie the open floors together
-    for (const xx of [X0, X1]) for (const zz of [Z0, Z1]) put('col', xx, 0, zz, 0.5, accH, 0.5);
+    if (openTop) {                                       // short block: parapet round the roof
+      const y = acc * FH;
+      wall(facKey, X0 - WT, X1 + WT, y, y + 1.1, Z0 - WT, Z0);
+      wall(facKey, X0 - WT, X1 + WT, y, y + 1.1, Z1, Z1 + WT);
+      wall(facKey, X0 - WT, X0, y, y + 1.1, Z0, Z1);
+      wall(facKey, X1, X1 + WT, y, y + 1.1, Z0, Z1);
+    }
     // switchback stairs filling the shaft
     for (let L = 1; L <= acc; L++) {
       const yLow = (L - 1) * FH, yHigh = L * FH, up = (L % 2 === 1);
@@ -880,7 +903,7 @@
       rec.walls.push(bx); rec.shots.push(bx);
       // parapet ring on the real roof
       for (const q of [[X0 - WT, X1 + WT, Z0 - WT, Z0], [X0 - WT, X1 + WT, Z1, Z1 + WT], [X0 - WT, X0, Z0, Z1], [X1, X1 + WT, Z0, Z1]])
-        put('para', (q[0] + q[1]) / 2, b.h, (q[2] + q[3]) / 2, q[1] - q[0], 1.0, q[3] - q[2]);
+        put(facKey, (q[0] + q[1]) / 2, b.h, (q[2] + q[3]) / 2, q[1] - q[0], 1.0, q[3] - q[2]);
     }
     // roof gear (visible from every sniping perch)
     const RY = b.h;
@@ -909,7 +932,8 @@
       im.instanceMatrix.needsUpdate = true; scene.add(im);
     });
     for (const [k, arr] of IT) {
-      const im = new THREE.InstancedMesh(IGEO[k] || boxGeo, IMAT[IKMAT[k] || 'wall'], arr.length);
+      const mat = k.slice(0, 3) === 'fac' ? buildMats[+k.slice(3)] : IMAT[IKMAT[k] || 'wall'];
+      const im = new THREE.InstancedMesh(IGEO[k] || boxGeo, mat, arr.length);
       im.frustumCulled = false;
       for (let i = 0; i < arr.length; i++) {
         const t = arr[i];
@@ -1663,6 +1687,7 @@
     peer.lastSeen = peer.recvT;
     if (s.hp != null) peer.hp = s.hp;
     peer.dead = !!s.d;
+    if (s.d && s.kb === MP.id) creditKill(s.id, s.ds);   // backup path: state repeats, so this survives packet loss
     peer.inv = !!s.iv;
     const prevK = peer.kills; peer.kills = s.k || 0;
     if (peer.kills !== prevK) recomputeKing();
@@ -1708,7 +1733,7 @@
       if (!msg) return;
       if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
       if (t.slice(-5) === '/chat') { onChat(msg); return; }
-      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) { kills++; renderRoster(); publishState(true); recomputeKing(); } return; }
+      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
       if (!msg.id) return;
       if (t.slice(-5) === '/shot') { if (msg.id !== MP.id) onPeerShot(msg.id); return; }
       if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
@@ -1735,7 +1760,7 @@
       vx: +vx.toFixed(2), vz: +vz.toFixed(2),
       hp: Math.round(hp), k: kills,
     };
-    if (dead) msg.d = 1;
+    if (dead) { msg.d = 1; msg.ds = deathSeq; if (killerId) msg.kb = killerId; }
     if (cloak > 0) msg.iv = 1;                 // invisible to others while cloaked
     MP.client.publish(mtopic('state/' + MP.id), JSON.stringify(msg));
   }
@@ -1811,7 +1836,9 @@
   let fireCd = 0, fireHeld = false;
   let cloak = 0, cloakCd = 0;          // seconds of cloak left / cooldown left
   let recoil = 0, muzzleTimer = 0, hitMarkTimer = 0, hurtT = 0, camShake = 0;
-  let kills = 0, lastAttacker = null, kingId = null;
+  let kills = 0, lastAttacker = null, lastAttackerT = 0, kingId = null;
+  let deathSeq = 0, killerId = null;
+  const creditedKills = new Set();
 
   const isPlaying = () => gate.classList.contains('gone');
 
@@ -2097,9 +2124,7 @@
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
     if (hitMonkey) {
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12;
-      if (hitMonkey.hp <= 0 && !hitMonkey.killed) {     // count the monkey as a kill (works solo too)
-        hitMonkey.killed = true; kills++; renderRoster(); recomputeKing(); publishState(true);
-      }
+      if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
     }
   }
 
@@ -2112,7 +2137,7 @@
   }
   function applyDamage(d, by) {
     if (dead) return;                                 // cloak hides you, but does NOT block damage
-    if (by) lastAttacker = by;
+    if (by) { lastAttacker = by; lastAttackerT = performance.now(); }
     hp = Math.max(0, hp - d);
     showHurt(); playHurt(); camShake = 0.28;          // visual + audio + shake feedback
     updateHpUI();
@@ -2130,12 +2155,30 @@
       : f > 0.25 ? 'linear-gradient(90deg,#c9a13a,#e8c74c)' : 'linear-gradient(90deg,#a83228,#e0503f)';
     hpNum.textContent = Math.ceil(hp);
   }
+  // Award a kill at most once per death. The victim tells the room who killed
+  // them, keyed by <victim>:<deathSeq>, so the message can be repeated freely to
+  // ride out the public broker's QoS-0 packet loss without double counting.
+  function creditKill(victim, seq) {
+    if (!victim || seq == null) return;
+    const key = victim + ':' + seq;
+    if (creditedKills.has(key)) return;
+    if (creditedKills.size > 400) creditedKills.clear();
+    creditedKills.add(key);
+    kills++; renderRoster(); recomputeKing(); publishState(true);
+  }
   function onDeath() {
     dead = true; fireHeld = false;
     setScope(false);
     playDeath();
-    // credit the kill to whoever last hit us
-    if (lastAttacker && MP.connected && MP.client) MP.client.publish(mtopic('kill'), JSON.stringify({ by: lastAttacker }));
+    // credit whoever hit us last, but only if it was recent — a car or an angry
+    // monkey finishing us off must not hand a stale attacker the point
+    killerId = (lastAttacker && performance.now() - lastAttackerT < 12000) ? lastAttacker : null;
+    deathSeq++;
+    if (killerId && MP.connected && MP.client) {
+      const pay = JSON.stringify({ by: killerId, v: MP.id, ds: deathSeq });
+      const send = () => { try { MP.client.publish(mtopic('kill'), pay); } catch (e) {} };
+      send(); setTimeout(send, 220); setTimeout(send, 700);
+    }
     gameoverEl.classList.add('show');
     if (mode === 'pc' && document.pointerLockElement === canvas) document.exitPointerLock();
     publishState(true);
@@ -2144,7 +2187,7 @@
     const s = pickSpawn(); p.set(s.x, EYE, s.z);
   }
   function doContinue() {
-    hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0; lastAttacker = null;
+    hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0; lastAttacker = null; lastAttackerT = 0; killerId = null;
     setSelfCloak(false); respawn();
     updateHpUI(); updateCloakBtn();
     gameoverEl.classList.remove('show');
