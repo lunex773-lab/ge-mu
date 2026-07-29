@@ -555,6 +555,10 @@
       <input id="bgm" type="range" min="0" max="1" step="0.05" value="0.5">
     </div>
     <div class="row">
+      <div class="lbl"><span>自動画質 · AUTO QUALITY</span><b id="autoq-state">ON</b></div>
+      <button id="autoq-toggle" class="toggle" type="button">ON / OFF</button>
+    </div>
+    <div class="row">
       <div class="lbl"><span>ボタン配置 · BUTTON LAYOUT</span></div>
       <div class="two"><button id="layout-edit" class="toggle" type="button">配置を編集</button><button id="layout-reset" class="toggle" type="button">リセット</button></div>
     </div>
@@ -725,6 +729,13 @@
   renderer.setSize(innerWidth, innerHeight);
   renderer.setClearColor(C.zenith);
   document.body.appendChild(renderer.domElement);
+
+  // adaptive-quality state (declared early: the settings panel wires it up
+  // long before the update function further down runs)
+  const QSCALE = [0.6, 0.75, 0.9, 1.0];
+  let autoQ = true, qLevel = 3, qFrames = 0, qAcc = 0, qCool = 0, qFps = 60;
+  try { const aq = localStorage.getItem('contour.autoq'); if (aq !== null) autoQ = aq === '1'; } catch (e) {}
+
 
   // ---- sky dome ----
   const skyU = { uZenith: { value: C.zenith.clone() }, uHorizon: { value: C.horizon.clone() },
@@ -1320,7 +1331,9 @@
   const carHeadI = new THREE.InstancedMesh(carUnit, carHeadMat, NUMCARS);
   const carTailI = new THREE.InstancedMesh(carUnit, carTailMat, NUMCARS);
   const carSignI = new THREE.InstancedMesh(carSignGeo, carSignMat, NUMCARS);
-  [carBodyI, carCabI, carWheelI, carHeadI, carTailI, carSignI].forEach((m) => { m.frustumCulled = false; });
+  [carBodyI, carCabI, carWheelI, carHeadI, carTailI, carSignI].forEach((m) => {
+    m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  });
   // place a part instance at a car-local offset (lx right, ly up, lz forward) ----
   function setPart(inst, k, bx, bz, di, dj, ry, lx, ly, lz, sx, sy, sz) {
     _d.position.set(bx + lx * dj + lz * di, ly, bz - lx * di + lz * dj);
@@ -1398,6 +1411,7 @@
   const armLuI = im(geoArmU), armRuI = im(geoArmU), armLlI = im(geoArmL), armRlI = im(geoArmL);
   const footLI = imShoe(geoFoot), footRI = imShoe(geoFoot);
   const humanI = [torsoI, hipI, headI, hairI, legLuI, legRuI, legLlI, legRlI, armLuI, armRuI, armLlI, armRlI, footLI, footRI];
+  for (const m of humanI) m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(...humanI);
 
   // one reusable skeleton solves each walker's knee/elbow joints via matrixWorld ----
@@ -1411,7 +1425,7 @@
   const peds = [];
   for (let k = 0; k < NUMHUMAN; k++) {
     const e = randEdge(); e.ped = true; e.side = Math.random() < 0.5 ? 1 : -1;
-    e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; e.hidx = k;
+    e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; e.hidx = k; e.wx = 0; e.wz = 0;
     const shirt = new THREE.Color(SHIRTc[Math.random() * SHIRTc.length | 0]);
     const pants = new THREE.Color(PANTSc[Math.random() * PANTSc.length | 0]);
     torsoI.setColorAt(k, shirt); armLuI.setColorAt(k, shirt); armRuI.setColorAt(k, shirt); armLlI.setColorAt(k, shirt); armRlI.setColorAt(k, shirt);
@@ -1489,7 +1503,7 @@
       b.ph += dt;
       b.mesh.position.y = b.y + Math.sin(b.ph * 2) * 0.12;
       b.mesh.rotation.y += dt * 1.6;
-      if (!dead && hp < HP_MAX) {
+      if (!dead && (hp < HP_MAX || reserve < RESERVE_MAX)) {
         const dx = p.x - b.x, dz = p.z - b.z;
         if (dx * dx + dz * dz < 3.24) {                 // within ~1.8 m
           hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
@@ -1502,7 +1516,7 @@
 
   const rageEl = document.getElementById('rage'), rageNum = document.getElementById('rage-t');
   // player run-over: if a fast car's box overlaps the player, hurt + knock back
-  let carHitCd = 0, monkeyHitCd = 0;
+  let carHitCd = 0, monkeyHitCd = 0, cityFrame = 0;
   // ── monkey rage ────────────────────────────────────────────────────
   //  Hit one monkey and the whole troop turns on you for two minutes, with
   //  fresh ones popping in around you the entire time.
@@ -1527,7 +1541,7 @@
   }
   function enrageMonkeys() {
     const fresh = rageT <= 0;
-    rageT = RAGE_TIME;
+    if (fresh) rageT = RAGE_TIME;              // hitting them again does NOT restart the clock
     for (const m of monkeyPeds) if (m.hp > 0 && (!m.pooled || m.active)) m.aggro = true;
     if (fresh) { rageSpawnCd = 0.6; playHurt(); notify('猿の群れが逆上した！', 3200); }
   }
@@ -1601,6 +1615,7 @@
     setPart(carHeadI, k, bx, bz, di, dj, heading, 0, CWY + 0.32, L / 2, W * 0.72, 0.14, 0.08);
     setPart(carTailI, k, bx, bz, di, dj, heading, 0, CWY + 0.30, -L / 2, W * 0.72, 0.12, 0.08);
     if (car.taxi) setPart(carSignI, k, bx, bz, di, dj, heading, 0, CWY + H + car.cabH + 0.12, car.cabZ, 1, 1, 1);
+    car._x = bx; car._z = bz;
     runOver(bx, bz, heading, car.halfW, car.halfL, car.speed, 32);
   }
   function updateFerraris(dt) {
@@ -1652,6 +1667,7 @@
       return;
     }
     const { bx, bz, heading, walk } = pedGraphStep(ped, dt);
+    ped.wx = bx; ped.wz = bz;
     ped.phase += dt * (ped.running ? 12 : 7.5) * (walk > 0.05 ? 1 : 0);
     const sw = Math.sin(ped.phase), swc = Math.cos(ped.phase), amp = ped.running ? 1.35 : 1;
     const bob = Math.abs(sw) * 0.03 * walk, k = ped.hidx;
@@ -1675,9 +1691,26 @@
     cityT += dt;
     if (carHitCd > 0) carHitCd -= dt;
     updateSignalLenses();
-    for (let k = 0; k < cars.length; k++) updateCar(cars[k], dt, k);
+    // Distant traffic runs on every third frame with a tripled step — identical
+    // motion, a third of the matrix writes. Anything near the camera still
+    // updates every frame, so nothing you can actually see stutters.
+    cityFrame++;
+    const FAR2 = 90 * 90;
+    for (let k = 0; k < cars.length; k++) {
+      const c = cars[k];
+      if (c._x !== undefined) {
+        const dx = c._x - p.x, dz = c._z - p.z;
+        if (dx * dx + dz * dz > FAR2) { if ((cityFrame + k) % 3) continue; updateCar(c, dt * 3, k); continue; }
+      }
+      updateCar(c, dt, k);
+    }
     updateFerraris(dt);
-    for (let k = 0; k < peds.length; k++) updatePed(peds[k], dt);
+    for (let k = 0; k < peds.length; k++) {
+      const e = peds[k];
+      const dx = e.wx - p.x, dz = e.wz - p.z;
+      if (dx * dx + dz * dz > FAR2) { if ((cityFrame + k) % 3) continue; updatePed(e, dt * 3); continue; }
+      updatePed(e, dt);
+    }
     carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carWheelI.instanceMatrix.needsUpdate = true;
     carHeadI.instanceMatrix.needsUpdate = carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
     for (const m of humanI) m.instanceMatrix.needsUpdate = true;
@@ -2750,6 +2783,7 @@
       'TRIS  ' + (r.triangles / 1000).toFixed(0) + 'k\n' +
       'GEO   ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length + '\n' +
+      'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2);
   }
@@ -2804,6 +2838,15 @@
     $('layout-bar').classList.toggle('on', on);
     if (on) { closeSettings(); if (document.pointerLockElement === canvas) document.exitPointerLock(); }
   }
+  const autoqBtn = $('autoq-toggle'), autoqState = $('autoq-state');
+  function refreshAutoQ() { autoqState.textContent = autoQ ? 'ON' : 'OFF'; autoqBtn.classList.toggle('off', !autoQ); }
+  autoqBtn.addEventListener('click', () => {
+    autoQ = !autoQ;
+    try { localStorage.setItem('contour.autoq', autoQ ? '1' : '0'); } catch (e) {}
+    if (!autoQ) { qLevel = 3; applyQuality(); }
+    refreshAutoQ();
+  });
+  refreshAutoQ();
   $('layout-edit').addEventListener('click', () => setEditLayout(true));
   $('layout-done').addEventListener('click', () => setEditLayout(false));
   $('layout-reset').addEventListener('click', () => {
@@ -3117,6 +3160,22 @@
   $('chat-send').addEventListener('click', sendChat);
   chatInput.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') { ev.preventDefault(); sendChat(); } });
 
+  // ── adaptive quality ────────────────────────────────────────────────
+  //  From the reference PerformanceManagementSystem: watch the frame rate and
+  //  step the render resolution down when we fall behind, back up when there is
+  //  headroom. Hysteresis + a cooldown stop it oscillating.
+  const basePR = () => Math.min(devicePixelRatio, 2);
+  function applyQuality() { renderer.setPixelRatio(basePR() * QSCALE[qLevel]); onResize(); }
+  function updateQuality(dt) {
+    qFrames++; qAcc += dt;
+    if (qAcc < 1) return;
+    qFps = qFrames / qAcc; qFrames = 0; qAcc = 0;
+    if (!autoQ) return;
+    if (qCool > 0) { qCool--; return; }
+    if (qFps < 45 && qLevel > 0) { qLevel--; applyQuality(); qCool = 2; }
+    else if (qFps > 57 && qLevel < 3) { qLevel++; applyQuality(); qCool = 3; }
+  }
+
   function onResize() {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
@@ -3260,6 +3319,7 @@
     updateMusic();
     updateEffects(dt);
     updateDayNight(dt);
+    updateQuality(dt);
     updateHud(dt);
     updateMinimap(dt);
     publishState(false);
