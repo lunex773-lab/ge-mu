@@ -817,7 +817,7 @@
       bounds: { x0: X0 - WT, x1: X1 + WT, y0: 0, y1: b.h + 0.4, z0: Z0 - WT, z1: Z1 + WT },
       slabs: [], walls: [], ramps: [], shots: [] };
     // stair core hugging the −x edge
-    const SW = Math.min(2.9, b.hw * 0.62), SL = Math.min(2 * b.hd - 1.8, 7.4);
+    const SW = Math.min(4.6, b.hw * 0.80), SL = Math.min(2 * b.hd - 1.2, 9.0);
     const sx0 = X0, sx1 = X0 + SW, sz0 = b.cz - SL / 2, sz1 = b.cz + SL / 2;
     const slab = (x0, x1, z0, z1, y) => {
       if (x1 - x0 < 0.25 || z1 - z0 < 0.25) return;
@@ -893,15 +893,24 @@
     // arrival landing at the near end. Because each run sits directly above the
     // same run one storey below, headroom is a full 3.5 m the whole way up (the
     // old full-width zig-zag met itself at the turn and left none).
-    const SM = (sx0 + sx1) / 2, LD = Math.min(1.4, SL * 0.24);
+    const SM = (sx0 + sx1) / 2, LD = Math.min(1.8, SL * 0.26);
     const rz0 = sz0 + LD, rz1 = sz1 - LD;                // the sloped run
     const flight = (x0, x1, yA, yB) => {
-      rec.ramps.push({ x0: x0 + 0.04, x1: x1 - 0.04, z0: rz0, z1: rz1, yA, yB });
+      rec.ramps.push({ x0, x1, z0: rz0, z1: rz1, yA, yB });     // full half-width: no unsupported sliver
       rec.shots.push({ x0, x1, z0: rz0, z1: rz1, y0: Math.min(yA, yB) - 0.12, y1: Math.max(yA, yB) });
       const run = rz1 - rz0, rise = yB - yA;
-      put('ramp', (x0 + x1) / 2, (yA + yB) / 2, (rz0 + rz1) / 2, x1 - x0 - 0.06, 0.18, Math.hypot(run, rise), -Math.atan2(rise, run));
+      put('ramp', (x0 + x1) / 2, (yA + yB) / 2, (rz0 + rz1) / 2, x1 - x0 - 0.05, 0.18, Math.hypot(run, rise), -Math.atan2(rise, run));
     };
     const topStair = openTop ? acc : acc - 1;            // never climb into the solid mass
+    // Enclose the stairwell: a newel spine down the middle plus walls onto the
+    // floor plate. Without these you could drift a few cm sideways off a run and
+    // drop straight down the shaft — with them the walls simply guide you up.
+    if (topStair >= 1) {
+      const STOP = topStair * FH;
+      wall('wall', SM - 0.1, SM + 0.1, 0, STOP, rz0, rz1);            // newel spine between the runs
+      wall('wall', sx1 - 0.1, sx1 + 0.1, 0, STOP, rz0, sz1 + 0.1);    // side onto the floor plate
+      wall('wall', sx0, sx1 + 0.1, 0, STOP, sz1 - 0.1, sz1 + 0.1);    // closed end behind the turn
+    }
     for (let L = 1; L <= topStair; L++) {
       const y0 = (L - 1) * FH, ym = y0 + FH / 2, y1 = L * FH;
       flight(sx0, SM, y0, ym);                           // west run, climbing toward +z
