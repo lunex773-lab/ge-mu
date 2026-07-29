@@ -204,6 +204,18 @@
   #settings .panel {
     width: min(360px, 86vw); padding: 22px 22px 24px;
     background: #0f1a16; border: 1px solid rgba(234,243,228,.24); border-radius: 6px;
+    max-height: calc(100vh - 32px); overflow-y: auto; -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* landscape phones have very little height — give the panel the full screen
+     and let it scroll, so the lower rows stay reachable */
+  @media (max-height: 520px) {
+    #settings { align-items: start; }
+    #settings .panel { width: min(420px, 94vw); max-height: calc(100vh - 12px); margin: 6px 0; padding: 14px 16px 16px; }
+    #settings h2 { margin-bottom: 12px; }
+    #settings .row { margin-bottom: 12px; }
+    #chat .panel { max-height: 100vh; }
+    #chat-log { height: 34vh; }
   }
   #settings h2 { font-size: 12px; font-weight: 600; letter-spacing: .22em; color: var(--major); margin-bottom: 20px; }
   #settings .row { margin-bottom: 20px; }
@@ -475,7 +487,8 @@
   #layout-bar button { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .16em; color: var(--ink); background: var(--grass); border: 0; border-radius: 3px; padding: 8px 16px; cursor: pointer; }
   body.editlayout #touch { opacity: 1 !important; }
   body.editlayout #stick, body.editlayout #jump, body.editlayout #fire,
-  body.editlayout #cloak, body.editlayout #chatbtn, body.editlayout #scopebtn {
+  body.editlayout #cloak, body.editlayout #chatbtn, body.editlayout #scopebtn,
+  body.editlayout #reloadbtn {
     pointer-events: auto !important; outline: 2px dashed var(--amber); outline-offset: 3px; touch-action: none;
   }
 
@@ -1440,7 +1453,9 @@
   for (let k = 0; k < NUMMONKEY; k++) {
     const e = randEdge(); e.ped = true; e.isMonkey = true; e.side = Math.random() < 0.5 ? 1 : -1;
     e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6;
-    e.hp = 60; e.aggro = false; e.meleeCd = 0; e.wx = 0; e.wz = 0;
+    e.hp = 60; e.aggro = false; e.meleeCd = 0;
+    { const off = e.side * (RW + SWW * 0.55);      // seed the world position from the graph
+      e.wx = (e.i + e.s * e.di) * PITCH + e.dj * off; e.wz = (e.j + e.s * e.dj) * PITCH - e.di * off; }
     e.group = makeMonkey(); scene.add(e.group); peds.push(e); monkeyPeds.push(e);
   }
 
@@ -1633,19 +1648,6 @@
     if (ped.isMonkey) {
       if (ped.pooled && !ped.active) return;
       if (ped.hp <= 0) { ped.group.visible = false; return; }
-      // distance LOD (the reference's CharacterOptimizationSystem, trimmed down):
-      // far mobs are skipped outright, mid-range ones drop their kit. Keeps a
-      // 20-strong troop affordable without touching how players look up close.
-      { const dx = ped.wx - p.x, dz = ped.wz - p.z, d2 = dx * dx + dz * dz;
-        if (d2 > 5625) { ped.group.visible = false; return; }        // > 75 m
-        ped.group.visible = true;
-        const near = d2 < 1225;                                       // < 35 m
-        if (ped.gearOn !== near) {
-          ped.gearOn = near;
-          const gr = ped.group.userData.gear;
-          if (gr) for (let i = 0; i < gr.length; i++) gr[i].visible = near;
-        }
-      }
       let heading, walk = 1, running = ped.running;
       if (ped.aggro && !dead) {                                 // shot at us → charge and swipe
         const dx = p.x - ped.wx, dz = p.z - ped.wz, d = Math.hypot(dx, dz) || 1;
@@ -1660,6 +1662,20 @@
       } else {
         const s = pedGraphStep(ped, dt); ped.wx = s.bx; ped.wz = s.bz; heading = s.heading; walk = s.walk;
         ped.phase += dt * (running ? 13 : 9) * (walk > 0.05 ? 1 : 0);
+      }
+      // Distance LOD (the reference's CharacterOptimizationSystem, trimmed down).
+      // This has to come AFTER the walk step above: wx/wz are only meaningful
+      // once the monkey has taken it, so testing first left every monkey more
+      // than 75 m from the origin permanently invisible.
+      { const dx = ped.wx - p.x, dz = ped.wz - p.z, d2 = dx * dx + dz * dz;
+        if (d2 > 5625) { ped.group.visible = false; return; }         // > 75 m: keep walking, skip drawing
+        ped.group.visible = true;
+        const near = d2 < 1225;                                        // < 35 m: wear the kit
+        if (ped.gearOn !== near) {
+          ped.gearOn = near;
+          const gr = ped.group.userData.gear;
+          if (gr) for (let i = 0; i < gr.length; i++) gr[i].visible = near;
+        }
       }
       poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: running, air: 0, crouch: 0, land: 0, time: cityT });
       ped.group.position.set(ped.wx, 0, ped.wz);
@@ -1968,6 +1984,8 @@
     client: null, connected: false, started: false,
     peers: new Map(),
     lastPub: 0, PUB_MS: 55, TIMEOUT: 6000, lastX: 0, lastZ: 0,
+    INTERP_MS: 120,                        // render peers this far in the past
+    rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
   gearUp(monkey, MP.id);                 // kit out our own avatar
@@ -2037,7 +2055,7 @@
     const rows = ['<div class="me">' + crown(kingId === MP.id) + escHtml(MP.name || '—') + ' (you) · ' + kills + '</div>'];
     for (const [pid, peer] of MP.peers) rows.push('<div>' + crown(kingId === pid) + escHtml(peer.name || '匿名') + ' · ' + (peer.kills || 0) + '</div>');
     netList.innerHTML = rows.join('');
-    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1), !MP.connected);
+    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1) + (MP.connected && MP.rtt ? ' · ' + MP.rtt + 'ms' : ''), !MP.connected);
   }
 
   function upsertPeer(s) {
@@ -2052,6 +2070,7 @@
         cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
         yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
         hp: 100, hpShown: 100, dead: false, inv: false, kills: 0, vx: 0, vz: 0, recvT: performance.now(), recoil: 0,
+        buf: [], interp: false,
       };
       MP.peers.set(s.id, peer);
       renderRoster();
@@ -2061,12 +2080,13 @@
     peer.vx = s.vx || 0; peer.vz = s.vz || 0;
     peer.recvT = performance.now();
     peer.lastSeen = peer.recvT;
+    peer.buf.push({ t: peer.recvT, x: s.x, y: s.y, z: s.z });   // snapshot history
+    if (peer.buf.length > 12) peer.buf.shift();
     if (s.hp != null) peer.hp = s.hp;
     peer.dead = !!s.d;
     if (s.d && s.kb === MP.id) creditKill(s.id, s.ds);   // backup path: state repeats, so this survives packet loss
     peer.inv = !!s.iv;
-    const prevK = peer.kills; peer.kills = s.k || 0;
-    if (peer.kills !== prevK) recomputeKing();
+    if (s.k != null) { const prevK = peer.kills; peer.kills = s.k; if (peer.kills !== prevK) recomputeKing(); }
     if (s.n && s.n !== peer.name) { peer.name = s.n; setPeerTag(peer, s.n); renderRoster(); }
   }
   function dropPeer(id) {
@@ -2099,14 +2119,20 @@
       client.subscribe(mtopic('shot'));
       client.subscribe(mtopic('kill'));
       client.subscribe(mtopic('chat'));
+      client.subscribe(mtopic('ping'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
     client.on('close', () => { MP.connected = false; renderRoster(); });
     client.on('error', () => {});
     client.on('message', (t, buf) => {
+      MP.rxBytes += buf.length;
       let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
       if (!msg) return;
+      if (t.slice(-5) === '/ping') {           // our own echo measures the round trip
+        if (msg.id === MP.id) MP.rtt = Math.max(0, Math.round(performance.now() - msg.t));
+        return;
+      }
       if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
       if (t.slice(-5) === '/chat') { onChat(msg); return; }
       if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
@@ -2130,30 +2156,69 @@
     let vx = 0, vz = 0;                          // velocity for the receiver's dead-reckoning
     if (dtp > 0 && dtp < 0.4) { vx = (p.x - MP.lastX) / dtp; vz = (p.z - MP.lastZ) / dtp; }
     MP.lastX = p.x; MP.lastZ = p.z;
+    // Delta-compressed state (reference NetworkOptimizationSystem.deltaCompress):
+    // position/rotation change every packet and always ship, but the name, HP
+    // and kill count almost never do — send those only when they change, plus a
+    // keyframe once a second so a peer that joined mid-stream catches up.
+    const keyframe = now - MP.keyT > 1000;
+    if (keyframe) MP.keyT = now;
     const msg = {
-      id: MP.id, n: MP.name,
+      id: MP.id,
       x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
       vx: +vx.toFixed(2), vz: +vz.toFixed(2),
-      hp: Math.round(hp), k: kills,
     };
+    const hpR = Math.round(hp);
+    if (keyframe || MP.sentName !== MP.name) { msg.n = MP.name; MP.sentName = MP.name; }
+    if (keyframe || MP.sentHp !== hpR) { msg.hp = hpR; MP.sentHp = hpR; }
+    if (keyframe || MP.sentKills !== kills) { msg.k = kills; MP.sentKills = kills; }
     if (dead) { msg.d = 1; msg.ds = deathSeq; if (killerId) msg.kb = killerId; }
     if (cloak > 0) msg.iv = 1;                 // invisible to others while cloaked
-    MP.client.publish(mtopic('state/' + MP.id), JSON.stringify(msg));
+    const payload = JSON.stringify(msg);
+    MP.txBytes += payload.length;
+    MP.client.publish(mtopic('state/' + MP.id), payload);
+
+    if (now - MP.lastPing > 3000) {            // round-trip to the broker and back
+      MP.lastPing = now;
+      try { MP.client.publish(mtopic('ping'), JSON.stringify({ id: MP.id, t: Math.round(now) })); } catch (e) {}
+    }
   }
 
   // advance remote monkeys: smooth position/heading, drive the walk cycle
   // from how fast they are actually moving (no extra network fields needed)
   function updatePeers(dt, now) {
+    if (now - MP.rateT > 1000) {             // bandwidth sampling for the overlay
+      MP.txRate = MP.txBytes; MP.rxRate = MP.rxBytes;
+      MP.txBytes = 0; MP.rxBytes = 0; MP.rateT = now;
+    }
     const k = 1 - Math.exp(-dt * 13);
     for (const [id, peer] of MP.peers) {
       if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
       const px = peer.cur.x, pz = peer.cur.z;
-      // dead-reckon: project the last position forward by its velocity so the
-      // avatar tracks near real-time instead of lagging one packet behind.
-      const ex = Math.min((now - peer.recvT) / 1000, 0.3);
-      const tx = peer.tgt.x + peer.vx * ex, tz = peer.tgt.z + peer.vz * ex;
+      // Snapshot interpolation (reference NetworkSystem.interpolatePlayers):
+      // play peers back INTERP_MS in the past and lerp between two samples we
+      // actually received. That is jitter-free, unlike extrapolating from one
+      // sample. If the buffer starves — a stalled sender or a dropped run of
+      // packets — fall back to dead-reckoning off the newest sample so the
+      // avatar keeps moving instead of freezing.
+      const rt = now - MP.INTERP_MS;
+      const buf = peer.buf;
+      let a = null, b = null;
+      for (let i = buf.length - 1; i > 0; i--) {
+        if (buf[i - 1].t <= rt && buf[i].t >= rt) { a = buf[i - 1]; b = buf[i]; break; }
+      }
+      let tx, ty, tz;
+      if (a && b) {
+        const span = b.t - a.t;
+        const f = span > 1 ? (rt - a.t) / span : 1;
+        tx = a.x + (b.x - a.x) * f; ty = a.y + (b.y - a.y) * f; tz = a.z + (b.z - a.z) * f;
+        peer.interp = true;
+      } else {
+        const ex = Math.min((now - peer.recvT) / 1000, 0.3);
+        tx = peer.tgt.x + peer.vx * ex; ty = peer.tgt.y; tz = peer.tgt.z + peer.vz * ex;
+        peer.interp = false;
+      }
       peer.cur.x += (tx - peer.cur.x) * k;
-      peer.cur.y += (peer.tgt.y - peer.cur.y) * k;
+      peer.cur.y += (ty - peer.cur.y) * k;
       peer.cur.z += (tz - peer.cur.z) * k;
       peer.group.position.copy(peer.cur);
       let d = (peer.tgtYaw - peer.yaw) % (Math.PI * 2);
@@ -2782,6 +2847,8 @@
       'DRAW  ' + r.calls + '\n' +
       'TRIS  ' + (r.triangles / 1000).toFixed(0) + 'k\n' +
       'GEO   ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '\n' +
+      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s\n' +
+      'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
@@ -2820,7 +2887,7 @@
   addEventListener('contextmenu', (e) => { if (mode === 'pc' && isPlaying()) e.preventDefault(); });
 
   // ---- button-layout editor: drag the touch controls, saved per browser ----
-  const DRAG_IDS = ['stick', 'jump', 'fire', 'cloak', 'scopebtn', 'chatbtn'];
+  const DRAG_IDS = ['stick', 'jump', 'fire', 'cloak', 'scopebtn', 'chatbtn', 'reloadbtn'];
   let layout = {};
   try { layout = JSON.parse(localStorage.getItem('contour.layout') || '{}') || {}; } catch (e) { layout = {}; }
   function applyLayout() {
