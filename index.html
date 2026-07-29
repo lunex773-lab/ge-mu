@@ -182,7 +182,7 @@
   }
   #net-status b { color: var(--line); font-weight: 600; }
   #net-status.off b { color: var(--amber); }
-  #net-list { margin-top: 3px; }
+  #net-list { margin-top: 26px; }   /* clear the compass strip */
   #net-list div { color: var(--line); font-weight: 400; }
   #net-list div.me { color: var(--major); }
 
@@ -351,6 +351,79 @@
     background: var(--grass); border: 0; border-radius: 3px; padding: 0 18px; cursor: pointer;
   }
 
+  /* ---- ammo / K:D / compass / hitmarker / notifications / debug ---- */
+  #ammo {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(74px + env(safe-area-inset-bottom));
+    display: flex; align-items: baseline; gap: 7px; color: var(--line); font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 3px rgba(0,0,0,.7);
+  }
+  #ammo b { font-size: 30px; font-weight: 600; letter-spacing: .04em; }
+  #ammo span { font-size: 13px; color: var(--line-dim); }
+  #ammo.low b { color: #ff6b5a; }
+  #kd {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(112px + env(safe-area-inset-bottom));
+    color: var(--line-dim); font-size: 10px; letter-spacing: .16em; white-space: nowrap;
+  }
+  #kd b { color: var(--line); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  #compass {
+    position: absolute; left: 50%; transform: translateX(-50%); top: calc(44px + env(safe-area-inset-top));
+    width: min(260px, 56vw); height: 20px; overflow: hidden; opacity: .85;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  }
+  #compass i {
+    position: absolute; left: 50%; top: 0; width: 1px; height: 7px; background: var(--major);
+    transform: translateX(-50%); z-index: 1;
+  }
+  #compass-strip { position: absolute; top: 7px; left: 0; white-space: nowrap; will-change: transform; }
+  #compass-strip span {
+    display: inline-block; width: 40px; text-align: center; color: var(--line-dim);
+    font-size: 9px; letter-spacing: .1em;
+  }
+  #compass-strip span.card { color: var(--line); font-weight: 600; font-size: 10px; }
+
+  #hitmarker {
+    position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px; z-index: 7;
+    pointer-events: none; opacity: 0; transform: rotate(45deg) scale(.6); transition: opacity .09s, transform .09s;
+  }
+  #hitmarker::before, #hitmarker::after { content: ''; position: absolute; background: #fff; box-shadow: 0 0 3px rgba(0,0,0,.8); }
+  #hitmarker::before { left: 50%; top: 0; width: 2px; height: 100%; margin-left: -1px; }
+  #hitmarker::after { top: 50%; left: 0; height: 2px; width: 100%; margin-top: -1px; }
+  #hitmarker.show { opacity: 1; transform: rotate(45deg) scale(1); }
+  #hitmarker.kill::before, #hitmarker.kill::after { background: #ff5a4a; }
+
+  #notification {
+    position: absolute; left: 50%; transform: translateX(-50%); top: calc(132px + env(safe-area-inset-top));
+    padding: 7px 16px; border-radius: 3px; opacity: 0; transition: opacity .22s;
+    background: rgba(11,16,20,.72); border: 1px solid var(--line-dim);
+    color: var(--line); font-size: 11px; letter-spacing: .12em; white-space: nowrap;
+  }
+  #notification.show { opacity: 1; }
+
+  #reload-msg {
+    position: absolute; left: 50%; transform: translateX(-50%); top: calc(58% );
+    color: #ffd27a; font-size: 12px; letter-spacing: .18em; opacity: 0; transition: opacity .18s;
+    text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  }
+  #reload-msg.show { opacity: 1; }
+
+  #dbg {
+    position: absolute; left: calc(20px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom));
+    display: none; color: #9fe8a0; font-size: 10px; line-height: 1.7; letter-spacing: .06em;
+    text-shadow: 0 1px 2px #000; white-space: pre;
+  }
+  #dbg.on { display: block; }
+
+  #reloadbtn {
+    position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
+    right: calc(36px + env(safe-area-inset-right)); bottom: calc(200px + env(safe-area-inset-bottom));
+    width: 54px; height: 54px; font-size: 19px; color: var(--line);
+    border: 1px solid var(--line-dim); background: rgba(234,243,228,.06); -webkit-tap-highlight-color: transparent;
+  }
+  #touch.live #reloadbtn { pointer-events: auto; }
+  #reloadbtn.busy { opacity: .45; }
+
   /* ---- monkey rage banner ---- */
   #rage {
     position: absolute; left: 50%; transform: translateX(-50%);
@@ -415,6 +488,13 @@
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
   <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
+  <div id="compass"><i></i><div id="compass-strip"></div></div>
+  <div id="hitmarker"></div>
+  <div id="notification"></div>
+  <div id="ammo"><b id="ammo-count">30</b><span id="reserve-ammo">120</span></div>
+  <div id="kd">K <b id="kill-count">0</b> · D <b id="death-count">0</b></div>
+  <div id="reload-msg">R · リロード</div>
+  <div id="dbg"></div>
   <div id="hpwrap">
     <div id="hp-label">HP</div>
     <div id="hp-bar"><i id="hp-fill"></i><span id="hp-num">100</span></div>
@@ -444,6 +524,7 @@
   <button id="cloak" type="button">透明<b>OK</b></button>
   <button id="scopebtn" type="button" aria-label="スコープ">🔭</button>
   <button id="chatbtn" type="button" aria-label="チャット">💬<i></i></button>
+  <button id="reloadbtn" type="button" aria-label="リロード">⟳</button>
 </div>
 
 <div id="scope">
@@ -646,16 +727,13 @@
   document.body.appendChild(renderer.domElement);
 
   // ---- sky dome ----
+  const skyU = { uZenith: { value: C.zenith.clone() }, uHorizon: { value: C.horizon.clone() },
+                 uSun: { value: C.sun.clone() }, uSunDir: { value: SUN_DIR } };
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(1200, 32, 20),
     new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false,
-      uniforms: {
-        uZenith:  { value: C.zenith },
-        uHorizon: { value: C.horizon },
-        uSun:     { value: C.sun },
-        uSunDir:  { value: SUN_DIR },
-      },
+      uniforms: skyU,
       vertexShader: `
         varying vec3 vDir;
         void main() {
@@ -722,7 +800,52 @@
   light.position.copy(SUN_DIR).multiplyScalar(100);
   // a brighter hemisphere *ground* tone plus a little ambient keeps building
   // interiors readable — ceilings face down and would otherwise be near-black
-  scene.add(light, new THREE.HemisphereLight(0xC6D2DB, 0x6E757D, 0.75), new THREE.AmbientLight(0xffffff, 0.18));
+  const hemiLight = new THREE.HemisphereLight(0xC6D2DB, 0x6E757D, 0.75);
+  const ambLight = new THREE.AmbientLight(0xffffff, 0.18);
+  scene.add(light, hemiLight, ambLight);
+
+  // ── day / night ────────────────────────────────────────────────────
+  //  Adapted from the reference LightingSystem: the sun swings through the
+  //  sky, and sun / sky / ambient intensities plus the sky and fog colours
+  //  are driven off how high it is. At night the city lights carry the scene —
+  //  the facade shader lights more windows and glows harder as uNight rises.
+  const SKY_DAY = new THREE.Color(0x8dc5ff), SKY_SET = new THREE.Color(0xffa56c), SKY_NIGHT = new THREE.Color(0x0a1626);
+  const GND_DAY = new THREE.Color(0xC6D2DB), GND_NIGHT = new THREE.Color(0x2b3340);
+  const _skyC = new THREE.Color(), _horC = new THREE.Color();
+  let todHours = 13.0;                       // start mid-afternoon
+  let todSpeed = 24 / (14 * 60);             // a full day every ~14 real minutes
+  let nightF = 0;
+  let fogMats = [];                          // filled once the shaders exist
+  function updateDayNight(dt) {
+    todHours = (todHours + dt * todSpeed) % 24;
+    const ang = (todHours / 24) * Math.PI * 2 - Math.PI / 2;
+    const daylight = Math.max(0, Math.sin(ang));
+    nightF = 1 - Math.min(1, daylight * 2.4);          // full night only when the sun is well down
+
+    SUN_DIR.set(Math.cos(ang) * 0.62, Math.max(0.05, Math.sin(ang)), -0.42).normalize();
+    light.position.copy(SUN_DIR).multiplyScalar(220);
+    light.intensity = 0.10 + daylight * 0.95;
+    light.color.setHSL(0.09, 0.45, 0.5 + daylight * 0.18);
+    hemiLight.intensity = 0.20 + daylight * 0.62;
+    hemiLight.color.copy(GND_DAY).lerp(SKY_NIGHT, nightF * 0.75);
+    hemiLight.groundColor.copy(GND_DAY).lerp(GND_NIGHT, nightF);
+    ambLight.intensity = 0.10 + daylight * 0.13;
+
+    if (daylight > 0.25) _skyC.copy(SKY_SET).lerp(SKY_DAY, (daylight - 0.25) / 0.75);
+    else _skyC.copy(SKY_NIGHT).lerp(SKY_SET, daylight / 0.25);
+    _horC.copy(_skyC).lerp(SKY_NIGHT, 0.18 * nightF);
+
+    skyU.uZenith.value.copy(_skyC).multiplyScalar(0.82);
+    skyU.uHorizon.value.copy(_horC);
+    skyU.uSun.value.setRGB(1, 0.95 - nightF * 0.35, 0.81 - nightF * 0.5);
+    scene.fog.color.copy(_horC);
+    renderer.setClearColor(_skyC);
+    for (let i = 0; i < fogMats.length; i++) {
+      const u = fogMats[i].uniforms;
+      u.uFogCol.value.copy(_horC);
+      if (u.uNight) u.uNight.value = nightF;
+    }
+  }
 
   // ---- buildings: per-type facades with procedural windows, lit rooms,
   //  spandrel bands and mullions (one shader material per building kind) ----
@@ -744,7 +867,7 @@
       uniforms: {
         uWall: { value: new THREE.Color(L.wall) }, uWin: { value: new THREE.Color(L.win) },
         uLit: { value: new THREE.Color(0xffe3a4) }, uRoof: { value: new THREE.Color(0x585e66) },
-        uGlass: { value: L.glass }, uSunDir: { value: SUN_DIR },
+        uGlass: { value: L.glass }, uSunDir: { value: SUN_DIR }, uNight: { value: 0 },
         uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
       },
       vertexShader: `
@@ -758,7 +881,7 @@
           vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
-        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass;
+        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass, uNight;
         varying vec3 vW; varying vec3 vN; varying float vFog;
         float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
@@ -772,22 +895,23 @@
             float m = mix(0.30, 0.06, uGlass);
             float win = step(m, fract(cu)) * step(fract(cu), 1.0 - m)
                       * step(0.20, fract(ru)) * step(fract(ru), 0.86);
-            float lit = step(0.72, h21(vec2(ci + 31.0 * floor(hc * 0.031), ri)));
+            float lit = step(0.72 - uNight * 0.30, h21(vec2(ci + 31.0 * floor(hc * 0.031), ri)));
             vec3 pane = mix(uWin, uLit, lit);
             col = mix(uWall, pane, win);
-            emit = win * lit * 0.55;
+            emit = win * lit * (0.45 + uNight * 1.25);
             // spandrel band at every slab line, and a darker plinth at the base
             col = mix(col, uWall * 0.78, step(fract(ru), 0.10));
             col = mix(col, uWall * 0.62, step(vW.y, 1.2));
           }
           float ndl = max(dot(n, uSunDir), 0.0);
-          col *= 0.56 + 0.60 * ndl;
+          col *= (0.56 + 0.60 * ndl) * (1.0 - uNight * 0.68);
           col += uLit * emit;
           float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
           gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
         }`
     });
   });
+  fogMats = [groundMat].concat(buildMats);      // everything whose shader fogs by hand
   const boxGeo = new THREE.BoxGeometry(1, 1, 1); boxGeo.translate(0, 0.5, 0);   // base at y=0
   const boxGeoC = new THREE.BoxGeometry(1, 1, 1);                               // centred (for ramps)
 
@@ -1369,6 +1493,7 @@
         const dx = p.x - b.x, dz = p.z - b.z;
         if (dx * dx + dz * dz < 3.24) {                 // within ~1.8 m
           hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
+          reserve = Math.min(RESERVE_MAX, reserve + 60); updateAmmoUI(); notify('バナナ  +40 HP  +60 AMMO', 1600);
           b.active = false; b.mesh.visible = false; b.respawn = BANANA_RESPAWN;
         }
       }
@@ -1404,7 +1529,7 @@
     const fresh = rageT <= 0;
     rageT = RAGE_TIME;
     for (const m of monkeyPeds) if (m.hp > 0 && (!m.pooled || m.active)) m.aggro = true;
-    if (fresh) { rageSpawnCd = 0.6; playHurt(); }
+    if (fresh) { rageSpawnCd = 0.6; playHurt(); notify('猿の群れが逆上した！', 3200); }
   }
   function calmMonkeys() {
     for (const m of monkeyPeds) {
@@ -1557,7 +1682,7 @@
     carHeadI.instanceMatrix.needsUpdate = carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
     for (const m of humanI) m.instanceMatrix.needsUpdate = true;
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
-    for (const nf of neonFlicker) nf.mesh.material.opacity = 0.72 + 0.28 * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
+    for (const nf of neonFlicker) nf.mesh.material.opacity = (0.42 + 0.30 * nightF) + (0.28 + 0.28 * nightF) * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
     updateBananas(dt);
     updateRage(dt);
   }
@@ -2121,6 +2246,18 @@
       o.connect(g); g.connect(master); o.start(tt); o.stop(tt + 0.22);
     }
   }
+  function playReload() {                                 // magazine out / in
+    if (!audioReady()) return;
+    const t = actx.currentTime;
+    for (const [at, f] of [[0, 340], [0.16, 210], [0.95, 300], [1.15, 520]]) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'square'; o.frequency.setValueAtTime(f, t + at);
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(0.14, t + at + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.07);
+      o.connect(g); g.connect(master); o.start(t + at); o.stop(t + at + 0.09);
+    }
+  }
   function playHurt() {
     if (!audioReady()) return;
     const t = actx.currentTime;
@@ -2297,6 +2434,76 @@
     m.material.opacity = 0.5; m.userData.life = 0.07; m.visible = true;
   }
 
+  // ── impact / muzzle effects ─────────────────────────────────────────
+  //  Pooled version of the reference EffectSystem: a muzzle point light, an
+  //  expanding impact flash with sparks, and drifting smoke. Everything is
+  //  preallocated and recycled, so firing never allocates or hits the GC.
+  const muzzleLight = new THREE.PointLight(0xffd27a, 0, 9);
+  muzzleLight.visible = false; scene.add(muzzleLight);
+  let muzzleLightT = 0;
+  const impacts = [], sparks = [], smokes = [];
+  {
+    const impMat = new THREE.MeshBasicMaterial({ color: 0xffe6b0, transparent: true, opacity: 0, depthWrite: false, fog: false, blending: THREE.AdditiveBlending });
+    const impGeo = new THREE.SphereGeometry(0.09, 7, 5);
+    for (let i = 0; i < 14; i++) { const m = new THREE.Mesh(impGeo, impMat.clone()); m.visible = false; scene.add(m); impacts.push({ m, life: 0 }); }
+    const spGeo = new THREE.BoxGeometry(0.035, 0.035, 0.22);
+    const spMat = new THREE.MeshBasicMaterial({ color: 0xffc861, transparent: true, opacity: 0, depthWrite: false, fog: false, blending: THREE.AdditiveBlending });
+    for (let i = 0; i < 48; i++) { const m = new THREE.Mesh(spGeo, spMat.clone()); m.visible = false; scene.add(m); sparks.push({ m, life: 0, v: new THREE.Vector3() }); }
+    const smGeo = new THREE.PlaneGeometry(0.5, 0.5);
+    const smMat = new THREE.MeshBasicMaterial({ color: 0x9aa0a6, transparent: true, opacity: 0, depthWrite: false });
+    for (let i = 0; i < 20; i++) { const m = new THREE.Mesh(smGeo, smMat.clone()); m.visible = false; scene.add(m); smokes.push({ m, life: 0, v: new THREE.Vector3() }); }
+  }
+  let impI = 0, spI = 0, smI = 0;
+  function spawnImpact(pt) {
+    const e = impacts[impI = (impI + 1) % impacts.length];
+    e.m.position.copy(pt); e.m.scale.setScalar(1); e.m.material.opacity = 0.9; e.m.visible = true; e.life = 0.16;
+    for (let i = 0; i < 4; i++) {                       // sparks fly off the hit
+      const sp = sparks[spI = (spI + 1) % sparks.length];
+      sp.m.position.copy(pt); sp.m.material.opacity = 1; sp.m.visible = true; sp.life = 0.20 + Math.random() * 0.18;
+      sp.v.set(Math.random() - 0.5, Math.random() * 0.9 + 0.15, Math.random() - 0.5).normalize().multiplyScalar(5 + Math.random() * 6);
+    }
+    const sm = smokes[smI = (smI + 1) % smokes.length];  // and a puff of dust
+    sm.m.position.copy(pt); sm.m.scale.setScalar(0.6); sm.m.material.opacity = 0.4; sm.m.visible = true; sm.life = 0.9;
+    sm.v.set((Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.5, (Math.random() - 0.5) * 0.5);
+  }
+  function flashMuzzle(pt) {
+    muzzleLight.position.copy(pt);
+    muzzleLight.intensity = 5.5 + nightF * 5;           // reads far stronger after dark
+    muzzleLight.visible = true; muzzleLightT = 0.06;
+  }
+  function updateEffects(dt) {
+    if (muzzleLightT > 0) {
+      muzzleLightT -= dt;
+      muzzleLight.intensity *= 0.72;
+      if (muzzleLightT <= 0) { muzzleLight.visible = false; muzzleLight.intensity = 0; }
+    }
+    for (const e of impacts) {
+      if (e.life <= 0) continue;
+      e.life -= dt;
+      e.m.scale.multiplyScalar(1 + dt * 9);
+      e.m.material.opacity = Math.max(0, e.life * 5.5);
+      if (e.life <= 0) e.m.visible = false;
+    }
+    for (const e of sparks) {
+      if (e.life <= 0) continue;
+      e.life -= dt;
+      e.v.y -= 22 * dt;
+      e.m.position.addScaledVector(e.v, dt);
+      e.m.quaternion.setFromUnitVectors(_up, _ta.copy(e.v).normalize());
+      e.m.material.opacity = Math.max(0, e.life * 3.4);
+      if (e.life <= 0) e.m.visible = false;
+    }
+    for (const e of smokes) {
+      if (e.life <= 0) continue;
+      e.life -= dt;
+      e.m.position.addScaledVector(e.v, dt);
+      e.m.scale.multiplyScalar(1 + dt * 1.3);
+      e.m.lookAt(camera.position);
+      e.m.material.opacity = Math.max(0, e.life * 0.42);
+      if (e.life <= 0) e.m.visible = false;
+    }
+  }
+
   const _rd = new THREE.Vector3(), _ro = new THREE.Vector3(), _mz = new THREE.Vector3();
   const _p2 = new THREE.Vector3(), _cc = new THREE.Vector3(), _end = new THREE.Vector3();
   function raySphere(ro, rd, c, r) {
@@ -2311,6 +2518,8 @@
   function fire() {
     if (dead || !isPlaying() || fireCd > 0) return;
     if (mode === 'pc' && document.pointerLockElement !== canvas) return;
+    if (reloading > 0) return;
+    if (ammo <= 0) { startReload(); return; }
     fireCd = FIRE_INTERVAL;
     camera.updateMatrixWorld(true);
     camera.getWorldDirection(_rd);
@@ -2339,13 +2548,17 @@
     }
     _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
+    flashMuzzle(_mz);
+    if (!hitId && !hitMonkey) spawnImpact(_end);   // sparks + dust where the round lands
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
+    ammo--; updateAmmoUI();
+    if (ammo <= 0) startReload();                       // dry — rack a fresh magazine
     selfRecoil = 1;                                     // avatar recoil kick
     playShot(0.5, 0);                                   // own gunshot
     if (MP.connected && MP.client) MP.client.publish(mtopic('shot'), JSON.stringify({ id: MP.id }));
-    if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
+    if (hitId) { sendHit(hitId); showHit(false); }
     if (hitMonkey) {
-      hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12;
+      hitMonkey.hp -= DMG; hitMonkey.aggro = true; showHit(hitMonkey.hp <= 0);
       if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
       enrageMonkeys();                                 // the whole troop comes for you
     }
@@ -2388,6 +2601,7 @@
     if (creditedKills.size > 400) creditedKills.clear();
     creditedKills.add(key);
     kills++; renderRoster(); recomputeKing(); publishState(true);
+    showHit(true); updateKD(); notify('撃破！  KILL ' + kills);
   }
   function onDeath() {
     dead = true; fireHeld = false;
@@ -2395,6 +2609,7 @@
     playDeath();
     // credit whoever hit us last, but only if it was recent — a car or an angry
     // monkey finishing us off must not hand a stale attacker the point
+    deaths++; updateKD();
     killerId = (lastAttacker && performance.now() - lastAttackerT < 12000) ? lastAttacker : null;
     deathSeq++;
     if (killerId && MP.connected && MP.client) {
@@ -2411,6 +2626,7 @@
   }
   function doContinue() {
     hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0; lastAttacker = null; lastAttackerT = 0; killerId = null;
+    ammo = MAG_SIZE; reserve = Math.min(RESERVE_MAX, reserve + 90); reloading = 0; updateAmmoUI();
     setSelfCloak(false); respawn();
     updateHpUI(); updateCloakBtn();
     gameoverEl.classList.remove('show');
@@ -2471,6 +2687,75 @@
   addEventListener('mousedown', (e) => { if (mode === 'pc' && e.button === 0 && document.pointerLockElement === canvas && !dead) { fireHeld = true; fire(); } });
   addEventListener('mouseup',   (e) => { if (e.button === 0) fireHeld = false; });
   updateHpUI(); updateCloakBtn();
+
+  // ── HUD system ──────────────────────────────────────────────────────
+  //  Follows the reference UISystem: ammo + reserve, hit marker, kill/death,
+  //  toast notifications, a compass strip and a debug overlay.
+  const ui = {
+    ammoEl: $('ammo'), ammoN: $('ammo-count'), resN: $('reserve-ammo'),
+    killN: $('kill-count'), deathN: $('death-count'),
+    hit: $('hitmarker'), note: $('notification'), reloadMsg: $('reload-msg'),
+    strip: $('compass-strip'), dbg: $('dbg'), reloadBtn: $('reloadbtn'),
+    hitT: null, noteT: null,
+  };
+  { // compass ticks every 15°, cardinals labelled — two laps so it can wrap
+    const card = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
+    let html = '';
+    for (let lap = 0; lap < 2; lap++) {
+      for (let d = 0; d < 360; d += 15) {
+        const c = card[d];
+        html += '<span class="' + (c ? 'card' : '') + '">' + (c || '·') + '</span>';
+      }
+    }
+    ui.strip.innerHTML = html;
+  }
+  const MAG_SIZE = 30, RESERVE_MAX = 240, RELOAD_TIME = 1.6;
+  let ammo = MAG_SIZE, reserve = 120, reloading = 0, deaths = 0;
+  function updateAmmoUI() {
+    ui.ammoN.textContent = ammo;
+    ui.resN.textContent = reserve;
+    ui.ammoEl.classList.toggle('low', ammo <= 6);
+    ui.reloadMsg.classList.toggle('show', ammo === 0 && reloading <= 0 && reserve > 0);
+    ui.reloadBtn.classList.toggle('busy', reloading > 0);
+  }
+  function updateKD() { ui.killN.textContent = kills; ui.deathN.textContent = deaths; }
+  function startReload() {
+    if (reloading > 0 || dead || ammo >= MAG_SIZE || reserve <= 0) return;
+    reloading = RELOAD_TIME; playReload(); updateAmmoUI();
+  }
+  function finishReload() {
+    const need = Math.min(MAG_SIZE - ammo, reserve);
+    ammo += need; reserve -= need; updateAmmoUI();
+  }
+  function showHit(isKill) {
+    ui.hit.classList.toggle('kill', !!isKill);
+    ui.hit.classList.add('show');
+    clearTimeout(ui.hitT); ui.hitT = setTimeout(() => ui.hit.classList.remove('show'), isKill ? 260 : 130);
+  }
+  function notify(text, ms = 2400) {
+    ui.note.textContent = text; ui.note.classList.add('show');
+    clearTimeout(ui.noteT); ui.noteT = setTimeout(() => ui.note.classList.remove('show'), ms);
+  }
+  let dbgOn = false, dbgAcc = 0;
+  function updateHud(dt) {
+    if (reloading > 0) { reloading -= dt; if (reloading <= 0) { reloading = 0; finishReload(); } }
+    let brg = (-yaw * 180 / Math.PI) % 360; if (brg < 0) brg += 360;
+    ui.strip.style.transform = 'translateX(' + (-brg * (40 / 15) - 20) + 'px)';
+    if (!dbgOn) return;
+    dbgAcc += dt; if (dbgAcc < 0.25) return; dbgAcc = 0;
+    const r = renderer.info.render;
+    ui.dbg.textContent =
+      'FPS   ' + $('v-fps').textContent + '\n' +
+      'DRAW  ' + r.calls + '\n' +
+      'TRIS  ' + (r.triangles / 1000).toFixed(0) + 'k\n' +
+      'GEO   ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '\n' +
+      'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length + '\n' +
+      'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
+      '  NIGHT ' + nightF.toFixed(2);
+  }
+  ui.reloadBtn.addEventListener('touchstart', (e) => { if (editLayout) return; e.preventDefault(); startReload(); }, { passive: false });
+  ui.reloadBtn.addEventListener('click', () => { if (editLayout) return; startReload(); });
+  updateAmmoUI(); updateKD();
 
   // route look input: first-person aims the player, third-person orbits the camera
   function applyLook(dx, dy) {
@@ -2596,6 +2881,8 @@
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
     if (ev.code === 'KeyQ' && !ev.repeat) toggleCloak();      // stealth cloak
+    if (ev.code === 'KeyR' && !ev.repeat) startReload();
+    if (ev.code === 'F3' && !ev.repeat) { dbgOn = !dbgOn; ui.dbg.classList.toggle('on', dbgOn); ev.preventDefault(); }
   });
   addEventListener('keyup', (ev) => { if (typing()) return; keys[ev.code] = false; });
 
@@ -2971,6 +3258,9 @@
     updateCombat(dt);
     updatePeers(dt, now);
     updateMusic();
+    updateEffects(dt);
+    updateDayNight(dt);
+    updateHud(dt);
     updateMinimap(dt);
     publishState(false);
 
