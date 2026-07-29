@@ -878,19 +878,36 @@
         wall(facKey, X1, X1 + WT, y + SILLH, y + HEADY, q0, q1);
       }
     }
+    // Parapets stop just under the shader's window row (0.20 of a floor) so the
+    // roofline reads as solid coping instead of a sliced-off row of windows.
+    const PARA = 0.194 * WGRID_V;
     if (openTop) {                                       // short block: parapet round the roof
       const y = acc * FH;
-      wall(facKey, X0 - WT, X1 + WT, y, y + 1.1, Z0 - WT, Z0);
-      wall(facKey, X0 - WT, X1 + WT, y, y + 1.1, Z1, Z1 + WT);
-      wall(facKey, X0 - WT, X0, y, y + 1.1, Z0, Z1);
-      wall(facKey, X1, X1 + WT, y, y + 1.1, Z0, Z1);
+      wall(facKey, X0 - WT, X1 + WT, y, y + PARA, Z0 - WT, Z0);
+      wall(facKey, X0 - WT, X1 + WT, y, y + PARA, Z1, Z1 + WT);
+      wall(facKey, X0 - WT, X0, y, y + PARA, Z0, Z1);
+      wall(facKey, X1, X1 + WT, y, y + PARA, Z0, Z1);
     }
-    // switchback stairs filling the shaft
-    for (let L = 1; L <= acc; L++) {
-      const yLow = (L - 1) * FH, yHigh = L * FH, up = (L % 2 === 1);
-      rec.ramps.push({ x0: sx0 + 0.06, x1: sx1 - 0.06, z0: sz0, z1: sz1, yA: up ? yLow : yHigh, yB: up ? yHigh : yLow });
-      rec.shots.push({ x0: sx0, x1: sx1, z0: sz0, z1: sz1, y0: yLow - 0.12, y1: yHigh });
-      put('ramp', (sx0 + sx1) / 2, (yLow + yHigh) / 2, b.cz, SW - 0.14, 0.18, Math.hypot(SL, FH), Math.atan2(FH, SL) * (up ? -1 : 1));
+    // ---- stairs: a proper half-turn flight ------------------------------
+    // Two half-width runs per storey with a half-landing at the far end and an
+    // arrival landing at the near end. Because each run sits directly above the
+    // same run one storey below, headroom is a full 3.5 m the whole way up (the
+    // old full-width zig-zag met itself at the turn and left none).
+    const SM = (sx0 + sx1) / 2, LD = Math.min(1.4, SL * 0.24);
+    const rz0 = sz0 + LD, rz1 = sz1 - LD;                // the sloped run
+    const flight = (x0, x1, yA, yB) => {
+      rec.ramps.push({ x0: x0 + 0.04, x1: x1 - 0.04, z0: rz0, z1: rz1, yA, yB });
+      rec.shots.push({ x0, x1, z0: rz0, z1: rz1, y0: Math.min(yA, yB) - 0.12, y1: Math.max(yA, yB) });
+      const run = rz1 - rz0, rise = yB - yA;
+      put('ramp', (x0 + x1) / 2, (yA + yB) / 2, (rz0 + rz1) / 2, x1 - x0 - 0.06, 0.18, Math.hypot(run, rise), -Math.atan2(rise, run));
+    };
+    const topStair = openTop ? acc : acc - 1;            // never climb into the solid mass
+    for (let L = 1; L <= topStair; L++) {
+      const y0 = (L - 1) * FH, ym = y0 + FH / 2, y1 = L * FH;
+      flight(sx0, SM, y0, ym);                           // west run, climbing toward +z
+      slab(sx0, sx1, rz1, sz1, ym);                      // half landing, turn around here
+      flight(SM, sx1, y1, ym);                           // east run, climbing back toward −z
+      slab(sx0, sx1, sz0, rz0, y1);                      // arrival landing on the new floor
     }
     // entrance canopy + door posts
     put('canopy', b.cx, FH - 0.5, Z1 + WT + 0.75, DW + 1.6, 0.24, 1.7);
@@ -903,7 +920,7 @@
       rec.walls.push(bx); rec.shots.push(bx);
       // parapet ring on the real roof
       for (const q of [[X0 - WT, X1 + WT, Z0 - WT, Z0], [X0 - WT, X1 + WT, Z1, Z1 + WT], [X0 - WT, X0, Z0, Z1], [X1, X1 + WT, Z0, Z1]])
-        put(facKey, (q[0] + q[1]) / 2, b.h, (q[2] + q[3]) / 2, q[1] - q[0], 1.0, q[3] - q[2]);
+        put(facKey, (q[0] + q[1]) / 2, b.h, (q[2] + q[3]) / 2, q[1] - q[0], PARA, q[3] - q[2]);
     }
     // roof gear (visible from every sniping perch)
     const RY = b.h;
