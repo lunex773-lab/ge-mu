@@ -1566,6 +1566,63 @@
     };
     return g;
   }
+  // ── tactical kit ────────────────────────────────────────────────────
+  //  Adapted from the reference character system (helmet + visor, plate
+  //  carrier, shoulder pads, pack, boots). Only *players* get kitted out, so an
+  //  armed opponent reads instantly differently from a street monkey. The
+  //  uniform colour is hashed from the player id, so everyone in the room sees
+  //  the same colour for the same person. Materials are per-avatar so the
+  //  stealth cloak can fade one player without touching anybody else.
+  const UNIFORMS = [
+    { coat: 0x243b63, gear: 0x4d5b43 },   // navy · olive
+    { coat: 0x2d2d2d, gear: 0x555a60 },   // black · grey
+    { coat: 0x4a3f2e, gear: 0x6b5f45 },   // coyote
+    { coat: 0x2f4d3a, gear: 0x44573d },   // forest
+    { coat: 0x5b2f2f, gear: 0x6b4a3a },   // maroon
+    { coat: 0x33405c, gear: 0x4a5568 },   // slate
+    { coat: 0x3d2f52, gear: 0x53496b },   // violet
+    { coat: 0x1f4a4a, gear: 0x3d5f5c },   // teal
+  ];
+  const hashId = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) | 0; return Math.abs(h); };
+  function gearUp(mk, id) {
+    const P = mk.userData;
+    if (!P || P.geared) return mk;
+    P.geared = true;
+    const U = UNIFORMS[hashId(id || 'x') % UNIFORMS.length];
+    const coat  = new THREE.MeshStandardMaterial({ color: U.coat, roughness: 0.74, metalness: 0.06, flatShading: true });
+    const gear  = new THREE.MeshStandardMaterial({ color: U.gear, roughness: 0.92, metalness: 0.04, flatShading: true });
+    const strap = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.82, metalness: 0.1 });
+    const visorM = new THREE.MeshStandardMaterial({ color: 0x8fd0ff, roughness: 0.10, metalness: 0.9, emissive: 0x24506f });
+    const box = (w, h, d, m) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+
+    // helmet + brow band + visor
+    const helm = new THREE.Mesh(new THREE.SphereGeometry(0.30, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56), coat);
+    helm.position.set(0, 0.04, -0.02); helm.scale.set(1.02, 1.06, 1.06); P.head.add(helm);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.305, 0.305, 0.06, 18, 1, true), strap);
+    band.position.set(0, 0.05, -0.02); band.scale.set(1, 1, 1.05); P.head.add(band);
+    const visor = box(0.34, 0.11, 0.14, visorM); visor.position.set(0, 0.06, 0.27); P.head.add(visor);
+
+    // plate carrier: front + back plate, shoulder straps, pouches
+    const front = box(0.46, 0.44, 0.12, gear); front.position.set(0, 0.30, 0.37); front.rotation.x = -0.05; P.torso.add(front);
+    const back  = box(0.46, 0.44, 0.12, gear); back.position.set(0, 0.30, -0.35); P.torso.add(back);
+    for (const s of [-1, 1]) {
+      const st = box(0.11, 0.10, 0.78, strap); st.position.set(0.16 * s, 0.58, 0.02); P.torso.add(st);
+      const pouch = box(0.15, 0.16, 0.10, strap); pouch.position.set(0.13 * s, 0.16, 0.42); P.torso.add(pouch);
+    }
+    const pack = box(0.40, 0.40, 0.22, gear); pack.position.set(0, 0.30, -0.50); P.torso.add(pack);
+
+    // shoulder pads ride the arm pivots, boots ride the shins
+    for (const a of [P.lArm, P.rArm]) {
+      const pad = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), coat);
+      pad.position.y = -0.02; a.add(pad);
+    }
+    for (const l of [P.lLegLo, P.rLegLo]) {
+      const boot = box(0.24, 0.17, 0.36, strap); boot.position.set(0, -0.44, 0.07); l.add(boot);
+      const knee = box(0.18, 0.14, 0.06, gear); knee.position.set(0, -0.06, 0.11); l.add(knee);
+    }
+    return mk;
+  }
+
   const monkey = makeMonkey();
   monkey.visible = false;
   scene.add(monkey);
@@ -1610,6 +1667,27 @@
       P.lArm.rotation.x = -1.5;  P.rArm.rotation.x = -1.5;
       P.lArmLo.rotation.x = 0.5; P.rArmLo.rotation.x = 0.5;
     }
+    // weapon layer, blended over the locomotion pose (mirrors the reference's
+    // CombatAnimationSystem: an ADS pose you hold, and a recoil kick that decays)
+    const ad = s.aim || 0, rc = s.recoil || 0;
+    if (ad > 0) {
+      const k = 1 - ad;
+      P.rArm.rotation.x = P.rArm.rotation.x * k - 1.28 * ad;
+      P.lArm.rotation.x = P.lArm.rotation.x * k - 1.16 * ad;
+      P.rArmLo.rotation.x = P.rArmLo.rotation.x * k + 0.50 * ad;
+      P.lArmLo.rotation.x = P.lArmLo.rotation.x * k + 0.78 * ad;
+      P.rArm.rotation.z = -0.12 * k - 0.30 * ad;
+      P.lArm.rotation.z = 0.12 * k + 0.42 * ad;
+      P.torso.rotation.y = -0.16 * ad;
+      P.head.rotation.x -= 0.10 * ad;
+    }
+    if (rc > 0) {
+      P.rArm.rotation.x -= 0.34 * rc;
+      P.lArm.rotation.x -= 0.26 * rc;
+      P.torso.rotation.x -= 0.10 * rc;
+      P.head.rotation.x  -= 0.12 * rc;
+    }
+
     const tsway = Math.sin(time * 2 + stride * 0.5) * 0.12;
     for (let i = 0; i < P.tail.length; i++) {
       P.tail[i].rotation.z = tsway * (i / P.tail.length);
@@ -1630,6 +1708,7 @@
     lastPub: 0, PUB_MS: 55, TIMEOUT: 6000, lastX: 0, lastZ: 0,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
+  gearUp(monkey, MP.id);                 // kit out our own avatar
   const netStatus = document.getElementById('net-status');
   const netList   = document.getElementById('net-list');
   const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1655,8 +1734,8 @@
     return spr;
   }
 
-  function makePeerAvatar(name) {
-    const m = makeMonkey();                 // reuse the rigged macaque
+  function makePeerAvatar(name, id) {
+    const m = gearUp(makeMonkey(), id);     // rigged macaque in tactical kit
     m.visible = true;
     const tag = nameSprite(name || '匿名');
     m.add(tag); m.userData.tag = tag;
@@ -1693,7 +1772,7 @@
   function upsertPeer(s) {
     let peer = MP.peers.get(s.id);
     if (!peer) {
-      const group = makePeerAvatar(s.n || '匿名');
+      const group = makePeerAvatar(s.n || '匿名', s.id);
       group.position.set(s.x, s.y, s.z);
       group.rotation.y = (s.r || 0) + Math.PI;
       scene.add(group);
@@ -1701,7 +1780,7 @@
         name: s.n || '匿名', group,
         cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
         yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
-        hp: 100, hpShown: 100, dead: false, inv: false, kills: 0, vx: 0, vz: 0, recvT: performance.now(),
+        hp: 100, hpShown: 100, dead: false, inv: false, kills: 0, vx: 0, vz: 0, recvT: performance.now(), recoil: 0,
       };
       MP.peers.set(s.id, peer);
       renderRoster();
@@ -1818,7 +1897,8 @@
       const walk = air ? 0 : Math.min(spd / (WALK * 0.7), 1);
       const run = spd > WALK * 1.1;
       if (walk > 0.05) peer.stride += dt * (run ? 13 : 9);
-      poseMonkey(peer.group.userData, { stride: peer.stride, walk, run, air, crouch: 0, land: 0, time: now / 1000 });
+      peer.recoil = Math.max(0, (peer.recoil || 0) - dt * 6);   // same decay rate as the reference
+      poseMonkey(peer.group.userData, { stride: peer.stride, walk, run, air, crouch: 0, land: 0, time: now / 1000, recoil: peer.recoil });
     }
   }
 
@@ -1832,6 +1912,7 @@
   let stridePhase = 0, jumpCharge = 0, charging = false, landTimer = 0, prevGrounded = true, strideDir = 1;
   let orbitYaw = 0, orbitPitch = 0.18;
   let scoped = false;                          // aiming down the scope (zoomed)
+  let selfRecoil = 0, aimBlend = 0;            // weapon-layer pose for our own avatar
   let editLayout = false;                      // dragging touch buttons to reposition them
   const BASE_FOV = 72, SCOPE_FOV = 28;
   const PREJUMP = 0.11;
@@ -1949,6 +2030,7 @@
   // a peer's shot: louder when near, quieter when far, panned left/right
   function onPeerShot(id) {
     const peer = MP.peers.get(id); if (!peer) return;
+    peer.recoil = 1;                                    // visible kick on their avatar
     const dx = peer.cur.x - p.x, dz = peer.cur.z - p.z;
     const dist = Math.hypot(dx, dz) || 0.001;
     const vol = Math.max(0, 1 - dist / 140) * 0.55;
@@ -2145,6 +2227,7 @@
     _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
+    selfRecoil = 1;                                     // avatar recoil kick
     playShot(0.5, 0);                                   // own gunshot
     if (MP.connected && MP.client) MP.client.publish(mtopic('shot'), JSON.stringify({ id: MP.id }));
     if (hitId) { sendHit(hitId); crosshairEl.classList.add('hit'); hitMarkTimer = 0.12; }
@@ -2732,6 +2815,8 @@
     monkey.position.set(p.x, groundY, p.z);
     monkey.rotation.y = yaw + Math.PI;
     monkey.visible = view === 'third';
+    selfRecoil = Math.max(0, selfRecoil - dt * 6);            // recoil decays, ADS eases in
+    aimBlend += ((scoped ? 1 : 0) - aimBlend) * Math.min(1, dt * 10);
     poseMonkey(monkey.userData, {
       stride: stridePhase,
       walk: (grounded && moving) ? Math.min(mag / 0.5, 1) : 0,
@@ -2740,6 +2825,7 @@
       crouch: charging ? 1 - Math.max(jumpCharge, 0) / PREJUMP : 0,
       land: Math.max(landTimer, 0) / 0.16,
       time: now / 1000,
+      recoil: selfRecoil, aim: aimBlend,
     });
 
     if (view === 'third') {
