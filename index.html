@@ -351,6 +351,19 @@
     background: var(--grass); border: 0; border-radius: 3px; padding: 0 18px; cursor: pointer;
   }
 
+  /* ---- monkey rage banner ---- */
+  #rage {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    top: calc(96px + env(safe-area-inset-top)); display: none; align-items: center; gap: 10px;
+    padding: 6px 14px; border-radius: 4px; pointer-events: none;
+    background: rgba(120,26,20,.72); border: 1px solid rgba(255,120,100,.55);
+    color: #ffd9d2; font-size: 11px; font-weight: 600; letter-spacing: .14em;
+    animation: ragepulse 1.1s ease-in-out infinite;
+  }
+  #rage.on { display: flex; }
+  #rage span { color: #fff; font-variant-numeric: tabular-nums; }
+  @keyframes ragepulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
+
   /* ---- scope button + ADS overlay ---- */
   #scopebtn {
     position: absolute; z-index: 2; pointer-events: none; border-radius: 50%;
@@ -401,6 +414,7 @@
   <div id="crosshair"></div>
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
+  <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
   <div id="hpwrap">
     <div id="hp-label">HP</div>
     <div id="hp-bar"><i id="hp-fill"></i><span id="hp-num">100</span></div>
@@ -1361,8 +1375,62 @@
     }
   }
 
+  const rageEl = document.getElementById('rage'), rageNum = document.getElementById('rage-t');
   // player run-over: if a fast car's box overlaps the player, hurt + knock back
-  let carHitCd = 0;
+  let carHitCd = 0, monkeyHitCd = 0;
+  // ── monkey rage ────────────────────────────────────────────────────
+  //  Hit one monkey and the whole troop turns on you for two minutes, with
+  //  fresh ones popping in around you the entire time.
+  const RAGE_TIME = 120, RAGE_SPAWN = 2.5, RAGE_RESPAWN = 3.0;
+  let rageT = 0, rageSpawnCd = 0;
+  function rageSpot() {                       // a clear bit of street near the player
+    for (let i = 0; i < 80; i++) {
+      const a = Math.random() * 6.2832, d = 20 + Math.random() * 18;
+      const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
+      if (Math.abs(x) > WORLD * 0.46 || Math.abs(z) > WORLD * 0.46) continue;
+      if (clearAt(x, z, 1.2)) return { x, z };
+    }
+    return null;
+  }
+  function wakeMonkey(m) {
+    const sp = rageSpot(); if (!sp) return false;
+    m.hp = 60; m.killed = false; m.deadT = 0; m.aggro = true; m.meleeCd = 0;
+    m.wx = sp.x; m.wz = sp.z; m.active = true;
+    m.group.position.set(sp.x, 0, sp.z); m.group.visible = true;
+    if (m.pooled && !m.group.parent) scene.add(m.group);
+    return true;
+  }
+  function enrageMonkeys() {
+    const fresh = rageT <= 0;
+    rageT = RAGE_TIME;
+    for (const m of monkeyPeds) if (m.hp > 0 && (!m.pooled || m.active)) m.aggro = true;
+    if (fresh) { rageSpawnCd = 0.6; playHurt(); }
+  }
+  function calmMonkeys() {
+    for (const m of monkeyPeds) {
+      m.aggro = false;
+      if (m.pooled) { m.active = false; m.group.visible = false; if (m.group.parent) scene.remove(m.group); }
+    }
+  }
+  function updateRage(dt) {
+    if (monkeyHitCd > 0) monkeyHitCd -= dt;
+    if (rageT <= 0) { if (rageEl.classList.contains('on')) rageEl.classList.remove('on'); return; }
+    rageT -= dt;
+    rageEl.classList.add('on');
+    rageNum.textContent = Math.max(0, Math.ceil(rageT));
+    rageSpawnCd -= dt;
+    if (rageSpawnCd <= 0) {                    // keep them coming
+      rageSpawnCd = RAGE_SPAWN;
+      const idle = monkeyPeds.find((m) => m.pooled && !m.active);
+      if (idle) wakeMonkey(idle);
+    }
+    for (const m of monkeyPeds) {              // and put the fallen back in play
+      if (m.hp > 0) continue;
+      m.deadT = (m.deadT || 0) + dt;
+      if (m.deadT >= RAGE_RESPAWN) wakeMonkey(m);
+    }
+    if (rageT <= 0) calmMonkeys();
+  }
   function runOver(bx, bz, heading, hw, hl, speed, dmg) {
     if (dead || carHitCd > 0 || speed < 4) return;
     const dx = p.x - bx, dz = p.z - bz, ch = Math.cos(heading), sh = Math.sin(heading);
@@ -1423,14 +1491,31 @@
   }
   function updatePed(ped, dt) {
     if (ped.isMonkey) {
+      if (ped.pooled && !ped.active) return;
       if (ped.hp <= 0) { ped.group.visible = false; return; }
+      // distance LOD (the reference's CharacterOptimizationSystem, trimmed down):
+      // far mobs are skipped outright, mid-range ones drop their kit. Keeps a
+      // 20-strong troop affordable without touching how players look up close.
+      { const dx = ped.wx - p.x, dz = ped.wz - p.z, d2 = dx * dx + dz * dz;
+        if (d2 > 5625) { ped.group.visible = false; return; }        // > 75 m
+        ped.group.visible = true;
+        const near = d2 < 1225;                                       // < 35 m
+        if (ped.gearOn !== near) {
+          ped.gearOn = near;
+          const gr = ped.group.userData.gear;
+          if (gr) for (let i = 0; i < gr.length; i++) gr[i].visible = near;
+        }
+      }
       let heading, walk = 1, running = ped.running;
       if (ped.aggro && !dead) {                                 // shot at us → charge and swipe
         const dx = p.x - ped.wx, dz = p.z - ped.wz, d = Math.hypot(dx, dz) || 1;
         if (d > 1.3) { ped.wx += dx / d * 4.6 * dt; ped.wz += dz / d * 4.6 * dt; }
         heading = Math.atan2(dx, dz); running = true;
         ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
-        if (d < 1.9 && ped.meleeCd <= 0) { applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; camShake = Math.max(camShake, 0.22); }
+        if (d < 1.9 && ped.meleeCd <= 0 && monkeyHitCd <= 0) {
+          applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; monkeyHitCd = 0.4;   // caps swarm DPS
+          camShake = Math.max(camShake, 0.22);
+        }
         ped.phase += dt * 13;
       } else {
         const s = pedGraphStep(ped, dt); ped.wx = s.bx; ped.wz = s.bz; heading = s.heading; walk = s.walk;
@@ -1474,6 +1559,7 @@
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
     for (const nf of neonFlicker) nf.mesh.material.opacity = 0.72 + 0.28 * Math.abs(Math.sin(cityT * nf.rate + nf.ph));
     updateBananas(dt);
+    updateRage(dt);
   }
 
   // ---- monkey avatar (rigged; shown in third-person view) ----
@@ -1485,9 +1571,9 @@
     const skinD = new THREE.MeshStandardMaterial({ color: 0x8E3F34, roughness: 0.7, metalness: 0 });
     const hands = new THREE.MeshStandardMaterial({ color: 0xB07A63, roughness: 0.85, metalness: 0 });
     const dark  = new THREE.MeshStandardMaterial({ color: 0x1B1206, roughness: 0.5 });
-    const sph = (r, s = 16) => new THREE.SphereGeometry(r, s, s);
+    const sph = (r, s = 10) => new THREE.SphereGeometry(r, s, s);
     const seg = (len, rt, rb, mat) => {
-      const gm = new THREE.CylinderGeometry(rt, rb, len, 10);
+      const gm = new THREE.CylinderGeometry(rt, rb, len, 7);
       gm.translate(0, -len / 2, 0);             // pivot at the top
       return new THREE.Mesh(gm, mat);
     };
@@ -1565,6 +1651,7 @@
     gun.position.set(0.02, -0.50, 0.15); gun.rotation.set(-0.2, 0, 0);
     ra.lo.add(gun);
 
+    g.traverse((o) => { if (o.isMesh) { o.updateMatrix(); o.matrixAutoUpdate = false; } });
     g.scale.setScalar(0.9);
     g.userData = {
       body, torso, head, tail, gun,
@@ -1595,17 +1682,19 @@
     const P = mk.userData;
     if (!P || P.geared) return mk;
     P.geared = true;
+    const parts = P.gear = [];
+    const keep = (m) => { parts.push(m); return m; };
     const U = UNIFORMS[hashId(id || 'x') % UNIFORMS.length];
     const coat  = new THREE.MeshStandardMaterial({ color: U.coat, roughness: 0.74, metalness: 0.06, flatShading: true });
     const gear  = new THREE.MeshStandardMaterial({ color: U.gear, roughness: 0.92, metalness: 0.04, flatShading: true });
     const strap = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.82, metalness: 0.1 });
     const visorM = new THREE.MeshStandardMaterial({ color: 0x8fd0ff, roughness: 0.10, metalness: 0.9, emissive: 0x24506f });
-    const box = (w, h, d, m) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    const box = (w, h, d, m) => keep(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m));
 
     // helmet + brow band + visor
-    const helm = new THREE.Mesh(new THREE.SphereGeometry(0.30, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56), coat);
+    const helm = keep(new THREE.Mesh(new THREE.SphereGeometry(0.30, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.56), coat));
     helm.position.set(0, 0.04, -0.02); helm.scale.set(1.02, 1.06, 1.06); P.head.add(helm);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.305, 0.305, 0.06, 18, 1, true), strap);
+    const band = keep(new THREE.Mesh(new THREE.CylinderGeometry(0.305, 0.305, 0.06, 12, 1, true), strap));
     band.position.set(0, 0.05, -0.02); band.scale.set(1, 1, 1.05); P.head.add(band);
     const visor = box(0.34, 0.11, 0.14, visorM); visor.position.set(0, 0.06, 0.27); P.head.add(visor);
 
@@ -1620,13 +1709,14 @@
 
     // shoulder pads ride the arm pivots, boots ride the shins
     for (const a of [P.lArm, P.rArm]) {
-      const pad = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), coat);
+      const pad = keep(new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.62), coat));
       pad.position.y = -0.02; a.add(pad);
     }
     for (const l of [P.lLegLo, P.rLegLo]) {
       const boot = box(0.24, 0.17, 0.36, strap); boot.position.set(0, -0.44, 0.07); l.add(boot);
       const knee = box(0.18, 0.14, 0.06, gear); knee.position.set(0, -0.06, 0.11); l.add(knee);
     }
+    for (const m of parts) { m.updateMatrix(); m.matrixAutoUpdate = false; }
     return mk;
   }
 
@@ -1723,6 +1813,15 @@
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
   gearUp(monkey, MP.id);                 // kit out our own avatar
+  monkeyPeds.forEach((m, k) => gearUp(m.group, 'mob' + k));   // mobs wear the same kit
+  for (let k = 0; k < 10; k++) {         // reserve troop, woken during a rage
+    const e = randEdge();
+    e.ped = true; e.isMonkey = true; e.pooled = true; e.active = false;
+    e.side = Math.random() < 0.5 ? 1 : -1; e.running = true; e.speed = 3.6; e.pspeed = 0;
+    e.phase = Math.random() * 6; e.hp = 0; e.deadT = 1e9; e.aggro = false; e.meleeCd = 0; e.wx = 0; e.wz = 0;
+    e.group = gearUp(makeMonkey(), 'rage' + k); e.group.visible = false;
+    peds.push(e); monkeyPeds.push(e);          // added to the scene only when woken
+  }
   const netStatus = document.getElementById('net-status');
   const netList   = document.getElementById('net-list');
   const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -2248,6 +2347,7 @@
     if (hitMonkey) {
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; crosshairEl.classList.add('hit'); hitMarkTimer = 0.12;
       if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
+      enrageMonkeys();                                 // the whole troop comes for you
     }
   }
 
