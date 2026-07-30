@@ -724,8 +724,11 @@
 
   // ---- traffic-signal phase on a shared clock (2 = green, 1 = yellow, 0 = red) ----
   let cityT = 0;
-  const SIG = { g: 7, y: 2, ar: 1.3, scr: 5 };
-  const CYCLE = SIG.g * 2 + SIG.y * 2 + SIG.ar * 2 + SIG.scr;
+  //  The cycle is tuned so that HALF of it is exactly the time it takes to drive
+  //  one block at cruise (66 m at ~8.5 m/s ≈ 7.76 s). That is what lets the
+  //  green wave below actually work — see WAVE_STEP.
+  const SIG = { g: 4.2, y: 1.5, ar: 0.8, scr: 2.5 };
+  const CYCLE = SIG.g * 2 + SIG.y * 2 + SIG.ar * 2 + SIG.scr;      // 15.5 s
   function signalPhase(t) {
     t = ((t % CYCLE) + CYCLE) % CYCLE;
     if (t < SIG.g) return { ns: 2, ew: 0, ped: 0 };                 t -= SIG.g;
@@ -1277,40 +1280,67 @@
   scene.add(slPole, slHead, slGlow);
   const LAMP_OFF = new THREE.Color(0x14110a), LAMP_ON = new THREE.Color(0xffe4ae);
 
-  // each intersection runs on its own phase offset — a de-synced, green-wave city
-  const sigOffset = (i, j) => (i * 2 + j * 3) * 1.7;
+  // Green wave. Neighbouring intersections are offset by half a cycle, and half
+  // a cycle is one block at cruise — so a car that clears one green arrives at
+  // the next in exactly the same part of the cycle and rolls straight through.
+  // Because two half-cycles make a whole one, this works in *all four*
+  // directions, not just the way the wave runs. The old offsets (i*2 + j*3)*1.7
+  // bore no relation to the block time or the cycle, so traffic stopped at
+  // almost every intersection no matter which way it was going.
+  const WAVE_STEP = CYCLE / 2;                          // ≈ 7.76 s = 66 m at cruise
+  const sigOffset = (i, j) => -(i + j) * WAVE_STEP;
   const phaseAt = (i, j) => signalPhase(cityT + sigOffset(i, j));
+  // A walker crossing at a head has the traffic that would hit them stopped.
+  // axis 1 = the head over the E-W road, read by walkers going E-W, who are
+  // crossing the N-S road — so it is the N-S traffic that has to be red.
+  const pedWalk = (P, axis) => P.ped === 1 || (axis === 1 ? P.ns : P.ew) === 0;
 
-  // detailed signals — FOUR per intersection, one on each corner. Two show the
-  // N-S state, two the E-W state (Japanese horizontal 3-lens head + ped head).
+  // Detailed signals — FOUR per intersection, one on each corner, at EVERY
+  // intersection on the grid (the old set covered only the middle 7×7, so cars
+  // and walkers out at the edge were obeying signals that were not there).
+  // Lower-poly lenses keep the triangle budget where it was despite 2.5× the heads.
   const sigIJ = [], sigAxis = [];
-  const NSIG = 7 * 7 * 4;
+  const NSIG = (2 * N + 1) * (2 * N + 1) * 4;
   const caseMat = new THREE.MeshLambertMaterial({ color: 0x1c2024 });
   const bmat = () => new THREE.MeshBasicMaterial({ toneMapped: false });
   const sigPole = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 6.2, 0.2), poleMat, NSIG);
+  const sigArm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.14, 0.14), poleMat, NSIG);
   const sigCase = new THREE.InstancedMesh(new THREE.BoxGeometry(2.7, 0.8, 0.5), caseMat, NSIG);
-  const lensGeo = new THREE.SphereGeometry(0.27, 10, 8);
+  const lensGeo = new THREE.SphereGeometry(0.27, 8, 5);
   const sigGrn = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
   const sigYel = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
   const sigRed = new THREE.InstancedMesh(lensGeo, bmat(), NSIG);
   const pedCase = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1.0, 0.3), caseMat, NSIG);
-  const pedGeo = new THREE.SphereGeometry(0.17, 10, 8);
+  const pedGeo = new THREE.SphereGeometry(0.17, 6, 4);
   const pedRedI = new THREE.InstancedMesh(pedGeo, bmat(), NSIG);
   const pedGrnI = new THREE.InstancedMesh(pedGeo, bmat(), NSIG);
   const cC = RW + 1.5, hy = 5.4;
-  const HCFG = [[cC, cC, Math.PI], [-cC, cC, -Math.PI / 2], [-cC, -cC, 0], [cC, -cC, Math.PI / 2]];
+  // A head's lens face looks along world (−sin rot, −cos rot) — straight back at
+  // the drivers it stops. Each one sits on the FAR-LEFT corner for that approach
+  // (Japanese practice; two of them used to be on the near corner, so they read
+  // as facing the wrong way) and is cantilevered out over that traffic's lane.
+  const HCFG = [
+    //  pole corner   rot            head, out over the lane it governs
+    [ cC,  cC,  0,             LANE,  cC],    // stops south-bound (+z) traffic
+    [-cC, -cC,  Math.PI,      -LANE, -cC],    // stops north-bound (−z) traffic
+    [ cC, -cC,  Math.PI / 2,   cC,   -LANE],  // stops east-bound  (+x) traffic
+    [-cC,  cC, -Math.PI / 2,  -cC,    LANE],  // stops west-bound  (−x) traffic
+  ];
   let K = 0;
-  for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) {
+  for (let i = -N; i <= N; i++) for (let j = -N; j <= N; j++) {
     const cx = i * PITCH, cz = j * PITCH;
     for (let m = 0; m < 4; m++) {
-      const [dx, dz, rot] = HCFG[m], px = cx + dx, pz = cz + dz;
+      const [dx, dz, rot, hx, hz] = HCFG[m];
+      const px = cx + dx, pz = cz + dz;                  // pole, on the corner
+      const qx = cx + hx, qz = cz + hz;                  // head, over the lane
       const co = Math.cos(rot), si = Math.sin(rot);
       setInst(sigPole, K, px, 3.1, pz, rot, 1, 1, 1);
-      setInst(sigCase, K, px, hy, pz, rot, 1, 1, 1);
+      setInst(sigArm, K, (px + qx) / 2, hy + 0.55, (pz + qz) / 2, rot, Math.hypot(qx - px, qz - pz), 1, 1);
+      setInst(sigCase, K, qx, hy, qz, rot, 1, 1, 1);
       for (let li = 0; li < 3; li++) {
-        const lx = [-0.8, 0, 0.8][li];
-        const wx = px + lx * co + (-0.32) * si, wz = pz - lx * si + (-0.32) * co;
-        setInst([sigGrn, sigYel, sigRed][li], K, wx, hy, wz, 0, 1, 1, 1);
+        const lx = [-0.8, 0, 0.8][li];                   // red sits on the driver's right
+        const wx = qx + lx * co + (-0.32) * si, wz = qz - lx * si + (-0.32) * co;
+        setInst([sigRed, sigYel, sigGrn][li], K, wx, hy, wz, 0, 1, 1, 1);
       }
       setInst(pedCase, K, px + (-0.32) * si, 3.0, pz + (-0.32) * co, rot, 1, 1, 1);
       setInst(pedRedI, K, px - 0.5 * si, 3.28, pz - 0.5 * co, 0, 1, 1, 1);
@@ -1319,7 +1349,7 @@
       K++;
     }
   }
-  scene.add(sigPole, sigCase, sigGrn, sigYel, sigRed, pedCase, pedRedI, pedGrnI);
+  scene.add(sigPole, sigArm, sigCase, sigGrn, sigYel, sigRed, pedCase, pedRedI, pedGrnI);
   const LC = {
     rOn: new THREE.Color(0xff2e2e), rOff: new THREE.Color(0x360a0a),
     yOn: new THREE.Color(0xffc400), yOff: new THREE.Color(0x322800),
@@ -1327,16 +1357,31 @@
     pROn: new THREE.Color(0xff5a3a), pROff: new THREE.Color(0x361208),
     pGOn: new THREE.Color(0x39ff88), pGOff: new THREE.Color(0x0c3a20),
   };
+  // Exact every frame — what a lens shows is always what the cars and walkers at
+  // that intersection are obeying this instant. It stays cheap despite 2.5× the
+  // heads: the phase is solved once per intersection (the four heads sit
+  // together), and lenses are rewritten only on the frame their state changes.
+  const sigPrev = new Int8Array(NSIG);
   function updateSignalLenses() {
-    for (let k = 0; k < NSIG; k++) {
+    let dirty = false;
+    for (let k = 0; k < NSIG; k += 4) {
       const P = phaseAt(sigIJ[k][0], sigIJ[k][1]);
-      const st = sigAxis[k] === 0 ? P.ns : P.ew;                 // this head's road
-      sigGrn.setColorAt(k, st === 2 ? LC.gOn : LC.gOff);
-      sigYel.setColorAt(k, st === 1 ? LC.yOn : LC.yOff);
-      sigRed.setColorAt(k, st === 0 ? LC.rOn : LC.rOff);
-      pedRedI.setColorAt(k, P.ped ? LC.pROff : LC.pROn);
-      pedGrnI.setColorAt(k, P.ped ? LC.pGOn : LC.pGOff);
+      for (let m = 0; m < 4; m++) {
+        const kk = k + m, axis = sigAxis[kk];
+        const st = axis === 0 ? P.ns : P.ew;                     // this head's road
+        const walk = pedWalk(P, axis);                           // what the walkers here actually do
+        const code = 1 + st * 2 + (walk ? 1 : 0);
+        if (sigPrev[kk] === code) continue;
+        sigPrev[kk] = code;
+        sigGrn.setColorAt(kk, st === 2 ? LC.gOn : LC.gOff);
+        sigYel.setColorAt(kk, st === 1 ? LC.yOn : LC.yOff);
+        sigRed.setColorAt(kk, st === 0 ? LC.rOn : LC.rOff);
+        pedRedI.setColorAt(kk, walk ? LC.pROff : LC.pROn);
+        pedGrnI.setColorAt(kk, walk ? LC.pGOn : LC.pGOff);
+        dirty = true;
+      }
     }
+    if (!dirty) return;
     sigGrn.instanceColor.needsUpdate = sigYel.instanceColor.needsUpdate = sigRed.instanceColor.needsUpdate = true;
     pedRedI.instanceColor.needsUpdate = pedGrnI.instanceColor.needsUpdate = true;
   }
@@ -1565,13 +1610,14 @@
 
   function pedGraphStep(ped, dt) {
     const P = phaseAt(ped.i + ped.di, ped.j + ped.dj);
-    const canCross = P.ped === 1 || (ped.di !== 0 ? P.ns !== 2 : P.ew !== 2);
+    const canCross = pedWalk(P, ped.di !== 0 ? 1 : 0);   // the same rule the ped head displays
     let target = ped.speed;
     const distToNode = (1 - ped.s) * PITCH, stopS = 1 - (RW + 2.5) / PITCH;
-    if (!canCross && distToNode < RW + 3) target = 0;
+    const committed = ped.s > stopS;            // already out on the crossing — finish it
+    if (!canCross && !committed && distToNode < RW + 3) target = 0;
     ped.pspeed += (target - ped.pspeed) * Math.min(1, dt * 4);
     ped.s += ped.pspeed * dt / PITCH;
-    if (!canCross) ped.s = Math.min(ped.s, stopS);
+    if (!canCross && !committed) ped.s = Math.min(ped.s, stopS);
     if (ped.s >= 1) advanceNode(ped);
     const off = ped.side * (RW + SWW * 0.55);
     const bx = (ped.i + ped.s * ped.di) * PITCH + ped.dj * off, bz = (ped.j + ped.s * ped.dj) * PITCH - ped.di * off;
@@ -1763,11 +1809,15 @@
     const go = (a.di !== 0 ? node.ew : node.ns) === 2;
     let target = a.cruise;
     const distToNode = (1 - a.s) * PITCH, stopS = 1 - (RW + 3) / PITCH;
-    if (!go && distToNode < RW + stopExtra) target = 0;
+    // Once past the stop line the car is committed: it clears the intersection
+    // even if the light changes behind it. Without this the hard clamp below
+    // dragged cars that were already in the junction back to the line.
+    const committed = a.s > stopS;
+    if (!go && !committed && distToNode < RW + stopExtra) target = 0;
     if (followAhead < 9) target = Math.min(target, Math.max(0, (followAhead - 5.5) * 1.4));   // keep a car-length gap
     a.speed += (target - a.speed) * Math.min(1, dt * 2.4);
     a.s += a.speed * dt / PITCH;
-    if (!go) a.s = Math.min(a.s, stopS);
+    if (!go && !committed) a.s = Math.min(a.s, stopS);
     return a.s >= 1 ? advanceNode(a) : false;   // returns whether a turn happened
   }
   // nearest vehicle ahead on the same edge+direction — cars AND Ferraris, so
