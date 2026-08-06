@@ -1488,7 +1488,7 @@
   const AVGCRUISE = 8.5;
   const ferraris = [];
   for (let k = 0; k < 6; k++) {
-    const e = randEdge(); e.speed = 12; e.cruise = AVGCRUISE * 3; e.turnSign = 1; e.drift = 0;   // 3× normal
+    const e = randEdge(); e.speed = 12; e.cruise = AVGCRUISE * 3; e.turnSign = 1; e.drift = 0; e.reckless = true;   // 3× normal, runs reds
     // seed their start nodes across every quarter of the grid so they roam the whole city
     e.i = Math.max(-(N - 1), Math.min(N - 1, ((k % 3) - 1) * (N - 1)));
     e.j = Math.max(-(N - 1), Math.min(N - 1, (k < 3 ? -1 : 1) * (N - 2)));
@@ -1552,7 +1552,10 @@
   // ---- pedestrians: instanced *2-segment* articulated humans (thigh + shin and
   //  upper-arm + forearm that bend at the knee/elbow, plus feet and hair) — the
   //  earlier detailed look, but drawn with instancing so the crowd stays cheap ----
-  const NUMHUMAN = 215, NUMMONKEY = 12;
+  // The last NUM_CORPSE instance slots are not walkers: they hold the bodies of
+  // people who have been run over or shot, so a corpse costs no extra draw call
+  // and is built from the same parts and materials as the crowd.
+  const NUM_WALKER = 215, NUM_CORPSE = 8, NUMHUMAN = NUM_WALKER + NUM_CORPSE, NUMMONKEY = 12;
   const SKINc = [0xE7B98F, 0xC98A5A, 0x8D5A3B], SHIRTc = [0x3a6ea5, 0xb04a4a, 0x3a8a5a, 0xcaa63a, 0x9a9aa2, 0xd8d8dc, 0x6a4a8a, 0x2f4d5a];
   const PANTSc = [0x2a2f3a, 0x4a4034, 0x33384a, 0x22252b, 0x555a63];
   const HAIRc = [0x1a1712, 0x2a2018, 0x4a3a2a, 0x101014];
@@ -1584,16 +1587,31 @@
   const _armLu = _mk(_sk, -0.25, 1.44, 0), _armLl = _mk(_armLu, 0, -0.30, 0);
   const _armRu = _mk(_sk, 0.25, 1.44, 0), _armRl = _mk(_armRu, 0, -0.30, 0);
 
+  // one number carries a whole outfit (shirt / trousers / skin / hair)
+  const packLook = (s, p, k, h) => ((s * PANTSc.length + p) * SKINc.length + k) * HAIRc.length + h;
+  function dressHuman(slot, colr) {
+    let v = colr | 0;
+    const h = v % HAIRc.length; v = (v / HAIRc.length) | 0;
+    const k = v % SKINc.length; v = (v / SKINc.length) | 0;
+    const pn = v % PANTSc.length; const sh = ((v / PANTSc.length) | 0) % SHIRTc.length;
+    const shirt = new THREE.Color(SHIRTc[sh]), pants = new THREE.Color(PANTSc[pn]);
+    torsoI.setColorAt(slot, shirt); armLuI.setColorAt(slot, shirt); armRuI.setColorAt(slot, shirt);
+    armLlI.setColorAt(slot, shirt); armRlI.setColorAt(slot, shirt);
+    hipI.setColorAt(slot, pants); legLuI.setColorAt(slot, pants); legRuI.setColorAt(slot, pants);
+    legLlI.setColorAt(slot, pants); legRlI.setColorAt(slot, pants);
+    headI.setColorAt(slot, new THREE.Color(SKINc[k]));
+    hairI.setColorAt(slot, new THREE.Color(HAIRc[h]));
+  }
+
   const peds = [];
-  for (let k = 0; k < NUMHUMAN; k++) {
+  for (let k = 0; k < NUM_WALKER; k++) {
     const e = randEdge(); e.ped = true; e.side = Math.random() < 0.5 ? 1 : -1;
     e.running = Math.random() < 0.3; e.speed = e.running ? 3.6 : 1.5; e.pspeed = 0; e.phase = Math.random() * 6; e.hidx = k; e.wx = 0; e.wz = 0;
-    const shirt = new THREE.Color(SHIRTc[Math.random() * SHIRTc.length | 0]);
-    const pants = new THREE.Color(PANTSc[Math.random() * PANTSc.length | 0]);
-    torsoI.setColorAt(k, shirt); armLuI.setColorAt(k, shirt); armRuI.setColorAt(k, shirt); armLlI.setColorAt(k, shirt); armRlI.setColorAt(k, shirt);
-    hipI.setColorAt(k, pants); legLuI.setColorAt(k, pants); legRuI.setColorAt(k, pants); legLlI.setColorAt(k, pants); legRlI.setColorAt(k, pants);
-    headI.setColorAt(k, new THREE.Color(SKINc[Math.random() * SKINc.length | 0]));
-    hairI.setColorAt(k, new THREE.Color(HAIRc[Math.random() * HAIRc.length | 0]));
+    // the outfit is kept as one packed index so a corpse can be dressed exactly
+    // like the walker it came from, on every screen, from one number
+    e.colr = packLook(Math.random() * SHIRTc.length | 0, Math.random() * PANTSc.length | 0,
+                      Math.random() * SKINc.length | 0, Math.random() * HAIRc.length | 0);
+    dressHuman(k, e.colr);
     peds.push(e);
   }
   for (const m of humanI) if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -1623,6 +1641,185 @@
     const off = ped.side * (RW + SWW * 0.55);
     const bx = (ped.i + ped.s * ped.di) * PITCH + ped.dj * off, bz = (ped.j + ped.s * ped.dj) * PITCH - ped.di * off;
     return { bx, bz, heading: Math.atan2(ped.di, ped.dj), walk: ped.pspeed > 0.3 ? Math.min(ped.pspeed / ped.speed, 1) : 0 };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  Bodies — a walker who is run over or shot is launched, lands, and stays
+  //  there as a corpse until the monkeys have finished with it. Each corpse
+  //  borrows one of the reserved human instance slots, so it is a full body
+  //  in the walker's own clothes and costs nothing extra to draw.
+  // ──────────────────────────────────────────────────────────
+  const CORPSE_EAT = 10, CORPSE_FEEDERS = 5, CORPSE_GIVEUP = 25;
+  const _hideM = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+  const corpses = [];
+  for (let n = 0; n < NUM_CORPSE; n++) {
+    const c = { k: NUM_WALKER + n, active: false, cid: 0, colr: 0, x: 0, y: 0, z: 0,
+                vx: 0, vy: 0, vz: 0, heading: 0, tumble: 0, spin: 0, state: 'lie',
+                age: 0, eaters: 0, eatT: 0 };
+    corpses.push(c);
+    for (const m of humanI) m.setMatrixAt(c.k, _hideM);
+  }
+  function freeCorpse(c) {
+    c.active = false; c.eatT = 0; c.eaters = 0;
+    for (const m of humanI) m.setMatrixAt(c.k, _hideM);
+    for (const mk of monkeyPeds) if (mk.feedC === c) { mk.feedC = null; mk.eating = false; reseatPed(mk); }
+  }
+  function spawnCorpse(cid, x, z, vx, vz, colr, flying) {
+    let c = corpses.find((o) => o.cid === cid && o.active);
+    if (c) return c;                                     // already have this one
+    c = corpses.find((o) => !o.active);
+    if (!c) { c = corpses.reduce((a, b) => (a.age > b.age ? a : b)); freeCorpse(c); }
+    c.active = true; c.cid = cid; c.colr = colr;
+    c.x = x; c.z = z; c.age = 0; c.eaters = 0; c.eatT = 0; c.tumble = 0;
+    c.heading = Math.atan2(vx, vz) + Math.PI;            // lands head-first along the hit
+    if (flying) {
+      c.state = 'fly'; c.y = height(x, z) + 0.9;
+      c.vx = vx; c.vz = vz; c.vy = 4.2 + Math.random() * 2.2;
+      c.spin = (5 + Math.random() * 5) * (Math.random() < 0.5 ? -1 : 1);
+    } else {
+      c.state = 'lie'; c.y = height(x, z) + 0.16; c.vx = c.vy = c.vz = 0; c.spin = 0;
+    }
+    dressHuman(c.k, colr);
+    for (const m of humanI) if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    return c;
+  }
+  // a walker who is killed leaves a body and rejoins the crowd somewhere else,
+  // so the streets stay as busy as they were
+  function killPed(e, dirx, dirz, power) {
+    if (e.isMonkey) return null;
+    const cid = (Math.random() * 2147483646 | 0) + 1;
+    const sp = Math.max(3.5, Math.min(16, power));
+    const jx = (Math.random() - 0.5) * 0.5, jz = (Math.random() - 0.5) * 0.5;
+    const c = spawnCorpse(cid, e.wx, e.wz, (dirx + jx) * sp, (dirz + jz) * sp, e.colr, true);
+    publishCorpse(c);
+    spawnImpact(_corpseHit.set(e.wx, 1.0, e.wz));
+    playThud(Math.hypot(e.wx - p.x, e.wz - p.z));
+    respawnPed(e);
+    return c;
+  }
+  const _corpseHit = new THREE.Vector3();
+  // Put a walker back on the graph at the sidewalk lane nearest to where it is
+  // standing now. Anything that leaves the graph — a monkey that chased you
+  // across the map, or one that walked off to a body — has a stale i/j/s, and
+  // rejoining without this snapped it back to wherever it had left off.
+  function reseatPed(e) {
+    const ci = Math.round(e.wx / PITCH), cj = Math.round(e.wz / PITCH);
+    if (Math.abs(e.wz - cj * PITCH) <= Math.abs(e.wx - ci * PITCH)) {   // nearer an E-W road
+      e.di = 1; e.dj = 0;
+      e.j = Math.max(-N, Math.min(N, cj));
+      const u = e.wx / PITCH;
+      e.i = Math.max(-N, Math.min(N - 1, Math.floor(u)));
+      e.s = Math.max(0, Math.min(0.999, u - e.i));
+      e.side = e.wz > e.j * PITCH ? -1 : 1;
+    } else {                                                            // nearer an N-S road
+      e.di = 0; e.dj = 1;
+      e.i = Math.max(-N, Math.min(N, ci));
+      const u = e.wz / PITCH;
+      e.j = Math.max(-N, Math.min(N - 1, Math.floor(u)));
+      e.s = Math.max(0, Math.min(0.999, u - e.j));
+      e.side = e.wx > e.i * PITCH ? 1 : -1;
+    }
+    e.pspeed = 0; e.rx = e.wx; e.rz = e.wz; e.hd = Math.atan2(e.di, e.dj);
+  }
+  function respawnPed(e) {
+    const n = randEdge();
+    e.i = n.i; e.j = n.j; e.di = n.di; e.dj = n.dj; e.s = n.s;
+    e.side = Math.random() < 0.5 ? 1 : -1; e.pspeed = 0;
+    const off = e.side * (RW + SWW * 0.55);
+    e.wx = e.rx = (e.i + e.s * e.di) * PITCH + e.dj * off;
+    e.wz = e.rz = (e.j + e.s * e.dj) * PITCH - e.di * off;
+    e.hd = Math.atan2(e.di, e.dj);
+  }
+  // run down anything on the crossing — the box test the player already gets
+  function mowDownPeds(bx, bz, heading, hw, hl, speed) {
+    if (speed < 5) return;
+    const ch = Math.cos(heading), sh = Math.sin(heading);
+    for (let i = 0; i < peds.length; i++) {
+      const e = peds[i];
+      if (e.isMonkey) continue;
+      const dx = e.wx - bx, dz = e.wz - bz;
+      if (dx * dx + dz * dz > 25) continue;               // cheap reject
+      const lz = dx * sh + dz * ch, lx = dx * ch - dz * sh;
+      if (Math.abs(lx) < hw + 0.4 && Math.abs(lz) < hl + 0.4) killPed(e, sh, ch, speed * 0.5);
+    }
+  }
+  function updateCorpses(dt) {
+    const mine = mobSim();
+    for (const c of corpses) {
+      if (!c.active) continue;
+      c.age += dt;
+      if (c.state === 'fly') {
+        c.vy -= 22 * dt;
+        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt;
+        c.vx *= 1 - dt * 0.6; c.vz *= 1 - dt * 0.6;
+        c.tumble += c.spin * dt;
+        const g = height(c.x, c.z) + 0.16;
+        if (c.y <= g && c.vy < 0) { c.y = g; c.state = 'lie'; c.tumble = 0; }
+      } else {
+        // every client counts who is crowding the body (it is what makes it
+        // twitch), but only the troop's owner runs the clock that clears it
+        c.eaters = 0;
+        for (const mk of monkeyPeds) {
+          if (!mk.eating || mk.hp <= 0) continue;
+          const dx = mk.wx - c.x, dz = mk.wz - c.z;
+          if (dx * dx + dz * dz < 9) c.eaters++;
+        }
+        if (mine) {
+          if (c.eatT > 0) { c.eatT -= dt; if (c.eatT <= 0) { freeCorpse(c); continue; } }
+          else if (c.eaters >= CORPSE_FEEDERS || (c.eaters >= 1 && c.age > CORPSE_GIVEUP)) c.eatT = CORPSE_EAT;
+        }
+      }
+      drawCorpse(c);
+    }
+  }
+  function drawCorpse(c) {
+    const k = c.k;
+    if (c.state === 'fly') {
+      _sk.position.set(c.x, c.y, c.z);
+      _sk.rotation.set(c.tumble, c.heading, c.tumble * 0.55, 'YXZ');
+      const f = Math.sin(c.tumble * 1.7);
+      _legLu.rotation.x = -0.7 + f * 0.6; _legLl.rotation.x = 0.5 + f * 0.4;
+      _legRu.rotation.x = -0.3 - f * 0.6; _legRl.rotation.x = 0.8 - f * 0.4;
+      _armLu.rotation.x = -1.9 + f * 0.5; _armLl.rotation.x = -0.5;
+      _armRu.rotation.x = -2.2 - f * 0.5; _armRl.rotation.x = -0.3;
+      _armLu.rotation.z = 0.7; _armRu.rotation.z = -0.6;
+    } else {
+      const jig = c.eaters > 0 ? Math.sin(cityT * 13 + c.cid) * 0.035 : 0;   // tugged at while eaten
+      _sk.position.set(c.x, c.y + jig, c.z);
+      _sk.rotation.set(-Math.PI / 2, c.heading, jig * 2, 'YXZ');             // flat on its back
+      _legLu.rotation.x = 0.22; _legLl.rotation.x = -0.34;
+      _legRu.rotation.x = -0.16; _legRl.rotation.x = -0.18;
+      _armLu.rotation.x = 0.55; _armLl.rotation.x = -0.42;
+      _armRu.rotation.x = 0.30; _armRl.rotation.x = -0.65;
+      _armLu.rotation.z = 0.85; _armRu.rotation.z = -0.62;
+    }
+    _sk.updateMatrixWorld(true);
+    torsoI.setMatrixAt(k, _sk.matrixWorld); hipI.setMatrixAt(k, _sk.matrixWorld);
+    headI.setMatrixAt(k, _sk.matrixWorld); hairI.setMatrixAt(k, _sk.matrixWorld);
+    legLuI.setMatrixAt(k, _legLu.matrixWorld); legLlI.setMatrixAt(k, _legLl.matrixWorld); footLI.setMatrixAt(k, _footLn.matrixWorld);
+    legRuI.setMatrixAt(k, _legRu.matrixWorld); legRlI.setMatrixAt(k, _legRl.matrixWorld); footRI.setMatrixAt(k, _footRn.matrixWorld);
+    armLuI.setMatrixAt(k, _armLu.matrixWorld); armLlI.setMatrixAt(k, _armLl.matrixWorld);
+    armRuI.setMatrixAt(k, _armRu.matrixWorld); armRlI.setMatrixAt(k, _armRl.matrixWorld);
+    _armLu.rotation.z = 0; _armRu.rotation.z = 0;          // walkers do not use roll
+  }
+  // pick which monkeys go and eat: nearest free ones, up to five per body, and
+  // never while the troop is raging (a rage outranks a free meal)
+  function assignFeeders() {
+    if (!mobSim()) return;
+    for (const mk of monkeyPeds) if (mk.feedC && !mk.feedC.active) { mk.feedC = null; mk.eating = false; }
+    if (rageT > 0) { for (const mk of monkeyPeds) { mk.feedC = null; mk.eating = false; } return; }
+    for (const c of corpses) {
+      if (!c.active || c.state !== 'lie' || c.eatT > 0) continue;
+      let claimed = 0;
+      for (const mk of monkeyPeds) if (mk.feedC === c) claimed++;
+      for (let i = 0; i < monkeyPeds.length && claimed < CORPSE_FEEDERS; i++) {
+        const mk = monkeyPeds[i];
+        if (mk.feedC || mk.hp <= 0 || (mk.pooled && !mk.active)) continue;
+        const dx = mk.wx - c.x, dz = mk.wz - c.z;
+        if (dx * dx + dz * dz > 6400) continue;            // within 80 m
+        mk.feedC = c; claimed++;
+      }
+    }
   }
 
   // ---- neon signs on the taller buildings (some flicker) ----
@@ -1799,7 +1996,8 @@
   }
   function calmMonkeys() {
     for (const m of monkeyPeds) {
-      m.aggro = false;
+      if (m.aggro && m.hp > 0) reseatPed(m);   // they chased you off the graph; walk on from here
+      m.aggro = false; m.eating = false; m.feedC = null;
       if (m.pooled) { m.active = false; m.group.visible = false; if (m.group.parent) scene.remove(m.group); }
     }
   }
@@ -1835,7 +2033,9 @@
   }
   function driveAgent(a, dt, followAhead, stopExtra) {
     const node = phaseAt(a.i + a.di, a.j + a.dj);
-    const go = (a.di !== 0 ? node.ew : node.ns) === 2;
+    // the Ferraris run every red they come to; they still keep a gap to the car
+    // in front, so they blow the light without driving through anybody's boot
+    const go = a.reckless || (a.di !== 0 ? node.ew : node.ns) === 2;
     let target = a.cruise;
     const distToNode = (1 - a.s) * PITCH, stopS = 1 - (RW + 3) / PITCH;
     // Once past the stop line the car is committed: it clears the intersection
@@ -1892,13 +2092,14 @@
       if (a.drift > 0) { slip = Math.sin((a.drift / 0.9) * Math.PI) * 0.7 * a.turnSign; a.drift = Math.max(0, a.drift - dt); if (a.speed > 5) spawnSkid(bx, bz, heading); }
       a.mesh.position.set(bx, 0, bz); a.mesh.rotation.set(0, heading + slip, w * 0.045);
       runOver(bx, bz, heading, 1.0, 2.35, a.speed, 60);
+      mowDownPeds(bx, bz, heading, 1.0, 2.35, a.speed);   // and anyone still on the crossing
     }
   }
   function updatePed(ped, dt) {
     if (ped.isMonkey) {
       if (ped.pooled && !ped.active) return;
       if (ped.hp <= 0) { ped.group.visible = false; return; }
-      let heading, walk = 1, running = ped.running, lean = 0;
+      let heading, walk = 1, running = ped.running, lean = 0, eat = 0;
       const mine = mobSim();                                    // am I the one running the troop?
       const chase = (mine && ped.aggro) ? nearestTarget(ped.wx, ped.wz) : null;
       if (!mine) {                                              // follower — ease onto the owner's troop
@@ -1906,9 +2107,21 @@
         ped.wx = ped.rx; ped.wz = ped.rz; heading = ped.hd;
         running = ped.aggro;
         const spd = ped.rspd;
-        walk = Math.min(1, spd / (running ? 3.6 : 1.5));
-        ped.phase += dt * spd * (running ? 3.4 : 5.0);
+        walk = ped.eating ? 0 : Math.min(1, spd / (running ? 3.6 : 1.5));
+        eat = ped.eating ? 1 : 0;
+        ped.phase += dt * (ped.eating ? 6 : spd * (running ? 3.4 : 5.0));
+      } else if (!chase && ped.feedC && ped.feedC.active) {      // a body on the road — go and eat
+        const c = ped.feedC;
+        const dx = c.x - ped.wx, dz = c.z - ped.wz, d = Math.hypot(dx, dz) || 1;
+        if (d > 1.5) { ped.wx += dx / d * 3.6 * dt; ped.wz += dz / d * 3.6 * dt; ped.eating = false; }
+        else ped.eating = true;
+        ped.rx = ped.wx; ped.rz = ped.wz;
+        lean = -easeHeading(ped, Math.atan2(dx, dz), dt, 8, 5) * 0.05;
+        heading = ped.hd; running = !ped.eating; eat = ped.eating ? 1 : 0;
+        walk = ped.eating ? 0 : 1;
+        ped.phase += dt * (ped.eating ? 6 : 11);
       } else if (chase) {                                       // charge whoever is nearest and swipe
+        ped.eating = false;
         const dx = chase.x - ped.wx, dz = chase.z - ped.wz, d = Math.hypot(dx, dz) || 1;
         if (d > 1.3) { ped.wx += dx / d * 4.6 * dt; ped.wz += dz / d * 4.6 * dt; }
         ped.rx = ped.wx; ped.rz = ped.wz;                       // the chase already moves smoothly
@@ -1916,6 +2129,7 @@
         heading = ped.hd; running = true;
         ped.phase += dt * 13;
       } else {
+        ped.eating = false;
         const s = pedGraphStep(ped, dt);
         lean = -easePose(ped, s.bx, s.bz, s.heading, dt, 3.2, Math.max(4.6, ped.speed * 1.6), 7, 4.5) * 0.07;
         ped.wx = ped.rx; ped.wz = ped.rz;          // the eased pose is the real one — shots and swipes agree with it
@@ -1939,7 +2153,7 @@
           if (gr) for (let i = 0; i < gr.length; i++) gr[i].visible = near;
         }
       }
-      poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: running, air: 0, crouch: 0, land: 0, time: cityT });
+      poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: running, air: 0, crouch: 0, land: 0, time: cityT, eat });
       ped.group.position.set(ped.wx, 0, ped.wz);
       ped.group.rotation.set(0, heading, lean);                 // face forward, lean into the turn
       return;
@@ -2004,6 +2218,8 @@
     updateBananas(dt);
     updateCompasses(dt);
     updateRage(dt);
+    assignFeeders();
+    updateCorpses(dt);
   }
 
   // ---- monkey avatar (rigged; shown in third-person view) ----
@@ -2236,10 +2452,24 @@
       P.head.rotation.x  -= 0.12 * rc;
     }
 
+    if (s.eat > 0) {                                      // hunched over a body, tearing at it
+      const e = s.eat, bite = Math.sin(stride) * 0.5 + 0.5, off = Math.sin(stride + 2.1) * 0.5 + 0.5;
+      P.torso.rotation.x = TORSO_LEAN + 0.9 * e;
+      P.head.rotation.x = 0.5 * e - bite * 0.25 * e;
+      P.body.position.y = -0.34 * e;
+      P.lLeg.rotation.x = 0.95 * e; P.rLeg.rotation.x = 0.95 * e;
+      P.lLegLo.rotation.x = 1.35 * e; P.rLegLo.rotation.x = 1.35 * e;
+      P.lArm.rotation.x = ARM_REST - (0.75 + 0.5 * bite) * e;
+      P.rArm.rotation.x = ARM_REST - (0.75 + 0.5 * off) * e;
+      P.lArm.rotation.z = 0.30 * e; P.rArm.rotation.z = -0.30 * e;
+      P.lArmLo.rotation.x = -(1.1 + 0.4 * bite) * e;
+      P.rArmLo.rotation.x = -(1.1 + 0.4 * off) * e;
+    }
+
     const tsway = Math.sin(time * 2 + stride * 0.5) * 0.12;
     for (let i = 0; i < P.tail.length; i++) {
       P.tail[i].rotation.z = tsway * (i / P.tail.length);
-      P.tail[i].rotation.x = 0.45 + (air ? -0.18 : 0);
+      P.tail[i].rotation.x = 0.45 + (air ? -0.18 : 0) + (s.eat > 0 ? 0.5 * s.eat : 0);
     }
   }
 
@@ -2303,9 +2533,12 @@
     for (const m of monkeyPeds) {
       if (m.hp <= 0 || (m.pooled && !m.active)) continue;
       const h = (((m.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-      a.push(m.mi, Math.round(m.wx * 10), Math.round(m.wz * 10), m.hp, Math.round(h * HDQ), m.aggro ? 1 : 0);
+      a.push(m.mi, Math.round(m.wx * 10), Math.round(m.wz * 10), m.hp, Math.round(h * HDQ),
+             (m.aggro ? 1 : 0) | (m.eating ? 2 : 0));
     }
-    const payload = JSON.stringify({ id: MP.id, r: Math.round(rageT * 10), m: a });
+    const b = [];
+    for (const c of corpses) if (c.active) b.push(c.cid, Math.round(c.x * 10), Math.round(c.z * 10), c.colr);
+    const payload = JSON.stringify({ id: MP.id, r: Math.round(rageT * 10), m: a, c: b });
     MP.txBytes += payload.length;
     try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
   }
@@ -2325,7 +2558,7 @@
       // time to hear about it, only believe a *lower* hp so the kill does not blink
       const nh = a[i + 3];
       m.hp = (m.hpHold && performance.now() < m.hpHold) ? Math.min(m.hp, nh) : nh;
-      m.netH = a[i + 4] / HDQ; m.aggro = !!a[i + 5];
+      m.netH = a[i + 4] / HDQ; m.aggro = !!(a[i + 5] & 1); m.eating = !!(a[i + 5] & 2);
       if (m.pooled && !m.active) {                        // a reinforcement popped in over there
         m.active = true; m.killed = false; m.deadT = 0;
         m.wx = m.rx = m.netX; m.wz = m.rz = m.netZ;
@@ -2338,6 +2571,20 @@
       m.hp = 0; m.group.visible = false;
       if (m.pooled && m.active) { m.active = false; if (m.group.parent) scene.remove(m.group); }
     }
+    const b = msg.c || [], live = new Set();
+    for (let i = 0; i + 3 < b.length; i += 4) {
+      live.add(b[i]);
+      const hx = b[i + 1] / 10, hz = b[i + 2] / 10;
+      const c = spawnCorpse(b[i], hx, hz, 0, 0, b[i + 3], false);
+      // both ends threw the body themselves, so they land a few metres apart —
+      // once it is down, the owner's spot is the one the monkeys will come to
+      if (c.state === 'lie' && (Math.abs(c.x - hx) > 0.05 || Math.abs(c.z - hz) > 0.05)) {
+        c.x = hx; c.z = hz; c.y = height(hx, hz) + 0.16;
+      }
+    }
+    for (const c of corpses) {                             // eaten over there — clear it here too
+      if (c.active && !live.has(c.cid) && c.age > 2) freeCorpse(c);
+    }
   }
   function onMqttMessage(t, buf) {
     MP.rxBytes += buf.length;
@@ -2348,6 +2595,7 @@
       return;
     }
     if (t.slice(-7) === '/mobhit') { if (mobPub()) onMobHit(msg); return; }
+    if (t.slice(-7) === '/corpse') { onCorpseMsg(msg); return; }
     if (t.slice(-4) === '/mob') { onMobState(msg); return; }
     if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
@@ -2357,6 +2605,23 @@
     if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
     if (msg.id === MP.id) return;
     upsertPeer(msg);
+  }
+  // Bodies are shared the same way. Whoever makes the kill spawns the body at
+  // once (so the launch reads immediately on their own screen) and announces it;
+  // the troop's owner picks it up, sends monkeys to it, and carries the list in
+  // its snapshot so everyone shows the same bodies and they vanish together.
+  function publishCorpse(c) {
+    if (!MP.connected || !MP.client) return;
+    try {
+      MP.client.publish(mtopic('corpse'), JSON.stringify({
+        id: MP.id, c: c.cid, x: Math.round(c.x * 10), z: Math.round(c.z * 10),
+        vx: Math.round(c.vx * 10), vz: Math.round(c.vz * 10), k: c.colr,
+      }));
+    } catch (e) {}
+  }
+  function onCorpseMsg(msg) {
+    if (msg.id === MP.id) return;
+    spawnCorpse(msg.c, msg.x / 10, msg.z / 10, msg.vx / 10, msg.vz / 10, msg.k, true);
   }
   function sendMobHit(m, dmg) {
     if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly
@@ -2491,6 +2756,7 @@
       client.subscribe(mtopic('ping'));
       client.subscribe(mtopic('mob'));
       client.subscribe(mtopic('mobhit'));
+      client.subscribe(mtopic('corpse'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -2721,6 +2987,21 @@
     const og = actx.createGain(); og.gain.setValueAtTime(0.35, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
     src.connect(bp); bp.connect(g); g.connect(master); o.connect(og); og.connect(master);
     src.start(t); src.stop(t + 0.2); o.start(t); o.stop(t + 0.18);
+  }
+  function playThud(dist) {                              // a body taking a hit: low, dull, fades with range
+    if (!audioReady()) return;
+    const v = Math.max(0, 1 - dist / 75);
+    if (v <= 0.02) return;
+    const t = actx.currentTime;
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(700, t); lp.frequency.exponentialRampToValueAtTime(120, t + 0.2);
+    const g = actx.createGain(); g.gain.setValueAtTime(0.5 * v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+    const o = actx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.22);
+    const og = actx.createGain(); og.gain.setValueAtTime(0.45 * v, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+    src.connect(lp); lp.connect(g); g.connect(master); o.connect(og); og.connect(master);
+    src.start(t); src.stop(t + 0.3); o.start(t); o.stop(t + 0.26);
   }
   function playDeath() {
     if (!audioReady()) return;
@@ -2999,10 +3280,21 @@
       const t = raySphere(_ro, _rd, _cc, 0.85);
       if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = mk; }
     }
-    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey) ? hitDist : blockDist);
+    // and so are the people on the street: one round drops them
+    let hitWalker = null;
+    for (let i = 0; i < peds.length; i++) {
+      const e = peds[i];
+      if (e.isMonkey) continue;
+      const dx = e.wx - _ro.x, dz = e.wz - _ro.z;
+      if (dx * dx + dz * dz > 32400) continue;     // beyond 180 m, skip the sphere test
+      _cc.set(e.wx, 1.15, e.wz);                   // chest height, tall enough for a level crosshair
+      const t = raySphere(_ro, _rd, _cc, 0.62);
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitWalker = e; }
+    }
+    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     flashMuzzle(_mz);
-    if (!hitId && !hitMonkey) spawnImpact(_end);   // sparks + dust where the round lands
+    if (!hitId && !hitMonkey && !hitWalker) spawnImpact(_end);   // sparks + dust where the round lands
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     ammo--; updateAmmoUI();
     if (ammo <= 0) startReload();                       // dry — rack a fresh magazine
@@ -3015,6 +3307,10 @@
       if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
       enrageMonkeys();                                 // the whole troop comes for you
       sendMobHit(hitMonkey, DMG);                      // and the owner makes it stick for everyone
+    }
+    if (hitWalker) {                                   // blown off their feet, and the body stays
+      showHit(true);
+      killPed(hitWalker, _rd.x, _rd.z, 9 + Math.random() * 4);
     }
   }
 
