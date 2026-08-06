@@ -554,7 +554,7 @@
   <div class="mv"></div><div class="mh"></div>
 </div>
 
-<div id="layout-bar"><span>ボタンをドラッグして配置を変更</span><button id="layout-done" type="button">完了</button></div>
+<div id="layout-bar"><span>ボタンをドラッグして配置を変更（<b id="layout-orient">縦画面</b>の配置）</span><button id="layout-done" type="button">完了</button></div>
 
 <div id="gear" role="button" aria-label="設定">⚙</div>
 <div id="settings">
@@ -1605,6 +1605,7 @@
     e.hp = 60; e.aggro = false; e.meleeCd = 0;
     { const off = e.side * (RW + SWW * 0.55);      // seed the world position from the graph
       e.wx = (e.i + e.s * e.di) * PITCH + e.dj * off; e.wz = (e.j + e.s * e.dj) * PITCH - e.di * off; }
+    e.mi = monkeyPeds.length;                  // stable id across every client
     e.group = makeMonkey(); scene.add(e.group); peds.push(e); monkeyPeds.push(e);
   }
 
@@ -1747,10 +1748,36 @@
   //  fresh ones popping in around you the entire time.
   const RAGE_TIME = 120, RAGE_SPAWN = 2.5, RAGE_RESPAWN = 3.0;
   let rageT = 0, rageSpawnCd = 0;
-  function rageSpot() {                       // a clear bit of street near the player
+  // the troop goes for whoever is closest, not just for me — the owner runs it
+  // for the whole room, so a monkey has to be able to pick a peer as its target
+  const _tgt = { x: 0, z: 0 };
+  function nearestTarget(x, z) {
+    let bd = Infinity, ok = false;
+    if (!dead) { const dx = p.x - x, dz = p.z - z; bd = dx * dx + dz * dz; _tgt.x = p.x; _tgt.z = p.z; ok = true; }
+    for (const [, pr] of MP.peers) {
+      if (pr.dead) continue;                 // cloak hides you on the map, not from the troop
+      const dx = pr.cur.x - x, dz = pr.cur.z - z, d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; _tgt.x = pr.cur.x; _tgt.z = pr.cur.z; ok = true; }
+    }
+    return ok ? _tgt : null;
+  }
+  function monkeyMelee(ped, dt) {             // damage is decided locally, on the synced positions
+    ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
+    if (dead || !ped.aggro) return;
+    const dx = p.x - ped.wx, dz = p.z - ped.wz;
+    if (dx * dx + dz * dz < 3.61 && ped.meleeCd <= 0 && monkeyHitCd <= 0) {     // within 1.9 m
+      applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; monkeyHitCd = 0.4;  // caps swarm DPS
+      camShake = Math.max(camShake, 0.22);
+    }
+  }
+  function rageSpot() {                       // a clear bit of street near one of the players
+    const who = [];
+    if (!dead) who.push({ x: p.x, z: p.z });
+    for (const [, pr] of MP.peers) if (!pr.dead) who.push({ x: pr.cur.x, z: pr.cur.z });
+    const c = who.length ? who[Math.random() * who.length | 0] : { x: p.x, z: p.z };
     for (let i = 0; i < 80; i++) {
       const a = Math.random() * 6.2832, d = 20 + Math.random() * 18;
-      const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
+      const x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d;
       if (Math.abs(x) > WORLD * 0.46 || Math.abs(z) > WORLD * 0.46) continue;
       if (clearAt(x, z, 1.2)) return { x, z };
     }
@@ -1778,10 +1805,12 @@
   }
   function updateRage(dt) {
     if (monkeyHitCd > 0) monkeyHitCd -= dt;
+    const mine = mobSim();
     if (rageT <= 0) { if (rageEl.classList.contains('on')) rageEl.classList.remove('on'); return; }
-    rageT -= dt;
+    if (mine) rageT -= dt;                     // a follower is told the clock by the troop's owner
     rageEl.classList.add('on');
     rageNum.textContent = Math.max(0, Math.ceil(rageT));
+    if (!mine) return;                         // and the owner alone spawns and revives them
     rageSpawnCd -= dt;
     if (rageSpawnCd <= 0) {                    // keep them coming
       rageSpawnCd = RAGE_SPAWN;
@@ -1870,17 +1899,21 @@
       if (ped.pooled && !ped.active) return;
       if (ped.hp <= 0) { ped.group.visible = false; return; }
       let heading, walk = 1, running = ped.running, lean = 0;
-      if (ped.aggro && !dead) {                                 // shot at us → charge and swipe
-        const dx = p.x - ped.wx, dz = p.z - ped.wz, d = Math.hypot(dx, dz) || 1;
+      const mine = mobSim();                                    // am I the one running the troop?
+      const chase = (mine && ped.aggro) ? nearestTarget(ped.wx, ped.wz) : null;
+      if (!mine) {                                              // follower — ease onto the owner's troop
+        lean = -easePose(ped, ped.netX, ped.netZ, ped.netH || 0, dt, 12, 40, 8, 5) * 0.05;
+        ped.wx = ped.rx; ped.wz = ped.rz; heading = ped.hd;
+        running = ped.aggro;
+        const spd = ped.rspd;
+        walk = Math.min(1, spd / (running ? 3.6 : 1.5));
+        ped.phase += dt * spd * (running ? 3.4 : 5.0);
+      } else if (chase) {                                       // charge whoever is nearest and swipe
+        const dx = chase.x - ped.wx, dz = chase.z - ped.wz, d = Math.hypot(dx, dz) || 1;
         if (d > 1.3) { ped.wx += dx / d * 4.6 * dt; ped.wz += dz / d * 4.6 * dt; }
         ped.rx = ped.wx; ped.rz = ped.wz;                       // the chase already moves smoothly
         lean = -easeHeading(ped, Math.atan2(dx, dz), dt, 8, 5) * 0.05;
         heading = ped.hd; running = true;
-        ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
-        if (d < 1.9 && ped.meleeCd <= 0 && monkeyHitCd <= 0) {
-          applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; monkeyHitCd = 0.4;   // caps swarm DPS
-          camShake = Math.max(camShake, 0.22);
-        }
         ped.phase += dt * 13;
       } else {
         const s = pedGraphStep(ped, dt);
@@ -1891,6 +1924,7 @@
         walk = Math.min(1, spd / (running ? 3.6 : 1.5));
         ped.phase += dt * spd * (running ? 3.4 : 5.0);
       }
+      monkeyMelee(ped, dt);          // always local: each player takes their own beating
       // Distance LOD (the reference's CharacterOptimizationSystem, trimmed down).
       // This has to come AFTER the walk step above: wx/wz are only meaningful
       // once the monkey has taken it, so testing first left every monkey more
@@ -2221,6 +2255,7 @@
     peers: new Map(),
     lastPub: 0, PUB_MS: 55, TIMEOUT: 6000, lastX: 0, lastZ: 0,
     INTERP_MS: 120,                        // render peers this far in the past
+    host: '', mobT: 0, mobPubT: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
@@ -2232,6 +2267,7 @@
     e.side = Math.random() < 0.5 ? 1 : -1; e.running = true; e.speed = 3.6; e.pspeed = 0;
     e.phase = Math.random() * 6; e.hp = 0; e.deadT = 1e9; e.aggro = false; e.meleeCd = 0; e.wx = 0; e.wz = 0;
     e.group = gearUp(makeMonkey(), 'rage' + k); e.group.visible = false;
+    e.mi = monkeyPeds.length;
     peds.push(e); monkeyPeds.push(e);          // added to the scene only when woken
   }
   const netStatus = document.getElementById('net-status');
@@ -2239,6 +2275,101 @@
   const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   function setNet(text, off) { netStatus.innerHTML = 'NET <b>' + escHtml(text) + '</b>'; netStatus.className = off ? 'off' : ''; }
   function mtopic(sub) { return 'contour2/' + encodeURIComponent(MP.room) + '/' + sub; }
+
+  // ── the monkey troop is shared ─────────────────────────────────────
+  //  Every client used to run its own troop off its own random seed and its own
+  //  clock, so no two players saw a monkey in the same place and a rage on one
+  //  screen simply did not exist on the others. One player owns the troop
+  //  instead — the lowest id in the room — and broadcasts it at 8 Hz; everyone
+  //  else eases onto what they are sent. Damage and the melee swipe stay local,
+  //  decided against those now-identical positions, so hits land where they look
+  //  like they land and each player takes their own beating.
+  function recomputeHost() {
+    let h = MP.id;
+    for (const id of MP.peers.keys()) if (id < h) h = id;
+    MP.host = h;
+  }
+  function mobSim() {                    // do I run the troop myself?
+    if (!MP.connected || MP.host === MP.id) return true;
+    return performance.now() - MP.mobT > MP.MOB_STALE;   // owner went quiet — carry on alone
+  }
+  function mobPub() { return !!(MP.connected && MP.client && MP.host === MP.id); }
+  const HDQ = 255 / 6.2832;              // heading packed into a byte
+  function publishMobs() {
+    const now = performance.now();
+    if (!mobPub() || now - MP.mobPubT < MP.MOB_MS) return;
+    MP.mobPubT = now;
+    const a = [];
+    for (const m of monkeyPeds) {
+      if (m.hp <= 0 || (m.pooled && !m.active)) continue;
+      const h = (((m.hd || 0) % 6.2832) + 6.2832) % 6.2832;
+      a.push(m.mi, Math.round(m.wx * 10), Math.round(m.wz * 10), m.hp, Math.round(h * HDQ), m.aggro ? 1 : 0);
+    }
+    const payload = JSON.stringify({ id: MP.id, r: Math.round(rageT * 10), m: a });
+    MP.txBytes += payload.length;
+    try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
+  }
+  function onMobState(msg) {
+    if (msg.id === MP.id || msg.id !== MP.host) return;   // only the owner's word counts
+    MP.mobT = performance.now();
+    const wasRaging = rageT > 0;
+    rageT = (msg.r || 0) / 10;
+    if (rageT > 0 && !wasRaging) { playHurt(); notify('猿の群れが逆上した！', 3200); }
+    const a = msg.m || [];
+    for (const m of monkeyPeds) m.netSeen = false;
+    for (let i = 0; i + 5 < a.length; i += 6) {
+      const m = monkeyPeds[a[i]]; if (!m) continue;
+      m.netSeen = true;
+      m.netX = a[i + 1] / 10; m.netZ = a[i + 2] / 10;
+      // a hit we just landed is already applied locally; until the owner has had
+      // time to hear about it, only believe a *lower* hp so the kill does not blink
+      const nh = a[i + 3];
+      m.hp = (m.hpHold && performance.now() < m.hpHold) ? Math.min(m.hp, nh) : nh;
+      m.netH = a[i + 4] / HDQ; m.aggro = !!a[i + 5];
+      if (m.pooled && !m.active) {                        // a reinforcement popped in over there
+        m.active = true; m.killed = false; m.deadT = 0;
+        m.wx = m.rx = m.netX; m.wz = m.rz = m.netZ;
+        m.group.position.set(m.netX, 0, m.netZ); m.group.visible = true;
+        if (!m.group.parent) scene.add(m.group);
+      }
+    }
+    for (const m of monkeyPeds) {                          // anything unsent is out of play
+      if (m.netSeen) continue;
+      m.hp = 0; m.group.visible = false;
+      if (m.pooled && m.active) { m.active = false; if (m.group.parent) scene.remove(m.group); }
+    }
+  }
+  function onMqttMessage(t, buf) {
+    MP.rxBytes += buf.length;
+    let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
+    if (!msg) return;
+    if (t.slice(-5) === '/ping') {           // our own echo measures the round trip
+      if (msg.id === MP.id) MP.rtt = Math.max(0, Math.round(performance.now() - msg.t));
+      return;
+    }
+    if (t.slice(-7) === '/mobhit') { if (mobPub()) onMobHit(msg); return; }
+    if (t.slice(-4) === '/mob') { onMobState(msg); return; }
+    if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
+    if (t.slice(-5) === '/chat') { onChat(msg); return; }
+    if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
+    if (!msg.id) return;
+    if (t.slice(-5) === '/shot') { if (msg.id !== MP.id) onPeerShot(msg.id); return; }
+    if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
+    if (msg.id === MP.id) return;
+    upsertPeer(msg);
+  }
+  function sendMobHit(m, dmg) {
+    if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly
+    m.hpHold = performance.now() + 1200;
+    try { MP.client.publish(mtopic('mobhit'), JSON.stringify({ i: m.mi, d: dmg })); } catch (e) {}
+  }
+  function onMobHit(msg) {
+    const m = monkeyPeds[msg.i];
+    if (!m || m.hp <= 0 || (m.pooled && !m.active)) return;
+    m.hp -= msg.d || DMG; m.aggro = true;
+    if (m.hp <= 0) m.killed = true;
+    enrageMonkeys();
+  }
 
   // floating name plate (billboard sprite)
   function nameSprite(name) {
@@ -2309,6 +2440,7 @@
         buf: [], interp: false,
       };
       MP.peers.set(s.id, peer);
+      recomputeHost();                                  // lowest id in the room owns the troop
       renderRoster();
     }
     peer.tgt.set(s.x, s.y, s.z);
@@ -2332,7 +2464,7 @@
       if (o.geometry) o.geometry.dispose();
       if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
     });
-    MP.peers.delete(id); recomputeKing();
+    MP.peers.delete(id); recomputeKing(); recomputeHost();
   }
 
   function connectMP() {
@@ -2349,6 +2481,7 @@
     MP.client = client;
     client.on('connect', () => {
       MP.connected = true;
+      recomputeHost();
       client.subscribe(mtopic('state/+'));
       client.subscribe(mtopic('leave'));
       client.subscribe(mtopic('hit'));
@@ -2356,28 +2489,14 @@
       client.subscribe(mtopic('kill'));
       client.subscribe(mtopic('chat'));
       client.subscribe(mtopic('ping'));
+      client.subscribe(mtopic('mob'));
+      client.subscribe(mtopic('mobhit'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
     client.on('close', () => { MP.connected = false; renderRoster(); });
     client.on('error', () => {});
-    client.on('message', (t, buf) => {
-      MP.rxBytes += buf.length;
-      let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
-      if (!msg) return;
-      if (t.slice(-5) === '/ping') {           // our own echo measures the round trip
-        if (msg.id === MP.id) MP.rtt = Math.max(0, Math.round(performance.now() - msg.t));
-        return;
-      }
-      if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
-      if (t.slice(-5) === '/chat') { onChat(msg); return; }
-      if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
-      if (!msg.id) return;
-      if (t.slice(-5) === '/shot') { if (msg.id !== MP.id) onPeerShot(msg.id); return; }
-      if (t.slice(-6) === '/leave') { dropPeer(msg.id); return; }
-      if (msg.id === MP.id) return;
-      upsertPeer(msg);
-    });
+    client.on('message', onMqttMessage);
     addEventListener('beforeunload', () => {
       try { client.publish(mtopic('leave'), JSON.stringify({ id: MP.id })); client.end(true); } catch (e) {}
     });
@@ -2895,6 +3014,7 @@
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; showHit(hitMonkey.hp <= 0);
       if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
       enrageMonkeys();                                 // the whole troop comes for you
+      sendMobHit(hitMonkey, DMG);                      // and the owner makes it stick for everyone
     }
   }
 
@@ -3085,7 +3205,8 @@
       'GEO   ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '\n' +
       'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
-      'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length + '\n' +
+      'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
+      '  TROOP ' + (mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2);
@@ -3124,19 +3245,37 @@
 
   // ---- button-layout editor: drag the touch controls, saved per browser ----
   const DRAG_IDS = ['stick', 'jump', 'fire', 'cloak', 'scopebtn', 'chatbtn', 'reloadbtn'];
-  let layout = {};
-  try { layout = JSON.parse(localStorage.getItem('contour.layout') || '{}') || {}; } catch (e) { layout = {}; }
+  // Positions are pixels, so a landscape layout is meaningless in portrait (and
+  // used to push buttons clean off the short edge). Portrait and landscape keep
+  // separate layouts, and the one for the orientation you are in is applied.
+  const layouts = { p: {}, l: {} };
+  const layKey = () => (innerWidth > innerHeight ? 'l' : 'p');
+  const layStore = (k) => 'contour.layout.' + k;
+  for (const k of ['p', 'l']) {
+    try { layouts[k] = JSON.parse(localStorage.getItem(layStore(k)) || '{}') || {}; } catch (e) { layouts[k] = {}; }
+  }
+  try {                                          // migrate the single old layout into portrait
+    const old = localStorage.getItem('contour.layout');
+    if (old && !localStorage.getItem(layStore('p'))) { layouts.p = JSON.parse(old) || {}; localStorage.setItem(layStore('p'), old); }
+    if (old) localStorage.removeItem('contour.layout');
+  } catch (e) {}
   function applyLayout() {
+    const lay = layouts[layKey()];
     for (const id of DRAG_IDS) {
       const el = $(id); if (!el) continue;
-      const pos = layout[id];
-      if (pos) { el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto'; }
-      else { el.style.left = el.style.top = el.style.right = el.style.bottom = ''; }
+      const pos = lay[id];
+      if (!pos) { el.style.left = el.style.top = el.style.right = el.style.bottom = ''; continue; }
+      // clamp, so a button can never end up off-screen after a resize
+      const w = el.offsetWidth || 60, h = el.offsetHeight || 60;
+      el.style.left = Math.max(2, Math.min(innerWidth - w - 2, pos.x)) + 'px';
+      el.style.top = Math.max(2, Math.min(innerHeight - h - 2, pos.y)) + 'px';
+      el.style.right = 'auto'; el.style.bottom = 'auto';
     }
   }
   applyLayout();
   function setEditLayout(on) {
     editLayout = on;
+    $('layout-orient').textContent = layKey() === 'l' ? '横画面' : '縦画面';
     document.body.classList.toggle('editlayout', on);
     $('layout-bar').classList.toggle('on', on);
     if (on) { closeSettings(); if (document.pointerLockElement === canvas) document.exitPointerLock(); }
@@ -3152,8 +3291,9 @@
   refreshAutoQ();
   $('layout-edit').addEventListener('click', () => setEditLayout(true));
   $('layout-done').addEventListener('click', () => setEditLayout(false));
-  $('layout-reset').addEventListener('click', () => {
-    layout = {}; try { localStorage.removeItem('contour.layout'); } catch (e) {}
+  $('layout-reset').addEventListener('click', () => {          // resets the orientation you are in
+    layouts[layKey()] = {};
+    try { localStorage.removeItem(layStore(layKey())); } catch (e) {}
     applyLayout();
   });
   for (const id of DRAG_IDS) {
@@ -3167,11 +3307,11 @@
         const x = Math.max(2, Math.min(innerWidth - r.width - 2, e.clientX - offx));
         const y = Math.max(2, Math.min(innerHeight - r.height - 2, e.clientY - offy));
         el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto';
-        layout[id] = { x, y };
+        layouts[layKey()][id] = { x, y };
       };
       const up = () => {
         el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
-        try { localStorage.setItem('contour.layout', JSON.stringify(layout)); } catch (e) {}
+        try { localStorage.setItem(layStore(layKey()), JSON.stringify(layouts[layKey()])); } catch (e) {}
       };
       el.addEventListener('pointermove', move);
       el.addEventListener('pointerup', up);
@@ -3409,8 +3549,10 @@
       ctx.beginPath(); ctx.moveTo(m[0], m[1] - r); ctx.lineTo(m[0] + r, m[1]); ctx.lineTo(m[0], m[1] + r); ctx.lineTo(m[0] - r, m[1]);
       ctx.closePath(); ctx.fill();
     }
-    // other players are hidden — only a compass pickup reveals them, for 30 s
+    // other players are hidden — only a compass pickup reveals them, for 30 s,
+    // and going invisible drops you off even that (the cloak beats the compass)
     if (revealT > 0) for (const [, peer] of MP.peers) {
+      if (peer.inv) continue;
       const m = w2m(peer.cur.x, peer.cur.z, size); ctx.fillStyle = peer.dead ? '#777' : '#ff6b5a';
       ctx.beginPath(); ctx.arc(m[0], m[1], full ? 8 : 4.2, 0, 6.3); ctx.fill();
     }
@@ -3491,6 +3633,7 @@
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    applyLayout();                          // portrait and landscape have their own button layouts
   }
   addEventListener('resize', onResize);
   addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 250); setTimeout(onResize, 600); });
@@ -3634,6 +3777,7 @@
     updateHud(dt);
     updateMinimap(dt);
     publishState(false);
+    publishMobs();
 
     renderer.render(scene, camera);
 
