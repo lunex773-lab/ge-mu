@@ -2653,6 +2653,16 @@
     const b = [];
     for (const c of corpses) if (c.active) b.push(c.cid, Math.round(c.x * 10), Math.round(c.z * 10), c.colr);
     const msg = { id: MP.id, r: Math.round(rageT * 10), m: a, c: b };
+    if (dogsOn) {                        // the other side's pack rides in the same snapshot
+      const k = [];
+      for (const dg of dogs) {
+        if (!dg.live) continue;
+        const h = (((dg.hd || 0) % 6.2832) + 6.2832) % 6.2832;
+        k.push(dg.slot, Math.round(dg.x * 10), Math.round(dg.z * 10), Math.round(h * HDQ),
+               Math.max(0, dg.hp), D_ST.indexOf(dg.st) + 1, dg.dead ? 1 : 0);
+      }
+      if (k.length) msg.k = k;
+    }
     if (rift.present) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10), Math.round(rift.ry * 1000), rift.seed];
     const payload = JSON.stringify(msg);
     MP.txBytes += payload.length;
@@ -2708,6 +2718,7 @@
       gateUnlocked = true;
       placeGate(msg.g[0] / 10, msg.g[1] / 10, msg.g[2] / 10, msg.g[3] / 1000, msg.g[4]);
     }
+    applyDogSnapshot(msg.k);
   }
   function onMqttMessage(t, buf) {
     MP.rxBytes += buf.length;
@@ -2718,6 +2729,7 @@
       return;
     }
     if (t.slice(-7) === '/mobhit') { if (mobPub()) onMobHit(msg); return; }
+    if (t.slice(-5) === '/dhit') { if (mobPub()) onDogHit(msg); return; }
     if (t.slice(-7) === '/corpse') { onCorpseMsg(msg); return; }
     if (t.slice(-7) === '/mdeath') { onDeathMsg(msg); return; }
     if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
@@ -2883,6 +2895,7 @@
       client.subscribe(mtopic('ping'));
       client.subscribe(mtopic('mob'));
       client.subscribe(mtopic('mobhit'));
+      client.subscribe(mtopic('dhit'));
       client.subscribe(mtopic('corpse'));
       client.subscribe(mtopic('mdeath'));
       client.subscribe(mtopic('gate'));
@@ -3438,28 +3451,43 @@
       const t = raySphere(_ro, _rd, _cc, 0.95);
       if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; hitMonkey = null; }
     }
-    // NPC monkeys are shootable too — shoot one and it turns hostile
-    for (const mk of monkeyPeds) {
+    // NPC monkeys are shootable too — shoot one and it turns hostile.
+    // Only on the near side: the troop and the crowd are hidden over there, and
+    // an invisible pedestrian you can still shoot is not a target, it is a bug.
+    if (wState === WS.NORMAL) for (const mk of monkeyPeds) {
       if (mk.hp <= 0) continue;
       _cc.set(mk.wx, 1.0, mk.wz);
       const t = raySphere(_ro, _rd, _cc, 0.85);
       if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = mk; }
     }
+    // the other side's wildlife: a long body, so it is tested as two spheres
+    let hitDog = null;
+    if (wState === WS.BACK) for (const dg of dogs) {
+      if (!dg.live || dg.dead) continue;
+      const sx = Math.sin(dg.hd), sz = Math.cos(dg.hd);
+      for (let q = 0; q < 2; q++) {
+        const f = q ? 0.46 : -0.42;                    // chest and haunch
+        _cc.set(dg.x + sx * f, dg.y + (q ? 0.98 : 1.02), dg.z + sz * f);
+        const t = raySphere(_ro, _rd, _cc, q ? 0.46 : 0.42);
+        if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = dg; }
+      }
+    }
     // and so are the people on the street: one round drops them
     let hitWalker = null;
-    for (let i = 0; i < peds.length; i++) {
+    if (wState === WS.NORMAL) for (let i = 0; i < peds.length; i++) {
       const e = peds[i];
       if (e.isMonkey) continue;
       const dx = e.wx - _ro.x, dz = e.wz - _ro.z;
       if (dx * dx + dz * dz > 32400) continue;     // beyond 180 m, skip the sphere test
       _cc.set(e.wx, 1.15, e.wz);                   // chest height, tall enough for a level crosshair
       const t = raySphere(_ro, _rd, _cc, 0.62);
-      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitWalker = e; }
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitWalker = e; }
     }
-    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker) ? hitDist : blockDist);
+    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker || hitDog) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     flashMuzzle(_mz);
-    if (!hitId && !hitMonkey && !hitWalker) spawnImpact(_end);   // sparks + dust where the round lands
+    if (!hitId && !hitMonkey && !hitWalker && !hitDog) spawnImpact(_end);   // sparks + dust where the round lands
+    dogNoise(p.x, p.z, 1.0, 'shot');                 // and every dog in the district hears it
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     ammo--; updateAmmoUI();
     if (ammo <= 0) startReload();                       // dry — rack a fresh magazine
@@ -3478,6 +3506,11 @@
     if (hitWalker) {                                   // blown off their feet, and the body stays
       showHit(true);
       killPed(hitWalker, _rd.x, _rd.z, 9 + Math.random() * 4);
+    }
+    if (hitDog) {
+      showHit(hitDog.hp - DMG <= 0);
+      hurtDog(hitDog, DMG, p.x, p.z);                  // it decides for itself what to do about that
+      sendDogHit(hitDog, DMG);
     }
   }
 
@@ -3673,6 +3706,9 @@
       'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
       '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
+      (wState === WS.BACK ? (() => { const g = dogDebug();
+        return 'DOGS  ' + g.live + '  packs ' + g.packs + '  chase ' + g.chase + ' bite ' + g.atk +
+               '  back ' + (g.ret + g.hide) + ' call ' + g.call + ' flee ' + g.flee + '\n'; })() : '') +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2);
   }
@@ -4252,6 +4288,1103 @@
     return best;
   }
 
+  // ── DEMODOG ───────────────────────────────────────────────────────
+  //  The backside's wildlife. The specification is written for an ECS engine
+  //  this game does not have, so it is honoured where it is architectural and
+  //  translated everywhere else: the road graph stands in for the navmesh, the
+  //  per-building AABB sets answer the cover and line-of-sight queries, the
+  //  existing MQTT owner election provides the authority split, and the rig
+  //  uses the crowd's instanced-skeleton trick — one InstancedMesh per body
+  //  part, posed from a single shared bone hierarchy — so a pack of fourteen
+  //  costs five draw calls instead of four hundred.
+  //
+  //  The bar the document sets is behavioural, not numerical. These have to
+  //  read as animals that have noticed something dangerous and would rather
+  //  not die, so nothing here runs at you in a straight line. One that sees
+  //  you closes to a distance it likes, waits for a second, bites once and
+  //  leaves. Hurt it and it will usually break off and put a wreck between the
+  //  two of you. Corner it and it screams, and then there are more of them.
+  const NDOG = 14;                       // hard ceiling on bodies in the world
+  const DOG_HP = 46;
+  const D_VIS = 30, D_VIS_COS = Math.cos(1.15), D_PERIPH = 7.5;   // sight: 30 m, ±66°, plus a close bubble
+  const D_HEAR = 46;                     // and ears that reach further than the eyes
+  const D_CALL_R = 50, D_CALL_MAX = 4, D_CALL_CD = 14;
+  const D_BITE_R = 2.25, D_BITE_DMG = 9;
+  const D_LIKED = 7.5;                   // the standoff distance one prefers to hold
+  const DOG_SEED = 0x0d06;
+
+  // ---- the body ----------------------------------------------------
+  //  Long thin limbs, a low slung spine, and a head that splits into five
+  //  petals. Everything is drawn from five instanced parts; the sphere is
+  //  reused for the whole trunk and skull, which is why the silhouette is
+  //  built out of scaled ovoids rather than a mesh per lump.
+  const dogFleshShader = {
+    vertexShader: `
+      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog;
+      void main() {
+        mat4 mm = modelMatrix;
+        #ifdef USE_INSTANCING
+          mm = modelMatrix * instanceMatrix;
+        #endif
+        vL = position;
+        vec4 wp = mm * vec4(position, 1.0); vW = wp.xyz;
+        vN = normalize(mat3(mm) * normal);
+        vec4 mv = viewMatrix * wp; vFog = -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      uniform vec3 uSkin, uDeep, uFogCol, uSunDir, uAmbCol;
+      uniform float uFogDens, uAmb, uBolt, uRidge, uTime, uWet;
+      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog;
+      float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      void main() {
+        vec3 n = normalize(vN);
+        // Sinew. Bands run along each part's own axis — which is the length of
+        // a bone, so the limbs read as tendon under skin rather than as tubes —
+        // with a finer cross weave over the top and a coarse mottle so no two
+        // stretches of hide look stamped from the same die.
+        float seed  = h21(floor(vL.xz * 6.0) + 0.5);
+        float band  = sin(vL.y * 44.0 + seed * 6.0);
+        float fine  = sin(vL.y * 137.0 + vL.x * 51.0) * 0.5 + sin(vL.z * 96.0) * 0.5;
+        float mott  = h21(floor(vL.xy * 3.0) + floor(vL.z * 3.0));
+        float crease = smoothstep(-0.2, 1.0, band) * 0.62 + fine * 0.13 + mott * 0.22;
+        vec3 col = mix(uDeep, uSkin, clamp(0.34 + 0.66 * crease, 0.0, 1.0));
+        // radial gills down the inside of a petal
+        if (uRidge > 0.5) {
+          float g = abs(fract(atan(vL.x, vL.z) * 2.55) - 0.5);
+          col = mix(col * 0.42, col, smoothstep(0.06, 0.30, g));
+          col = mix(col, uDeep, smoothstep(0.55, 1.0, vL.y));   // the throat, going dark
+        }
+        // Wet. A broad grazing-angle lift is what separates live tissue from
+        // painted plastic, and it is the whole reason this is not a Lambert.
+        vec3 vd = normalize(cameraPosition - vW);
+        float rim = pow(1.0 - abs(dot(n, vd)), 2.6);
+        float ndl = max(dot(n, uSunDir), 0.0);
+        col *= uAmb + 0.72 * ndl;
+        col += uAmbCol * (0.10 + 0.42 * rim) * uWet;
+        col += vec3(0.60, 0.10, 0.07) * uBolt * (0.30 + 0.70 * rim);
+        float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
+        gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
+      }`,
+  };
+  const dogMatU = () => ({
+    uSkin: { value: new THREE.Color(0x9d8474) }, uDeep: { value: new THREE.Color(0x42322a) },
+    uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
+    uSunDir: { value: SUN_DIR }, uAmbCol: { value: new THREE.Color(0x9fb3ac) },
+    uAmb: { value: 0.52 }, uBolt: { value: 0 }, uRidge: { value: 0 },
+    uTime: { value: 0 }, uWet: { value: 1 },
+  });
+  const dogSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const dogMawMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  dogMawMat.uniforms.uSkin.value.setHex(0x9c3026);
+  dogMawMat.uniforms.uDeep.value.setHex(0x2b0907);
+  dogMawMat.uniforms.uRidge.value = 1;
+  dogMawMat.side = THREE.DoubleSide;
+
+  // one tapered bone, one ovoid, one knuckle, one paw, one petal
+  const dogBoneGeo = new THREE.CylinderGeometry(1, 0.60, 1, 6, 1); dogBoneGeo.translate(0, -0.5, 0);
+  const dogOvoidGeo = new THREE.SphereGeometry(1, 11, 8);
+  const dogKnucGeo = new THREE.SphereGeometry(1, 7, 5);
+  const dogPetalGeo = new THREE.CylinderGeometry(0.03, 1, 1, 4, 1); dogPetalGeo.translate(0, 0.5, 0);
+  const dogPawGeo = (() => {
+    const g = new THREE.CylinderGeometry(0.9, 0.35, 1, 5, 1); g.translate(0, -0.5, 0); g.rotateX(1.05); return g;
+  })();
+  //  10 ovoids (haunch, loin, ribs, brisket, withers, two blades, cranium,
+  //  snout, brow) — they overlap deliberately, so the trunk reads as one mass
+  //  rather than as beads on a wire — 12 bones (throat, four legs of two,
+  //  three tail), 12 knuckles, 4 paws, 5 petals.
+  const D_OVOID = 10, D_BONE = 12, D_KNUC = 12, D_PAW = 4, D_PETAL = 5;
+  const dIM = (g, m, n) => { const o = new THREE.InstancedMesh(g, m, n); o.frustumCulled = false;
+    o.instanceMatrix.setUsage(THREE.DynamicDrawUsage); o.visible = false; scene.add(o); return o; };
+  const dogOvoidI = dIM(dogOvoidGeo, dogSkinMat, NDOG * D_OVOID);
+  const dogBoneI = dIM(dogBoneGeo, dogSkinMat, NDOG * D_BONE);
+  const dogKnucI = dIM(dogKnucGeo, dogSkinMat, NDOG * D_KNUC);
+  const dogPawI = dIM(dogPawGeo, dogSkinMat, NDOG * D_PAW);
+  const dogPetalI = dIM(dogPetalGeo, dogMawMat, NDOG * D_PETAL);
+  const dogParts = [dogOvoidI, dogBoneI, dogKnucI, dogPawI, dogPetalI];
+
+  // ---- one shared skeleton, posed once per dog ----------------------
+  //  Bones carry rotation only; every visible piece hangs off a bone as a
+  //  scaled child, so scaling a shin does not also scale the foot. Each frame
+  //  the root is posed, updateMatrixWorld runs once, and the visual nodes'
+  //  world matrices are copied straight into the instance buffers.
+  //  Stilts. The reference animal is mostly leg: the trunk is slung between
+  //  four spans longer than it is deep, which is what gives the silhouette its
+  //  wrongness — a dog's proportions stretched past where a dog would work.
+  const DL1F = 0.58, DL2F = 0.56, DL1H = 0.56, DL2H = 0.60;   // fore/hind upper+lower
+  const D_HIP = 1.20;                                          // and the hindquarters ride high
+  const dnode = (par, x, y, z) => { const o = new THREE.Object3D(); o.position.set(x, y, z); par.add(o); return o; };
+  function dvis(par, list, sx, sy, sz, ox, oy, oz, rx) {
+    const o = new THREE.Object3D();
+    o.scale.set(sx, sy, sz); o.position.set(ox || 0, oy || 0, oz || 0);
+    if (rx) o.rotation.x = rx;
+    par.add(o); list.push(o); return o;
+  }
+  const dOvoids = [], dBones = [], dKnucs = [], dPaws = [], dPetals = [];
+  const DK = {};                                    // the named joints the animator drives
+  {
+    const root = new THREE.Object3D(); DK.root = root;
+    const body = dnode(root, 0, 0, 0); DK.body = body;                       // ride height + pitch/roll
+    const pelvis = dnode(body, 0, D_HIP, -0.48); DK.pelvis = pelvis;
+    const spine = dnode(body, 0, D_HIP - 0.04, -0.12); DK.spine = spine;     // the arch of the back
+    const chest = dnode(spine, 0, -0.07, 0.48); DK.chest = chest;
+    const neck = dnode(chest, 0, 0.13, 0.20); DK.neck = neck;                // out of the withers
+    const head = dnode(neck, 0, 0, 0.62); DK.head = head;                    // rides on the neck's own axis
+    const maw = dnode(head, 0, -0.02, 0.28); DK.maw = maw;
+
+    dvis(pelvis, dOvoids, 0.305, 0.315, 0.38, 0, -0.02, -0.04);               // haunch
+    dvis(spine, dOvoids, 0.215, 0.225, 0.46, 0, -0.02, 0.04);                 // loin, drawn in
+    dvis(chest, dOvoids, 0.295, 0.345, 0.44, 0, -0.03, 0.00);                 // ribcage, deep
+    dvis(chest, dOvoids, 0.25, 0.23, 0.26, 0, -0.10, 0.22);                  // brisket
+    dvis(chest, dOvoids, 0.22, 0.21, 0.24, 0, 0.11, 0.16);                   // withers, into the neck
+    dvis(chest, dOvoids, 0.14, 0.19, 0.22, -0.21, 0.02, 0.14);               // shoulder blade L
+    dvis(chest, dOvoids, 0.14, 0.19, 0.22, 0.21, 0.02, 0.14);                // shoulder blade R
+    dvis(head, dOvoids, 0.195, 0.185, 0.28, 0, 0, -0.04);                    // cranium
+    dvis(head, dOvoids, 0.135, 0.122, 0.25, 0, -0.030, 0.20);                // snout
+    dvis(head, dOvoids, 0.160, 0.070, 0.105, 0, 0.120, 0.06);                // brow ridge
+    // the throat: a bone hangs along -Y, so it needs a quarter turn the other
+    // way to lie along the neck's forward axis — turned the wrong way it points
+    // back into the ribs and the head is left hanging in space
+    dvis(neck, dBones, 0.105, 0.62, 0.105, 0, 0, 0, -Math.PI / 2);
+    DK.legs = [];
+    //  side, fore?, knee direction (fore elbows fold back, hind stifles fold forward)
+    for (const [side, fore] of [[-1, 1], [1, 1], [-1, 0], [1, 0]]) {
+      const par = fore ? chest : pelvis;
+      const L1 = fore ? DL1F : DL1H, L2 = fore ? DL2F : DL2H;
+      const hip = dnode(par, 0.19 * side, fore ? -0.06 : -0.08, fore ? 0.20 : -0.18);
+      const knee = dnode(hip, 0, -L1, 0);
+      const ankle = dnode(knee, 0, -L2, 0);
+      dvis(hip, dBones, 0.082, L1, 0.082);
+      dvis(knee, dBones, 0.058, L2, 0.058);
+      // joints bulge — that is what makes a limb read as tendon over bone
+      dvis(hip, dKnucs, 0.125, 0.115, 0.125, 0, 0.02, 0);
+      dvis(knee, dKnucs, 0.086, 0.078, 0.094, 0, 0.01, 0);
+      dvis(ankle, dKnucs, 0.062, 0.056, 0.066);
+      dvis(ankle, dPaws, 0.078, 0.20, 0.078, 0, 0.01, 0);
+      DK.legs.push({ hip, knee, ankle, L1, L2, side, fore: !!fore, kneeSign: fore ? -1 : 1,
+                     restZ: fore ? 0.07 : -0.11 });   // the sprawled standing stance
+    }
+    DK.tail = [];
+    let par = dnode(pelvis, 0, 0.06, -0.24); DK.tailRoot = par; par.rotation.x = 0.55;
+    for (let i = 0; i < 3; i++) {
+      const n = dnode(par, 0, i ? -0.30 : 0, 0);
+      dvis(n, dBones, 0.052 - i * 0.013, 0.30, 0.052 - i * 0.013);
+      DK.tail.push(n); par = n;
+    }
+    DK.petals = [];
+    for (let i = 0; i < D_PETAL; i++) {
+      const spin = dnode(maw, 0, 0, 0); spin.rotation.z = (i / D_PETAL) * 6.2832;
+      const hinge = dnode(spin, 0, 0, 0);
+      dvis(hinge, dPetals, 0.165, 0.64, 0.062);
+      DK.petals.push(hinge);
+    }
+    root.updateMatrixWorld(true);
+    // The part counts above and the arrays built here have to agree exactly, or
+    // every frame writes past the end of an array and the whole animal vanishes
+    // behind a wall of console noise. Say so here rather than find out later.
+    const got = [dOvoids.length, dBones.length, dKnucs.length, dPaws.length, dPetals.length];
+    const want = [D_OVOID, D_BONE, D_KNUC, D_PAW, D_PETAL];
+    for (let i = 0; i < want.length; i++) {
+      if (got[i] !== want[i]) console.error('demodog rig: part ' + i + ' built ' + got[i] + ', reserved ' + want[i]);
+    }
+  }
+
+  // ---- gait ---------------------------------------------------------
+  //  Feet are placed, not swung. Each leg walks a cycloid in the body's frame
+  //  and two-bone IK finds the joint angles that reach it, so a foot planted on
+  //  the ground stays planted while the body travels over it. That is the whole
+  //  difference between an animal and a toy waving its legs: no sliding.
+  //  Phase offsets pick the gait — a four-beat lateral walk, a two-beat trot,
+  //  and a transverse gallop with the spine folding and opening underneath it.
+  const D_GAIT = {
+    walk:   { off: [0.00, 0.50, 0.75, 0.25], duty: 0.66, stride: 0.62, lift: 0.13, freq: 1.55, bob: 0.017, roll: 0.045 },
+    trot:   { off: [0.00, 0.50, 0.50, 0.00], duty: 0.50, stride: 0.94, lift: 0.20, freq: 1.30, bob: 0.045, roll: 0.055 },
+    gallop: { off: [0.10, 0.00, 0.60, 0.70], duty: 0.36, stride: 1.42, lift: 0.30, freq: 1.02, bob: 0.085, roll: 0.028 },
+  };
+  const _dFootW = new THREE.Vector3();
+  function dogSolveLeg(L, tz, ty) {           // target in the hip's own frame
+    const d = Math.max(1e-4, Math.hypot(ty, tz));
+    const reach = Math.min(d, L.L1 + L.L2 - 0.004);
+    const phi = Math.atan2(-tz, -ty);
+    const c1 = (L.L1 * L.L1 + reach * reach - L.L2 * L.L2) / (2 * L.L1 * reach);
+    const c2 = (L.L1 * L.L1 + L.L2 * L.L2 - reach * reach) / (2 * L.L1 * L.L2);
+    const a1 = Math.acos(Math.max(-1, Math.min(1, c1)));
+    const a2 = Math.acos(Math.max(-1, Math.min(1, c2)));
+    L.hip.rotation.x = phi - L.kneeSign * a1;
+    L.knee.rotation.x = L.kneeSign * (Math.PI - a2);
+    L.ankle.rotation.x = -(L.hip.rotation.x + L.knee.rotation.x) * 0.55;   // the paw stays flattish
+  }
+  //  s: { x, z, y, hd, sp, gaitPh, gait, lean, maw, headYaw, headPitch,
+  //       crouch, lunge, stagger, dead, deadT, foot[] , ground }
+  function poseDog(s, dt, footIK) {
+    const G = D_GAIT[s.gait] || D_GAIT.walk;
+    const mv = Math.min(1, s.sp / (s.gait === 'gallop' ? 9 : s.gait === 'trot' ? 4.4 : 1.9));
+    const ph = s.gaitPh;
+    DK.root.position.set(s.x, s.y, s.z);
+    DK.root.rotation.set(0, s.hd, s.lean, 'YXZ');
+
+    // the trunk: a bob at twice the step rate, a roll that rocks with it, and
+    // the low crouched carriage that never quite straightens out
+    const bob = Math.sin(ph * 12.566) * G.bob * mv;
+    const roll = Math.sin(ph * 6.2832) * G.roll * mv;
+    const crouch = s.crouch || 0;
+    DK.body.position.set(0, bob - crouch * 0.20 - (s.dead ? Math.min(0.62, s.deadT * 2.2) : 0), 0);
+    DK.body.rotation.set(-0.03 - s.lunge * 0.16 + crouch * 0.10, 0, roll, 'YXZ');
+    // gallop folds and opens the spine; at a walk it barely breathes
+    const fold = s.gait === 'gallop' ? Math.sin(ph * 6.2832 + 1.1) * 0.17 * mv : Math.sin(ph * 12.566) * 0.035 * mv;
+    DK.spine.rotation.set(fold - crouch * 0.16, Math.sin(ph * 6.2832) * 0.05 * mv, 0, 'YXZ');
+    DK.chest.rotation.set(-fold * 0.7, 0, 0);
+    // head: carried low and forward, and aimed independently of the body
+    DK.neck.rotation.set(0.60 - s.headPitch * 0.60 - s.lunge * 0.34 + crouch * 0.26, s.headYaw * 0.45, 0, 'YXZ');
+    DK.head.rotation.set(-0.46 - s.headPitch * 0.50 + s.lunge * 0.38, s.headYaw * 0.55, s.headYaw * 0.18, 'YXZ');
+    // tail: a slack chain that lags the body and lifts when the animal is up
+    for (let i = 0; i < 3; i++) {
+      const lag = Math.sin(ph * 6.2832 - i * 0.7) * (0.10 + 0.10 * mv);
+      DK.tail[i].rotation.set(0.16 - s.tailUp * 0.22, lag, 0, 'YXZ');
+    }
+    DK.tailRoot.rotation.x = 0.55 - s.tailUp * 0.85;
+    // The flower. Closed it is a snout: five plates folded into a point. Open
+    // it stops short of lying flat — a trumpet with a throat down the middle,
+    // not a star — because flat is where it stops looking like it could bite.
+    const flare = s.maw;
+    for (let i = 0; i < D_PETAL; i++) {
+      const wob = Math.sin(cityT * 3.1 + i * 1.7) * 0.05 * flare;
+      DK.petals[i].rotation.x = Math.PI / 2 - flare * 1.02 - wob - 0.10;
+      DK.petals[i].rotation.z = Math.sin(cityT * 2.3 + i * 2.1) * 0.06 * flare;
+    }
+
+    // legs
+    for (let i = 0; i < 4; i++) {
+      const L = DK.legs[i];
+      const reach = (L.L1 + L.L2) * 0.955;
+      if (s.dead) {                                  // splayed, folded under
+        L.hip.rotation.x = (L.fore ? -0.9 : 0.8) + L.side * 0.1;
+        L.knee.rotation.x = L.kneeSign * 2.1;
+        L.ankle.rotation.x = 0;
+        continue;
+      }
+      let f = (ph + G.off[i]) % 1; if (f < 0) f += 1;
+      const half = G.stride * 0.5 * mv;
+      let fz = L.restZ * (1 - mv), lift = 0;          // standing still, it stands sprawled
+      if (f < G.duty) { const u = f / G.duty; fz += half - 2 * half * u; }          // planted, travelling back
+      else {
+        const v = (f - G.duty) / (1 - G.duty);
+        const e = v * v * (3 - 2 * v);                                              // ease the reach forward
+        fz += -half + 2 * half * e;
+        lift = Math.sin(Math.PI * v) * G.lift * mv;
+      }
+      let ty = -reach + lift + crouch * 0.22;
+      if (footIK && lift < 0.02) {                    // planted feet find the floor they are on
+        DK.legs[i].hip.updateMatrixWorld(true);
+        _dFootW.set(0, 0, 0).applyMatrix4(L.hip.matrixWorld);
+        const gy = supportHeight(_dFootW.x + Math.sin(s.hd) * fz, _dFootW.z + Math.cos(s.hd) * fz, s.y + 0.4);
+        const want = gy - _dFootW.y;
+        if (want > ty && want < ty + 0.75) ty = want;   // step up onto a kerb or a stair, never through it
+      }
+      dogSolveLeg(L, fz, ty);
+    }
+    if (s.stagger > 0) {                              // a hit rocks the whole frame
+      const k = s.stagger;
+      DK.body.rotation.z += Math.sin(cityT * 34) * 0.13 * k;
+      DK.body.rotation.x += 0.16 * k;
+      DK.head.rotation.x += 0.30 * k;
+    }
+    DK.root.updateMatrixWorld(true);
+  }
+  function writeDog(slot) {
+    let k = slot * D_OVOID; for (let i = 0; i < D_OVOID; i++) dogOvoidI.setMatrixAt(k + i, dOvoids[i].matrixWorld);
+    k = slot * D_BONE; for (let i = 0; i < D_BONE; i++) dogBoneI.setMatrixAt(k + i, dBones[i].matrixWorld);
+    k = slot * D_KNUC; for (let i = 0; i < D_KNUC; i++) dogKnucI.setMatrixAt(k + i, dKnucs[i].matrixWorld);
+    k = slot * D_PAW; for (let i = 0; i < D_PAW; i++) dogPawI.setMatrixAt(k + i, dPaws[i].matrixWorld);
+    k = slot * D_PETAL; for (let i = 0; i < D_PETAL; i++) dogPetalI.setMatrixAt(k + i, dPetals[i].matrixWorld);
+  }
+  const _dHideM = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+  function hideDogSlot(slot) {
+    let k = slot * D_OVOID; for (let i = 0; i < D_OVOID; i++) dogOvoidI.setMatrixAt(k + i, _dHideM);
+    k = slot * D_BONE; for (let i = 0; i < D_BONE; i++) dogBoneI.setMatrixAt(k + i, _dHideM);
+    k = slot * D_KNUC; for (let i = 0; i < D_KNUC; i++) dogKnucI.setMatrixAt(k + i, _dHideM);
+    k = slot * D_PAW; for (let i = 0; i < D_PAW; i++) dogPawI.setMatrixAt(k + i, _dHideM);
+    k = slot * D_PETAL; for (let i = 0; i < D_PETAL; i++) dogPetalI.setMatrixAt(k + i, _dHideM);
+  }
+
+  // ---- hearing ------------------------------------------------------
+  //  A short ring of noise events. Gunfire carries the whole way, a sprint
+  //  carries about a third of it, and a scream is heard by other dogs only.
+  const dogNoises = [];
+  function dogNoise(x, z, intensity, type) {
+    if (wState !== WS.BACK) return;
+    dogNoises.push({ x, z, i: intensity, type, t: cityT });
+    if (dogNoises.length > 24) dogNoises.shift();
+  }
+
+  // ---- the pack -----------------------------------------------------
+  const dogs = [], dogPacks = [];
+  let dogsOn = false, dogSpawnCd = 0, dogAiFrame = 0, dogHigh = 0, dogHoldSpawn = false;
+  let dogStepAcc = 0, dogNoiseAcc = 0, _dogPX = 0, _dogPZ = 0;
+  function newPack() {
+    const pk = { id: dogPacks.length, members: [], leader: -1, alert: 0,
+                 tx: 0, tz: 0, tT: -99, threat: 0, roles: 0 };
+    dogPacks.push(pk); return pk;
+  }
+  function dogPackOf(d) { return dogPacks[d.pack]; }
+
+  // ---- spawning -----------------------------------------------------
+  //  Never in front of you, never in the open next to you, and weighted toward
+  //  the places the document asks for: alleys, the lee of a wreck, indoors.
+  function dogSpawnSpot() {
+    let best = null, bestS = -1;
+    for (let i = 0; i < 46; i++) {
+      const a = Math.random() * 6.2832, r = 34 + Math.random() * 62;
+      const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
+      if (Math.abs(x) > WORLD * 0.46 || Math.abs(z) > WORLD * 0.46) continue;
+      if (!clearAt(x, z, 1.1)) continue;
+      const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1;
+      camera.getWorldDirection(_rd);
+      const facing = (dx / d) * _rd.x + (dz / d) * _rd.z;
+      let s = 10 - facing * 9;                                  // strongly prefer behind you
+      const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+      const offRoad = Math.min(Math.abs(x - bi * PITCH), Math.abs(z - bj * PITCH));
+      if (offRoad > RW + SWW) s += 7;                           // off the carriageway: an alley or a yard
+      for (let w = 0; w < wrecks.length; w += 7) {              // near dead traffic
+        const wr = wrecks[w]; if (!wr) continue;
+        if (Math.abs(wr.x - x) < 9 && Math.abs(wr.z - z) < 9) { s += 5; break; }
+      }
+      s += Math.random() * 3;
+      if (s > bestS) { bestS = s; best = { x, z }; }
+    }
+    return best;
+  }
+  function spawnDog() {
+    let d = dogs.find((o) => !o.live);
+    if (!d && dogs.length >= NDOG) return null;
+    const spot = dogSpawnSpot(); if (!spot) return null;
+    if (!d) {
+      d = { slot: dogs.length, live: false, S: {} };
+      dogs.push(d);
+    }
+    let pk = dogPacks.find((k) => k.members.length < 5 &&
+      k.members.some((m) => dogs[m].live && Math.hypot(dogs[m].x - spot.x, dogs[m].z - spot.z) < 34));
+    if (!pk) pk = newPack();
+    if (!pk.members.includes(d.slot)) pk.members.push(d.slot);
+    d.spawnD = Math.hypot(spot.x - p.x, spot.z - p.z);
+    Object.assign(d, {
+      live: true, x: spot.x, z: spot.z, y: supportHeight(spot.x, spot.z, 1) , hd: Math.random() * 6.2832,
+      sp: 0, vx: 0, vz: 0, hp: DOG_HP, pack: pk.id, role: 'watch',
+      st: 'wander', stT: 0, gaitPh: Math.random(), gait: 'walk', lean: 0,
+      maw: 0, headYaw: 0, headPitch: 0, tailUp: 0, crouch: 0, lunge: 0, stagger: 0,
+      atkCd: 0, callCd: Math.random() * 6, deadT: 0, dead: false,
+      see: 0, seeT: -99, tx: 0, tz: 0, tdist: 999, hasT: false,
+      wx: spot.x, wz: spot.z, wanderT: 0, strafe: Math.random() < 0.5 ? 1 : -1,
+      hideX: 0, hideZ: 0, hasHide: false, stepPh: Math.random(), breath: Math.random() * 6,
+      netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
+    });
+    return d;
+  }
+  function despawnDog(d) {
+    d.live = false; d.dead = false; d.hp = 0;
+    hideDogSlot(d.slot);
+    const pk = dogPacks[d.pack];
+    if (pk) { const i = pk.members.indexOf(d.slot); if (i >= 0) pk.members.splice(i, 1); }
+  }
+  function clearDogs() { for (const d of dogs) if (d.live) despawnDog(d); dogNoises.length = 0; }
+
+  // ---- perception ---------------------------------------------------
+  const _dEye = new THREE.Vector3(), _dDir = new THREE.Vector3();
+  function dogSee(d) {
+    if (dead || wState !== WS.BACK) return 0;
+    const dx = p.x - d.x, dz = p.z - d.z, dist = Math.hypot(dx, dz);
+    d.tdist = dist;
+    if (dist > D_VIS) return 0;
+    const fx = Math.sin(d.hd), fz = Math.cos(d.hd);
+    const dotf = dist > 0.01 ? (dx / dist) * fx + (dz / dist) * fz : 1;
+    if (dotf < D_VIS_COS && dist > D_PERIPH) return 0;
+    _dEye.set(d.x, d.y + 0.95, d.z);
+    _dDir.set(p.x - _dEye.x, (p.y - 0.4) - _dEye.y, p.z - _dEye.z);
+    const len = _dDir.length(); _dDir.multiplyScalar(1 / len);
+    if (Math.min(rayCity(_dEye, _dDir), rayWrecks(_dEye, _dDir)) < len - 0.6) return 0;
+    // cloak: seen late and only close in — they hunt by more than sight
+    const cl = cloak > 0 ? 0.35 : 1;
+    return Math.max(0, 1 - dist / D_VIS) * cl + (dist < 4 ? 0.5 : 0);
+  }
+  function dogHear(d) {
+    let best = null, bestI = 0;
+    for (let i = dogNoises.length - 1; i >= 0; i--) {
+      const n = dogNoises[i];
+      if (cityT - n.t > 6) continue;
+      const dist = Math.hypot(n.x - d.x, n.z - d.z);
+      const reach = D_HEAR * n.i;
+      if (dist > reach) continue;
+      const s = n.i * (1 - dist / Math.max(1, reach));
+      if (s > bestI) { bestI = s; best = n; }
+    }
+    return best ? { n: best, s: bestI } : null;
+  }
+
+  // ---- cover --------------------------------------------------------
+  //  A wreck you can get behind, chosen for being out of the player's sight
+  //  while still leaving a way back in. Cheap: a strided scan, not a search.
+  function dogCover(d, fx, fz) {
+    let best = null, bestS = -1;
+    for (let i = 0; i < wrecks.length; i += 2) {
+      const w = wrecks[i]; if (!w) continue;
+      const dw = Math.hypot(w.x - d.x, w.z - d.z);
+      if (dw > 30) continue;
+      const bx = w.x - fx * 3.0, bz = w.z - fz * 3.0;          // the far side from the threat
+      if (!clearAt(bx, bz, 0.9)) continue;
+      const s = 22 - dw * 0.55 - Math.abs(Math.hypot(bx - fx * 0, bz - fz * 0) * 0) + Math.random() * 4;
+      if (s > bestS) { bestS = s; best = { x: bx, z: bz }; }
+    }
+    return best;
+  }
+
+  // ---- movement -----------------------------------------------------
+  //  Steer toward a point, slide off walls and wrecks, and keep out of each
+  //  other's way with a soft separation push so a pack never stacks up.
+  function dogStep(d, tx, tz, speed, dt, sep) {
+    const dx = tx - d.x, dz = tz - d.z, dd = Math.hypot(dx, dz);
+    let ux = dd > 0.01 ? dx / dd : Math.sin(d.hd), uz = dd > 0.01 ? dz / dd : Math.cos(d.hd);
+    if (sep !== false) {
+      let sx = 0, sz = 0;
+      const pk = dogPacks[d.pack];
+      if (pk) for (const mi of pk.members) {
+        if (mi === d.slot) continue;
+        const o = dogs[mi]; if (!o || !o.live || o.dead) continue;
+        const ex = d.x - o.x, ez = d.z - o.z, e2 = ex * ex + ez * ez;
+        if (e2 < 6.25 && e2 > 1e-4) { const e = Math.sqrt(e2); sx += ex / e * (1 - e / 2.5); sz += ez / e * (1 - e / 2.5); }
+      }
+      ux += sx * 1.4; uz += sz * 1.4;
+      const un = Math.hypot(ux, uz) || 1; ux /= un; uz /= un;
+    }
+    const want = Math.atan2(ux, uz);
+    const turn = easeHeading(d, want, dt, 5.5, d.st === 'chase' || d.st === 'attack' ? 4.2 : 2.6);
+    d.lean += (-turn * 0.055 - d.lean) * Math.min(1, dt * 8);
+    const mx = Math.sin(d.hd) * speed * dt, mz = Math.cos(d.hd) * speed * dt;
+    const nx = d.x + mx, nz = d.z + mz;
+    _dEye.set(nx, d.y, nz);
+    cityCollide(_dEye, d.y, d.y + 0.9, 0.42);
+    wreckCollide(_dEye, 0.42);
+    if (Math.abs(_dEye.x) < WORLD * 0.48 && Math.abs(_dEye.z) < WORLD * 0.48) { d.x = _dEye.x; d.z = _dEye.z; }
+    const moved = Math.hypot(d.x - (nx - mx), d.z - (nz - mz));
+    d.sp = dt > 1e-5 ? moved / dt : 0;
+    d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
+    return dd;
+  }
+  function dogWanderPoint(d) {
+    for (let i = 0; i < 12; i++) {
+      const a = d.hd + (Math.random() - 0.5) * 2.4, r = 10 + Math.random() * 26;
+      const x = d.x + Math.sin(a) * r, z = d.z + Math.cos(a) * r;
+      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+      if (clearAt(x, z, 1.0)) return { x, z };
+    }
+    return { x: d.x, z: d.z };
+  }
+
+  // ---- the decision -------------------------------------------------
+  //  Utility scoring rather than a ladder of ifs. Each candidate behaviour
+  //  gets a number from the things the animal can actually know — how far away
+  //  the threat is, how hurt it is, how many of its own are up, whether there
+  //  is anything to get behind — and the best one wins, with a bonus for
+  //  whatever it is already doing so it does not dither on the spot.
+  const D_DWELL = { attack: 0.55, call: 1.9, hide: 1.2, retreat: 1.0, reposition: 0.7, investigate: 1.4, alert: 0.8 };
+  function dogDecide(d, dt) {
+    const pk = dogPacks[d.pack];
+    const hpF = d.hp / DOG_HP;
+    const fresh = cityT - d.seeT;                       // seconds since it last had eyes on
+    const known = d.hasT && fresh < 9;
+    const dist = d.tdist;
+    const allies = pk ? pk.members.reduce((a, m) => a + (dogs[m].live && !dogs[m].dead ? 1 : 0), 0) : 1;
+    const engaged = pk ? pk.members.reduce((a, m) => a + (dogs[m].live && !dogs[m].dead &&
+      (dogs[m].st === 'attack' || dogs[m].st === 'chase') ? 1 : 0), 0) : 0;
+    const S = d.S;
+    for (const k in S) S[k] = 0;
+
+    S.wander = 0.30;
+    S.investigate = (d.noise && cityT - d.noise.t < 6 && !known) ? 0.72 + d.noiseS * 0.5 : 0;
+    S.alert = known && dist > 16 ? 0.62 : 0;
+    // pressing in: wants a friend, wants to be healthy, wants to be close-ish
+    S.chase = known ? 0.55 + (allies - 1) * 0.13 + hpF * 0.35 - Math.max(0, dist - D_LIKED) * 0.012
+      - (engaged >= 2 && d.st !== 'chase' && d.st !== 'attack' ? 0.55 : 0) : 0;
+    S.attack = (known && d.see > 0 && dist < D_BITE_R + 1.4 && d.atkCd <= 0) ? 1.35 + hpF * 0.3 : 0;
+    // having bitten, get out of the way; also what the ones not chosen to press do
+    S.reposition = known && dist < 13 ? 0.48 + (engaged >= 2 ? 0.5 : 0) + (d.atkCd > 0 ? 0.75 : 0) : 0;
+    S.retreat = known ? (1 - hpF) * 1.5 + (d.hurtRecent > 0 ? 0.7 : 0) - (allies - 1) * 0.10 : 0;
+    S.hide = known && hpF < 0.7 ? (1 - hpF) * 1.25 + (d.hasHide ? 0.35 : 0) : 0;
+    S.observe = known && hpF < 0.85 && dist > 11 ? 0.55 : 0;
+    S.call = (hpF < 0.55 || (known && allies < 2)) && d.callCd <= 0 && known ? 1.15 + (1 - hpF) * 0.8 : 0;
+    S.flee = hpF < 0.22 ? 1.7 + (allies < 2 ? 0.5 : 0) : 0;
+    // roles keep a pack from arriving as one lump (§33)
+    if (d.role === 'flank') { S.reposition += 0.55; S.chase -= 0.35; }
+    if (d.role === 'watch') { S.observe += 0.60; S.chase -= 0.55; S.attack -= 0.4; }
+    if (d.role === 'engage') { S.chase += 0.40; }
+
+    let bestK = 'wander', bestV = -1;
+    for (const k in S) if (S[k] > bestV) { bestV = S[k]; bestK = k; }
+    const dwell = D_DWELL[d.st] || 0.4;
+    if (d.stT < dwell && S[d.st] > 0.05) return;        // let the current one finish its beat
+    if (bestK !== d.st) { d.st = bestK; d.stT = 0; d.hasHide = false; }
+  }
+
+  // ---- one dog, one tick --------------------------------------------
+  function dogTick(d, dt) {
+    d.stT += dt; d.atkCd = Math.max(0, d.atkCd - dt); d.callCd = Math.max(0, d.callCd - dt);
+    d.stagger = Math.max(0, d.stagger - dt * 2.6);
+    d.hurtRecent = Math.max(0, (d.hurtRecent || 0) - dt);
+    if (d.dead) { d.deadT += dt; d.sp = 0; return; }
+
+    // ---- senses
+    const see = dogSee(d);
+    if (see > 0) {
+      d.see = see; d.seeT = cityT; d.hasT = true; d.tx = p.x; d.tz = p.z;
+      const pk = dogPacks[d.pack];
+      if (pk) { pk.tx = p.x; pk.tz = p.z; pk.tT = cityT; pk.alert = Math.min(1, pk.alert + dt * 2.2); }
+    } else {
+      d.see = 0;
+      const pk = dogPacks[d.pack];
+      if (pk && cityT - pk.tT < 7) { d.hasT = true; d.tx = pk.tx; d.tz = pk.tz; d.seeT = Math.max(d.seeT, pk.tT); }
+      d.tdist = Math.hypot(p.x - d.x, p.z - d.z);
+    }
+    const h = dogHear(d);
+    if (h) { d.noise = h.n; d.noiseS = h.s; } else if (d.noise && cityT - d.noise.t > 6) d.noise = null;
+
+    dogDecide(d, dt);
+
+    // ---- act
+    const fx = d.tdist > 0.01 ? (d.tx - d.x) / d.tdist : 0, fz = d.tdist > 0.01 ? (d.tz - d.z) / d.tdist : 1;
+    let lookX = d.tx, lookZ = d.tz, wantMaw = 0, wantTail = 0, wantCrouch = 0;
+    switch (d.st) {
+      case 'wander': {
+        d.wanderT -= dt;
+        if (d.wanderT <= 0 || Math.hypot(d.wx - d.x, d.wz - d.z) < 2.2) {
+          const w = dogWanderPoint(d); d.wx = w.x; d.wz = w.z; d.wanderT = 4 + Math.random() * 7;
+        }
+        dogStep(d, d.wx, d.wz, 1.45, dt);
+        lookX = d.x + Math.sin(d.hd + Math.sin(cityT * 0.4 + d.slot) * 0.9) * 6;   // casting about as it goes
+        lookZ = d.z + Math.cos(d.hd + Math.sin(cityT * 0.4 + d.slot) * 0.9) * 6;
+        wantCrouch = 0.15;
+        break;
+      }
+      case 'investigate': {
+        const n = d.noise;
+        if (n) {
+          const dd = dogStep(d, n.x, n.z, 2.6, dt);
+          lookX = n.x; lookZ = n.z;
+          if (dd < 3.5) { d.noise = null; d.st = 'alert'; d.stT = 0; }
+        } else { d.st = 'wander'; d.stT = 0; }
+        wantCrouch = 0.3; wantTail = 0.2;
+        break;
+      }
+      case 'alert': {                       // stop, raise the head, work out what it is
+        d.sp *= 0.5;
+        if (d.stT > 0.9) dogStep(d, d.tx - fx * 12, d.tz - fz * 12, 1.9, dt);
+        else dogStep(d, d.x, d.z, 0, dt);
+        wantMaw = 0.22; wantTail = 0.55; wantCrouch = 0.05;
+        break;
+      }
+      case 'chase': {
+        const want = Math.max(D_LIKED * 0.45, D_BITE_R * 0.8);
+        dogStep(d, d.tx - fx * want, d.tz - fz * want, d.tdist > 16 ? 8.4 : 6.2, dt);
+        wantMaw = 0.45; wantTail = 0.7; wantCrouch = 0.1;
+        break;
+      }
+      case 'attack': {
+        //  a committed lunge: forward fast, jaws open, one bite, then it is over
+        d.lunge = Math.min(1, d.lunge + dt * 7);
+        dogStep(d, d.tx, d.tz, 9.4, dt, false);
+        wantMaw = 1; wantTail = 0.9;
+        if (d.stT > 0.18 && !d.bit) {
+          d.bit = true;
+          if (!dead && d.tdist < D_BITE_R && dogHitCd <= 0 && wState === WS.BACK) {
+            applyDamage(D_BITE_DMG, null); dogHitCd = 0.42;
+            camShake = Math.max(camShake, 0.26);
+          }
+          playDogBite(d.tdist, dogPan(d));
+        }
+        if (d.stT > 0.42) { d.atkCd = 1.5 + Math.random() * 1.4; d.bit = false; d.st = 'reposition'; d.stT = 0; }
+        break;
+      }
+      case 'reposition': {
+        //  off the centre line — sideways and a little back, still watching
+        const sx = -fz * d.strafe, sz = fx * d.strafe;
+        const want = D_LIKED + 1.5;
+        const gx = d.tx - fx * want + sx * 5.5, gz = d.tz - fz * want + sz * 5.5;
+        if (!clearAt(gx, gz, 0.8)) d.strafe = -d.strafe;
+        dogStep(d, gx, gz, 5.4, dt);
+        wantMaw = 0.35; wantTail = 0.5;
+        break;
+      }
+      case 'observe': {                     // hold at range, head fixed on you
+        const gx = d.tx - fx * (D_LIKED + 5), gz = d.tz - fz * (D_LIKED + 5);
+        dogStep(d, gx, gz, 2.4, dt);
+        wantMaw = 0.16; wantTail = 0.35; wantCrouch = 0.35;
+        break;
+      }
+      case 'retreat': case 'hide': {
+        if (!d.hasHide) {
+          const c = dogCover(d, fx, fz);
+          if (c) { d.hideX = c.x; d.hideZ = c.z; d.hasHide = true; }
+          else { d.hideX = d.x - fx * 16; d.hideZ = d.z - fz * 16; d.hasHide = true; }
+        }
+        const dd = dogStep(d, d.hideX, d.hideZ, 6.6, dt);
+        wantCrouch = dd < 2.5 ? 0.75 : 0.25; wantTail = 0;
+        if (dd < 2.0 && d.stT > 2.6) {      // looked long enough — try again
+          d.hp = Math.min(DOG_HP, d.hp + 4);
+          d.st = 'observe'; d.stT = 0; d.hasHide = false;
+        }
+        break;
+      }
+      case 'call': {
+        d.sp *= 0.3;
+        dogStep(d, d.x, d.z, 0, dt);
+        wantMaw = 1; wantTail = 0.95;
+        if (!d.called && d.stT > 0.25) {
+          d.called = true; d.callCd = D_CALL_CD;
+          dogCall(d);
+        }
+        if (d.stT > 1.7) { d.called = false; d.st = 'reposition'; d.stT = 0; }
+        break;
+      }
+      case 'flee': {
+        const gx = d.x - fx * 30, gz = d.z - fz * 30;
+        const jitter = Math.sin(cityT * 1.7 + d.slot) * 9;    // never a straight line
+        dogStep(d, gx - fz * jitter, gz + fx * jitter, 7.6, dt);
+        wantTail = 0; wantCrouch = 0.1;
+        if (d.tdist > 55) { d.hasT = false; d.st = 'wander'; d.stT = 0; d.hp = Math.min(DOG_HP, d.hp + 8); }
+        break;
+      }
+      default: dogStep(d, d.x, d.z, 0, dt);
+    }
+    if (d.st !== 'attack') d.lunge = Math.max(0, d.lunge - dt * 4);
+
+    // ---- head tracking, jaw, tail: all eased, never snapped
+    let hy = 0, hp2 = 0;
+    { const rel = Math.atan2(lookX - d.x, lookZ - d.z) - d.hd;
+      let a = rel; while (a > Math.PI) a -= 6.2832; while (a < -Math.PI) a += 6.2832;
+      hy = Math.max(-1.25, Math.min(1.25, a));
+      const dz2 = Math.hypot(lookX - d.x, lookZ - d.z);
+      hp2 = Math.max(-0.7, Math.min(0.8, Math.atan2((d.st === 'wander' ? 0.2 : 1.5) - 0.95, Math.max(1, dz2))));
+    }
+    const ez = Math.min(1, dt * 5.5);
+    d.headYaw += (hy - d.headYaw) * ez;
+    d.headPitch += (hp2 - d.headPitch) * ez;
+    d.maw += (wantMaw - d.maw) * Math.min(1, dt * (wantMaw > d.maw ? 11 : 4));
+    d.tailUp += (wantTail - d.tailUp) * Math.min(1, dt * 4);
+    d.crouch += (wantCrouch - d.crouch) * Math.min(1, dt * 4.5);
+  }
+
+  // ---- pack bookkeeping ---------------------------------------------
+  //  Roles are dealt once a second, not per dog per frame: the closest two
+  //  press, the next two swing wide, the rest hold and watch.
+  let dogRepack = 0, dogRoles = 0;
+  function dogPackTick(dt) {
+    //  Packs are re-formed from where the animals actually are, not from where
+    //  they happened to spawn. Without this they drift together into one crowd
+    //  while still believing they are five packs of one, and every "pack" duly
+    //  sends its own two in — which is a lump wearing the word pack.
+    dogRepack -= dt;
+    if (dogRepack <= 0) {
+      dogRepack = 2.5;
+      const live = dogs.filter((d) => d.live && !d.dead);
+      const carry = dogPacks.map((k) => ({ tx: k.tx, tz: k.tz, tT: k.tT, alert: k.alert }));
+      for (const d of live) d.pack = -1;
+      dogPacks.length = 0;
+      for (const d of live) {
+        if (d.pack >= 0) continue;
+        const pk = newPack();
+        const q = [d];
+        d.pack = pk.id; pk.members.push(d.slot);
+        while (q.length && pk.members.length < 6) {          // flood fill at 26 m
+          const a = q.shift();
+          for (const o of live) {
+            if (o.pack >= 0 || pk.members.length >= 6) continue;
+            if (Math.hypot(o.x - a.x, o.z - a.z) > 26) continue;
+            o.pack = pk.id; pk.members.push(o.slot); q.push(o);
+          }
+        }
+        // whatever the members last knew about you survives the reshuffle
+        for (const c of carry) if (c.tT > pk.tT) { pk.tx = c.tx; pk.tz = c.tz; pk.tT = c.tT; pk.alert = Math.max(pk.alert, c.alert); }
+      }
+      if (!dogPacks.length) newPack();
+    }
+    for (const pk of dogPacks) {
+      if (!pk.members.length) continue;
+      pk.alert = Math.max(0, pk.alert - dt * 0.25);
+      const alive = pk.members.filter((m) => dogs[m] && dogs[m].live && !dogs[m].dead);
+      if (!alive.length) continue;
+      if (pk.leader < 0 || !alive.includes(pk.leader)) pk.leader = alive[0];   // §11: promote on death
+    }
+    //  Roles are dealt across everything that currently knows where you are,
+    //  not pack by pack. Dealt per pack they stop meaning anything the moment a
+    //  chase spreads the animals out: four packs of two each send their own two
+    //  in, and eight of them arrive at once wearing the word "pack". What the
+    //  player should see is two pressing, two swinging wide, the rest watching —
+    //  and that is a statement about the whole field, so it is decided there.
+    dogRoles -= dt;
+    if (dogRoles > 0) return;
+    dogRoles = 0.8;
+    const aware = dogs.filter((d) => d.live && !d.dead && d.hasT && cityT - d.seeT < 9);
+    aware.sort((a, b) => a.tdist - b.tdist);
+    for (let i = 0; i < aware.length; i++) {
+      const d = aware[i];
+      d.role = i < 2 ? 'engage' : i < 4 ? 'flank' : 'watch';
+      if (d.hp < DOG_HP * 0.45) d.role = 'watch';        // the hurt ones hang back regardless
+    }
+    for (const d of dogs) if (d.live && !aware.includes(d)) d.role = 'watch';
+  }
+  //  A scream reaches 50 m, brings two to four, and the caller cannot do it
+  //  again for a quarter of a minute. It is deliberately not a world event.
+  function dogCall(d) {
+    playDogCall(d.tdist, dogPan(d));
+    dogNoise(d.x, d.z, 0.95, 'call');
+    let brought = 0;
+    for (const o of dogs) {
+      if (!o.live || o.dead || o === d || brought >= D_CALL_MAX) continue;
+      if (Math.hypot(o.x - d.x, o.z - d.z) > D_CALL_R) continue;
+      if (o.st === 'attack' || o.st === 'flee') continue;
+      o.hasT = true; o.tx = d.tx; o.tz = d.tz; o.seeT = cityT - 1;
+      o.st = 'chase'; o.stT = 0; brought++;
+      const pk = dogPacks[o.pack]; if (pk) { pk.tx = d.tx; pk.tz = d.tz; pk.tT = cityT; pk.alert = 1; }
+    }
+    // and reinforcements from off-screen, capped, so a call is not a faucet
+    for (let i = brought; i < D_CALL_MAX && dogs.filter((o) => o.live).length < NDOG; i++) {
+      const n = spawnDog(); if (!n) break;
+      n.hasT = true; n.tx = d.tx; n.tz = d.tz; n.seeT = cityT - 2; n.st = 'chase';
+    }
+  }
+
+  // ---- damage -------------------------------------------------------
+  let dogHitCd = 0;
+  function hurtDog(d, dmg, fromX, fromZ) {
+    if (!d.live || d.dead) return;
+    d.hp -= dmg; d.stagger = 1; d.hurtRecent = 2.5;
+    d.hasT = true; d.tx = fromX; d.tz = fromZ; d.seeT = cityT;
+    const pk = dogPacks[d.pack];
+    if (pk) { pk.tx = fromX; pk.tz = fromZ; pk.tT = cityT; pk.alert = 1; }
+    if (d.hp <= 0) { killDog(d); return; }
+    playDogHurt(d.tdist, dogPan(d));
+    // being shot does not automatically mean charging the thing that shot you
+    const roll = Math.random();
+    if (roll < 0.55 || d.hp < DOG_HP * 0.4) { d.st = 'retreat'; d.stT = 0; d.hasHide = false; }
+    else { d.st = 'reposition'; d.stT = 0; }
+  }
+  function killDog(d) {
+    d.dead = true; d.deadT = 0; d.hp = 0; d.sp = 0; d.maw = 0.7; d.tailUp = 0;
+    playDogDeath(d.tdist, dogPan(d));
+    _dEye.set(d.x, d.y + 0.7, d.z);
+    if (d.tdist < 55) spawnImpact(_dEye);
+    const pk = dogPacks[d.pack];
+    if (pk) { pk.alert = 1; if (pk.leader === d.slot) pk.leader = -1; }
+    for (const o of dogs) {                       // the others saw that happen
+      if (!o.live || o.dead || o === d) continue;
+      if (Math.hypot(o.x - d.x, o.z - d.z) > 22) continue;
+      o.hurtRecent = Math.max(o.hurtRecent || 0, 1.6);
+    }
+  }
+
+  // ---- audio --------------------------------------------------------
+  function dogPan(d) {
+    camera.getWorldDirection(_rd);
+    const rx = _rd.z, rz = -_rd.x;               // camera right on the ground plane
+    const dx = d.x - p.x, dz = d.z - p.z, l = Math.hypot(dx, dz) || 1;
+    return Math.max(-1, Math.min(1, (dx / l * rx + dz / l * rz) * 1.2));
+  }
+  function dogBus(dist, reach, vol) {
+    if (!audioReady()) return null;
+    const v = Math.max(0, 1 - dist / reach) * vol;
+    if (v <= 0.015) return null;
+    const g = actx.createGain(); g.gain.value = v;
+    return g;
+  }
+  function dogOut(g, pan) {
+    if (actx.createStereoPanner) { const s = actx.createStereoPanner(); s.pan.value = pan; g.connect(s); s.connect(master); }
+    else g.connect(master);
+  }
+  //  The scream. The document asks for high and low at once, torn, biological,
+  //  and only for an instant suggestive of a voice. So: two detuned saws an
+  //  octave apart swept through a vowel formant — that is the voice — cracked
+  //  by a hard pitch break a third of the way in, and shredded by a ring
+  //  modulator running at an interval that belongs to no scale.
+  function playDogCall(dist, pan) {
+    const out = dogBus(dist, 90, 0.62); if (!out) return;
+    const t = actx.currentTime;
+    dogOut(out, pan);
+    const f1 = actx.createBiquadFilter(); f1.type = 'peaking'; f1.frequency.value = 760; f1.Q.value = 4.5; f1.gain.value = 15;
+    const f2 = actx.createBiquadFilter(); f2.type = 'peaking'; f2.frequency.value = 1620; f2.Q.value = 5.5; f2.gain.value = 12;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1100; bp.Q.value = 0.55;
+    bp.connect(f1); f1.connect(f2); f2.connect(out);
+    const env = actx.createGain(); env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(1, t + 0.07);
+    env.gain.exponentialRampToValueAtTime(0.55, t + 0.55);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+    env.connect(bp);
+    // the ring modulator: an inharmonic partial that turns a cry into a tear
+    const ring = actx.createGain(); ring.gain.value = 0;
+    const rmod = actx.createOscillator(); rmod.type = 'sine'; rmod.frequency.value = 63;
+    const rg = actx.createGain(); rg.gain.value = 0.85; rmod.connect(rg); rg.connect(ring.gain);
+    rmod.start(t); rmod.stop(t + 1.6); ring.connect(env);
+    for (const [base, det, amp, dst] of [[188, 0, 0.5, ring], [94, 1.7, 0.34, ring], [376, -2.4, 0.12, env]]) {
+      const o = actx.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(base + det, t);
+      o.frequency.exponentialRampToValueAtTime((base + det) * 1.42, t + 0.22);
+      o.frequency.setValueAtTime((base + det) * 0.63, t + 0.34);      // the crack
+      o.frequency.exponentialRampToValueAtTime((base + det) * 0.34, t + 1.45);
+      const g = actx.createGain(); g.gain.value = amp;
+      o.connect(g); g.connect(dst); o.start(t); o.stop(t + 1.55);
+    }
+    if (noiseBuf) {                                                  // breath torn through it
+      const s = actx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const nb = actx.createBiquadFilter(); nb.type = 'bandpass'; nb.frequency.value = 2400; nb.Q.value = 0.8;
+      const ng = actx.createGain(); ng.gain.setValueAtTime(0.10, t); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+      s.connect(nb); nb.connect(ng); ng.connect(out); s.start(t); s.stop(t + 1.4);
+    }
+  }
+  function playDogBite(dist, pan) {
+    const out = dogBus(dist, 34, 0.7); if (!out) return;
+    const t = actx.currentTime; dogOut(out, pan);
+    if (noiseBuf) {                                   // the snap of the jaws
+      const s = actx.createBufferSource(); s.buffer = noiseBuf;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.1;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+      s.connect(bp); bp.connect(g); g.connect(out); s.start(t); s.stop(t + 0.15);
+    }
+    const o = actx.createOscillator(); o.type = 'square';
+    o.frequency.setValueAtTime(210, t); o.frequency.exponentialRampToValueAtTime(64, t + 0.11);
+    const g = actx.createGain(); g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.16);
+  }
+  function playDogHurt(dist, pan) {
+    const out = dogBus(dist, 55, 0.55); if (!out) return;
+    const t = actx.currentTime; dogOut(out, pan);
+    const o = actx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(96, t + 0.3);
+    const bp = actx.createBiquadFilter(); bp.type = 'peaking'; bp.frequency.value = 900; bp.Q.value = 3; bp.gain.value = 10;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.55, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+    o.connect(bp); bp.connect(g); g.connect(out); o.start(t); o.stop(t + 0.36);
+  }
+  function playDogDeath(dist, pan) {
+    const out = dogBus(dist, 60, 0.6); if (!out) return;
+    const t = actx.currentTime; dogOut(out, pan);
+    const o = actx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(260, t); o.frequency.exponentialRampToValueAtTime(41, t + 0.85);
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2200, t); lp.frequency.exponentialRampToValueAtTime(240, t + 0.8);
+    const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
+    o.connect(lp); lp.connect(g); g.connect(out); o.start(t); o.stop(t + 1);
+    if (noiseBuf) {                                   // the body going down
+      const s = actx.createBufferSource(); s.buffer = noiseBuf;
+      const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300;
+      const ng = actx.createGain(); ng.gain.setValueAtTime(0.0001, t + 0.25);
+      ng.gain.exponentialRampToValueAtTime(0.45, t + 0.34); ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+      s.connect(f); f.connect(ng); ng.connect(out); s.start(t + 0.25); s.stop(t + 0.75);
+    }
+  }
+  //  Claws on wet concrete: a tick, not a footstep. Only for the near ones.
+  function playDogStep(dist, pan, hard) {
+    const out = dogBus(dist, 22, hard ? 0.30 : 0.17); if (!out || !noiseBuf) return;
+    const t = actx.currentTime; dogOut(out, pan);
+    const s = actx.createBufferSource(); s.buffer = noiseBuf;
+    s.playbackRate.value = 1.4 + Math.random() * 0.5;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = 2600 + Math.random() * 1400; bp.Q.value = 2.2;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.6, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
+    s.connect(bp); bp.connect(g); g.connect(out); s.start(t); s.stop(t + 0.07);
+  }
+  function playDogGrowl(dist, pan) {
+    const out = dogBus(dist, 26, 0.34); if (!out) return;
+    const t = actx.currentTime; dogOut(out, pan);
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 58 + Math.random() * 12;
+    const lfo = actx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 26;
+    const lg = actx.createGain(); lg.gain.value = 14; lfo.connect(lg); lg.connect(o.frequency);
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.12); g.gain.setValueAtTime(0.5, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
+    o.connect(lp); lp.connect(g); g.connect(out);
+    o.start(t); o.stop(t + 1); lfo.start(t); lfo.stop(t + 1);
+  }
+
+  // ---- the frame ----------------------------------------------------
+  function updateDogs(dt) {
+    if (wState !== WS.BACK) { if (dogsOn) { clearDogs(); dogsOn = false;
+      for (const m of dogParts) { m.visible = false; m.instanceMatrix.needsUpdate = true; } } return; }
+    if (!dogsOn) { dogsOn = true; for (const m of dogParts) m.visible = true; }
+    if (dogHitCd > 0) dogHitCd -= dt;
+    dogHigh = 0;
+    const mine = mobSim();
+
+    // the player makes noise whether they mean to or not
+    const pdx = p.x - _dogPX, pdz = p.z - _dogPZ;
+    const pspd = dt > 1e-5 ? Math.hypot(pdx, pdz) / dt : 0;
+    _dogPX = p.x; _dogPZ = p.z;
+    dogNoiseAcc -= dt;
+    if (dogNoiseAcc <= 0 && pspd > 1.2 && !dead) {
+      dogNoiseAcc = pspd > 7 ? 0.45 : 0.8;
+      dogNoise(p.x, p.z, pspd > 7 ? 0.42 : 0.16, 'step');
+    }
+
+    if (mine) {
+      // keep the streets stocked, but never in a hurry and never in your face
+      //  Stock the district quickly when you first arrive and slowly once it is
+      //  populated, so walking through the tear does not drop you into an empty
+      //  city for half a minute, and a settled street is not a conveyor belt.
+      dogSpawnCd -= dt;
+      const live = dogs.reduce((a, o) => a + (o.live && !o.dead ? 1 : 0), 0);
+      const want = NDOG - 2;
+      if (dogSpawnCd <= 0 && live < want && !dogHoldSpawn) {
+        const deficit = (want - live) / want;
+        dogSpawnCd = (0.25 + (1 - deficit) * 2.6) * (0.7 + Math.random() * 0.6);
+        spawnDog();
+      }
+      for (const d of dogs) {                                 // and clear the far ones away
+        if (!d.live) continue;
+        const far = Math.hypot(d.x - p.x, d.z - p.z);
+        if (d.dead && d.deadT > 9) { despawnDog(d); continue; }
+        if (!d.dead && far > 150) despawnDog(d);
+      }
+      dogPackTick(dt);
+    }
+
+    dogAiFrame++;
+    for (const d of dogs) {
+      if (!d.live) continue;
+      const dx = d.x - p.x, dz = d.z - p.z, d2 = dx * dx + dz * dz;
+      d.lod = d2 < 1600 ? 0 : d2 < 8100 ? 1 : 2;               // 40 m / 90 m
+      // held still by the debug harness: posed, drawn, and not thinking, so a
+      // specific frame of a specific gait can be looked at without it walking off
+      if (d.pinned) { poseDog(d, dt, true); writeDog(d.slot); continue; }
+      if (mine) {
+        //  AI LOD: everything close thinks every frame, the middle band every
+        //  third, the far band every eighth — with the step scaled so their
+        //  motion is identical, just coarser.
+        const every = d.lod === 0 ? 1 : d.lod === 1 ? 3 : 8;
+        if ((dogAiFrame + d.slot) % every === 0) dogTick(d, dt * every);
+        d.rx = d.x; d.rz = d.z;
+      } else {
+        //  follower: ease onto the owner's dogs and animate locally
+        easePose(d, d.netX, d.netZ, d.netH, dt, 11, 26, 7, 5);
+        d.x = d.rx; d.z = d.rz;
+        d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
+        d.sp = d.rspd;
+        d.stagger = Math.max(0, d.stagger - dt * 2.6);
+        d.tdist = Math.hypot(dx, dz);
+        if (d.dead) d.deadT += dt;
+        const wantMaw = d.st === 'attack' || d.st === 'call' ? 1 : d.st === 'chase' ? 0.45 : d.st === 'alert' ? 0.22 : 0;
+        d.maw += (wantMaw - d.maw) * Math.min(1, dt * 7);
+        d.tailUp += ((d.st === 'wander' ? 0 : 0.7) - d.tailUp) * Math.min(1, dt * 4);
+        d.headYaw += (0 - d.headYaw) * Math.min(1, dt * 3);
+      }
+
+      // ---- gait selection and the animation clock
+      if (!d.dead) {
+        const sp = d.sp;
+        d.gait = sp < 2.2 ? 'walk' : sp < 5.0 ? 'trot' : 'gallop';
+        const G = D_GAIT[d.gait];
+        const stride = Math.max(0.35, G.stride);
+        d.gaitPh = (d.gaitPh + dt * Math.max(sp < 0.25 ? 0 : 0.55, sp / stride) * G.freq * 0.5) % 1;
+        // claw ticks on the beat, and a growl when it is watching you
+        if (d.lod === 0 && sp > 0.6) {
+          const beat = Math.floor(d.gaitPh * 4);
+          if (beat !== d.stepBeat) { d.stepBeat = beat; playDogStep(d.tdist, dogPan(d), sp > 5); }
+        }
+        d.breath -= dt;
+        if (d.breath <= 0 && d.lod === 0) {
+          d.breath = 2.2 + Math.random() * 3.4;
+          if (d.tdist < 24 && (d.st === 'alert' || d.st === 'observe' || d.st === 'chase' || d.st === 'reposition')) {
+            playDogGrowl(d.tdist, dogPan(d));
+          }
+        }
+      }
+
+      if (d.slot >= dogHigh) dogHigh = d.slot + 1;
+      if (d.lod >= 2 && !d.dead) { hideDogSlot(d.slot); continue; }   // beyond 90 m: simulated, not drawn
+      poseDog(d, dt, d.lod === 0);
+      writeDog(d.slot);
+    }
+    //  Only draw as far up the reserve as we have actually filled. Three dogs
+    //  in the world should not push fourteen dogs' worth of hidden instances
+    //  through the vertex stage every frame.
+    dogOvoidI.count = dogHigh * D_OVOID; dogBoneI.count = dogHigh * D_BONE;
+    dogKnucI.count = dogHigh * D_KNUC; dogPawI.count = dogHigh * D_PAW;
+    dogPetalI.count = dogHigh * D_PETAL;
+    for (const m of dogParts) m.instanceMatrix.needsUpdate = true;
+    // the flesh answers to the same light the rest of the other side does
+    const bolt = boltFlash * boltFlash;
+    for (const mt of [dogSkinMat, dogMawMat]) {
+      mt.uniforms.uBolt.value = bolt;
+      mt.uniforms.uAmb.value = 0.40 * BACK_LIT + bolt * 0.4;
+      mt.uniforms.uFogCol.value.copy(scene.fog.color);
+      mt.uniforms.uFogDens.value = FOG_DENSITY * 2.1;
+      mt.uniforms.uTime.value = cityT;
+    }
+  }
+  // ---- network ------------------------------------------------------
+  //  Same split as the troop: whoever owns the mobs runs every dog's AI and
+  //  ships positions at 8 Hz; everyone else eases onto them and animates
+  //  locally, so the gait, the head tracking and the jaws cost the owner
+  //  nothing and still look right on every screen. A bite is resolved on the
+  //  client being bitten, against those now-identical positions, so each
+  //  player takes their own beating and nobody is bitten by a ghost.
+  const D_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack',
+                'reposition', 'observe', 'retreat', 'hide', 'call', 'flee'];
+  function applyDogSnapshot(k) {
+    if (!k) {                                     // owner has no dogs up: neither have we
+      if (dogs.some((o) => o.live)) clearDogs();
+      return;
+    }
+    for (const o of dogs) o.netSeen = false;
+    for (let i = 0; i + 6 < k.length; i += 7) {
+      let d = dogs[k[i]];
+      if (!d) { while (dogs.length <= k[i]) dogs.push({ slot: dogs.length, live: false, S: {} }); d = dogs[k[i]]; }
+      if (!d.live) {                              // one we have not been told about before
+        Object.assign(d, {
+          live: true, x: k[i + 1] / 10, z: k[i + 2] / 10, y: 0, hd: k[i + 3] / HDQ, sp: 0,
+          pack: 0, role: 'watch', st: 'wander', stT: 0, gaitPh: Math.random(), gait: 'walk', lean: 0,
+          maw: 0, headYaw: 0, headPitch: 0, tailUp: 0, crouch: 0, lunge: 0, stagger: 0,
+          atkCd: 0, callCd: 0, deadT: 0, dead: false, see: 0, seeT: -99, tdist: 999, hasT: false,
+          stepPh: 0, breath: Math.random() * 6, hpHold: 0, lod: 0,
+        });
+        d.rx = d.x; d.rz = d.z; d.y = supportHeight(d.x, d.z, 1);
+        if (!dogPacks.length) newPack();
+      }
+      d.netSeen = true;
+      d.netX = k[i + 1] / 10; d.netZ = k[i + 2] / 10; d.netH = k[i + 3] / HDQ;
+      const nh = k[i + 4];
+      d.hp = (d.hpHold && performance.now() < d.hpHold) ? Math.min(d.hp, nh) : nh;
+      const st = D_ST[k[i + 5] - 1];
+      if (st && st !== d.st) {                    // state changes drive the follower's animation
+        if (st === 'call' && d.st !== 'call') playDogCall(d.tdist, dogPan(d));
+        if (st === 'attack' && d.st !== 'attack') playDogBite(d.tdist, dogPan(d));
+        d.st = st; d.stT = 0;
+      }
+      d.lunge = st === 'attack' ? 1 : Math.max(0, d.lunge - 0.1);
+      if (k[i + 6] && !d.dead) { d.dead = true; d.deadT = 0; playDogDeath(d.tdist, dogPan(d)); }
+    }
+    for (const o of dogs) if (o.live && !o.netSeen) despawnDog(o);
+  }
+  function sendDogHit(d, dmg) {
+    if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly
+    d.hpHold = performance.now() + 1200;
+    try { MP.client.publish(mtopic('dhit'), JSON.stringify({ i: d.slot, d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
+  }
+  function onDogHit(msg) {
+    const d = dogs[msg.i];
+    if (!d || !d.live || d.dead) return;
+    hurtDog(d, msg.d || 0, msg.x, msg.z);
+  }
+  //  Debug: what the pack is actually doing, for the F3 overlay.
+  function dogDebug() {
+    let live = 0, chase = 0, atk = 0, ret = 0, hide = 0, call = 0, flee = 0;
+    for (const d of dogs) {
+      if (!d.live || d.dead) continue;
+      live++;
+      if (d.st === 'chase') chase++; else if (d.st === 'attack') atk++;
+      else if (d.st === 'retreat') ret++; else if (d.st === 'hide') hide++;
+      else if (d.st === 'call') call++; else if (d.st === 'flee') flee++;
+    }
+    return { live, packs: dogPacks.filter((k) => k.members.length).length, chase, atk, ret, hide, call, flee };
+  }
+
   // ── red lightning ─────────────────────────────────────────────────
   //  One bolt is an event, not a flicker: the cloud lights from inside, the
   //  city is thrown into relief for a few frames, and the thunder arrives
@@ -4700,6 +5833,7 @@
       if (riftRetry <= 0) { riftRetry = 4; openGate(); }   // keep trying until one stands
     }
     updateLightning(dt);
+    updateDogs(dt);                          // and it clears them out when you leave
     if (wState === WS.BACK) {
       updateSpores(dt);
       // a bolt throws the whole city into relief for a few frames
