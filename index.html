@@ -595,6 +595,7 @@
       <button id="autoq-toggle" class="toggle" type="button">ON / OFF</button>
     </div>
     <div class="row">
+      <div class="lbl"><span>猿 · MONKEYS</span><b id="kills-val">0 / 10</b></div>
       <div class="lbl"><span>ボタン配置 · BUTTON LAYOUT</span></div>
       <div class="two"><button id="layout-edit" class="toggle" type="button">配置を編集</button><button id="layout-reset" class="toggle" type="button">リセット</button></div>
     </div>
@@ -3419,6 +3420,7 @@
     if (hitMonkey) {
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; showHit(hitMonkey.hp <= 0);
       if (hitMonkey.hp <= 0) { hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
+        creditMyKill();                                  // toward the gate — mine, counted here, always
         if (mobSim()) emitMonkeyDeath(hitMonkey, MP.id); }
       enrageMonkeys();                                 // the whole troop comes for you
       sendMobHit(hitMonkey, DMG);                      // and the owner makes it stick for everyone
@@ -3906,7 +3908,11 @@
     const v = parseFloat(brightEl.value); applyBrightness(v);
     try { localStorage.setItem('contour.bright', String(v)); } catch (e) {}
   });
-  const openSettings = () => settingsEl.classList.add('open');
+  const openSettings = () => {
+    // no marker in the world, but you can check the tally here
+    $('kills-val').textContent = myKills + ' / ' + GATE_NEED + (gateUnlocked ? ' ·  開' : '');
+    settingsEl.classList.add('open');
+  };
   const closeSettings = () => settingsEl.classList.remove('open');
   gearEl.addEventListener('click', openSettings);
   $('settings-close').addEventListener('click', closeSettings);
@@ -4234,7 +4240,7 @@
   const deathSeen = new Set();
   let myKills = 0, gateUnlocked = false, riftRetry = 0;
   const rift = {
-    state: 'LOCKED', present: false, x: 0, y: 0, z: 0, ry: 0, seed: 0,
+    state: 'LOCKED', present: false, owner: '', x: 0, y: 0, z: 0, ry: 0, seed: 0,
     group: null, tear: null, fibreI: null, moteI: null, near: 0, dist: 999,
   };
 
@@ -4373,6 +4379,14 @@
       const sc = scoreSite(bd, face, floor, inside, px, pz);
       if (sc > bestScore) { bestScore = sc; best = { x: px, y: y + (floor === 0 ? height(px, pz) : 0), z: pz, ry }; }
     }
+    if (!best) {                                 // nothing scored — put it on a wall regardless
+      let far = null, fd = -1;
+      for (const bd of buildingList) {
+        const d = Math.hypot(bd.cx - p.x, bd.cz - p.z);
+        if (d > fd) { fd = d; far = bd; }
+      }
+      if (far) best = { x: far.cx, y: height(far.cx, far.cz + far.hd + 0.4), z: far.cz + far.hd + 0.16, ry: 0 };
+    }
     return best;
   }
   function placeGate(x, y, z, ry, seed) {
@@ -4394,12 +4408,15 @@
     } catch (e) {}
   }
   function onGateMsg(msg) {
-    if (rift.present || msg.id === MP.id) return;
-    gateUnlocked = true;
+    if (msg.id === MP.id) return;
+    // two people can cross ten at the same moment; the lower id's tear is the one
+    if (rift.present && !(msg.id < rift.owner)) return;
+    gateUnlocked = true; rift.owner = msg.id;
     placeGate(msg.x / 10, msg.y / 10, msg.z / 10, msg.r / 1000, msg.s);
   }
-  function openGate() {                                    // owner only
+  function openGate() {
     if (rift.present) return;                              // one tear per world, ever
+    rift.owner = MP.id;
     rift.state = 'SPAWNING';
     const site = findGateSite();
     if (!site) { rift.state = 'LOCKED'; return; }
@@ -4418,21 +4435,27 @@
       for (let n = 0; n < 2; n++) setTimeout(() => { try { MP.client.publish(mtopic('mdeath'), pay); } catch (e) {} }, n * 130);
     }
   }
-  function applyMonkeyDeath(mi, by, seq) {
-    const key = mi + ':' + seq;
-    if (deathSeen.has(key)) return;
-    deathSeen.add(key);
-    if (by !== MP.id) return;                    // only what I killed counts toward my gate
+  // Progress toward the gate is a personal thing, so it is counted on the client
+  // that fired the shot, the moment that shot takes a monkey to zero. It used to
+  // wait for the troop's owner to confirm the death and hand it back — which
+  // means if you shared a room with anyone whose client was not actually running
+  // (a backgrounded phone, a stale peer in the public lobby), your kills went
+  // nowhere and the gate never opened however many you dropped.
+  function creditMyKill() {
     myKills++; saveGate();
     if (myKills < GATE_NEED || gateUnlocked) return;
     gateUnlocked = true; saveGate();
     notify('何か様子がおかしい…', 4200);
-    if (mobSim()) openGate();                    // I own the world, so I site it
-    else if (MP.connected && MP.client) {        // otherwise ask whoever does
-      try { MP.client.publish(mtopic('gatereq'), JSON.stringify({ id: MP.id })); } catch (e) {}
-    }
+    openGate();                                  // site it here and tell the room
   }
-  function onGateReq() { if (mobSim() && !rift.present) { gateUnlocked = true; openGate(); } }
+  // the shared death event still goes out — it is what puts the body on every
+  // screen — it just no longer has anybody's gate riding on it
+  function applyMonkeyDeath(mi, by, seq) {
+    const key = mi + ':' + seq;
+    if (deathSeen.has(key)) return;
+    deathSeen.add(key);
+  }
+  function onGateReq() { if (!rift.present) { gateUnlocked = true; openGate(); } }
   function onDeathMsg(msg) { applyMonkeyDeath(msg.i, msg.by, msg.s); }
 
   // ── rift audio ────────────────────────────────────────────────────
@@ -4617,9 +4640,11 @@
       buildMats[i].uniforms.uTime.value = cityT;
     }
     if (gateCool > 0) gateCool -= dt;
-    if (gateUnlocked && !rift.present && mobSim() && wState === WS.NORMAL) {
+    saveAcc += dt;
+    if (saveAcc > 20) { saveAcc = 0; saveGate(); }      // "somebody is in the world" heartbeat
+    if (gateUnlocked && !rift.present && wState === WS.NORMAL) {
       riftRetry -= dt;
-      if (riftRetry <= 0) { riftRetry = 4; openGate(); }
+      if (riftRetry <= 0) { riftRetry = 4; openGate(); }   // keep trying until one stands
     }
     updateLightning(dt);
     if (wState === WS.BACK) {
@@ -4666,10 +4691,15 @@
   riftPrompt.addEventListener('pointerdown', (ev) => { ev.preventDefault(); ev.stopPropagation(); wantInteract = true; });
 
   // ── save / load ───────────────────────────────────────────────────
+  //  Nobody in the world for five minutes and it forgets: the count goes back to
+  //  zero and any tear closes with it. `t` is stamped while you are actually in
+  //  there, so the gap between one visit and the next is what is measured.
+  const WORLD_IDLE_MS = 5 * 60 * 1000;
+  let saveAcc = 0;
   function saveGate() {
     try {
       localStorage.setItem('contour.rift', JSON.stringify({
-        k: myKills, u: gateUnlocked, w: wState,
+        k: myKills, u: gateUnlocked, w: wState, t: Date.now(),
         g: rift.present ? [rift.x, rift.y, rift.z, rift.ry, rift.seed] : null,
       }));
     } catch (e) {}
@@ -4678,6 +4708,10 @@
     let s = null;
     try { s = JSON.parse(localStorage.getItem('contour.rift') || 'null'); } catch (e) {}
     if (!s) return;
+    if (typeof s.t === 'number' && Date.now() - s.t > WORLD_IDLE_MS) {
+      myKills = 0; gateUnlocked = false; saveGate();     // the world stood empty; start over
+      return;
+    }
     myKills = s.k || 0; gateUnlocked = !!s.u;
     // the same tear, in the same place — never a fresh one somewhere else
     if (s.g) placeGate(s.g[0], s.g[1], s.g[2], s.g[3], s.g[4]);
