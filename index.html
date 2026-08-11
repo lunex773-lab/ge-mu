@@ -2015,6 +2015,8 @@
   //  Hit one monkey and the whole troop turns on you for two minutes, with
   //  fresh ones popping in around you the entire time.
   const RAGE_TIME = 120, RAGE_SPAWN = 2.5, RAGE_RESPAWN = 3.0;
+  const MONKEY_CORPSE = 10;                  // how long a body lies there
+  const _mkHit = new THREE.Vector3();
   let rageT = 0, rageSpawnCd = 0;
   // the troop goes for whoever is closest, not just for me — the owner runs it
   // for the whole room, so a monkey has to be able to pick a peer as its target
@@ -2054,6 +2056,8 @@
   function wakeMonkey(m) {
     const sp = rageSpot(); if (!sp) return false;
     m.hp = 60; m.killed = false; m.deadT = 0; m.aggro = true; m.meleeCd = 0;
+    m.deadFx = false; m.corpseT = 0;
+    m.group.scale.setScalar(1); m.group.rotation.set(0, 0, 0);
     m.wx = m.rx = sp.x; m.wz = m.rz = sp.z; m.active = true;
     m.group.position.set(sp.x, 0, sp.z); m.group.visible = true;
     if (m.pooled && !m.group.parent) scene.add(m.group);
@@ -2089,7 +2093,7 @@
     for (const m of monkeyPeds) {              // and put the fallen back in play
       if (m.hp > 0) continue;
       m.deadT = (m.deadT || 0) + dt;
-      if (m.deadT >= RAGE_RESPAWN) wakeMonkey(m);
+      if (m.deadT >= RAGE_RESPAWN && !(m.corpseT > 0)) wakeMonkey(m);   // let the body clear first
     }
     if (rageT <= 0) calmMonkeys();
   }
@@ -2169,7 +2173,23 @@
   function updatePed(ped, dt) {
     if (ped.isMonkey) {
       if (ped.pooled && !ped.active) return;
-      if (ped.hp <= 0) { ped.group.visible = false; return; }
+      if (ped.hp <= 0) {                                        // dropped
+        if (!ped.deadFx) {                                      // the moment it goes down
+          ped.deadFx = true; ped.corpseT = MONKEY_CORPSE;
+          const dd = Math.hypot(ped.wx - p.x, ped.wz - p.z);
+          if (dd < 60 && wState === WS.NORMAL) { spawnImpact(_mkHit.set(ped.wx, 1.05, ped.wz)); playThud(dd); }
+        }
+        ped.corpseT -= dt;
+        if (ped.corpseT <= 0 || wState === WS.BACK) { ped.group.visible = false; return; }
+        const fall = Math.min(1, (MONKEY_CORPSE - ped.corpseT) / 0.5);
+        const ease = 1 - (1 - fall) * (1 - fall);               // topples forward and settles
+        ped.group.visible = true;
+        ped.group.position.set(ped.wx, 0.15 * ease, ped.wz);
+        ped.group.rotation.set(ease * 1.62, ped.hd || 0, 0, 'YXZ');
+        ped.group.scale.setScalar(ped.corpseT < 0.7 ? ped.corpseT / 0.7 : 1);   // sinks away at the end
+        poseMonkey(ped.group.userData, { stride: 0, walk: 0, run: false, air: 0, crouch: 0.5, land: 0, time: cityT, eat: 0 });
+        return;
+      }
       let heading, walk = 1, running = ped.running, lean = 0, eat = 0;
       const mine = mobSim();                                    // am I the one running the troop?
       const chase = (mine && ped.aggro) ? nearestTarget(ped.wx, ped.wz) : null;
@@ -2646,8 +2666,11 @@
     }
     for (const m of monkeyPeds) {                          // anything unsent is out of play
       if (m.netSeen) continue;
-      m.hp = 0; m.group.visible = false;
-      if (m.pooled && m.active) { m.active = false; if (m.group.parent) scene.remove(m.group); }
+      m.hp = 0;
+      if (!(m.corpseT > 0)) {                                 // its body is still on the ground
+        m.group.visible = false;
+        if (m.pooled && m.active) { m.active = false; if (m.group.parent) scene.remove(m.group); }
+      }
     }
     const b = msg.c || [], live = new Set();
     for (let i = 0; i + 3 < b.length; i += 4) {
@@ -2681,6 +2704,7 @@
     if (t.slice(-7) === '/mdeath') { onDeathMsg(msg); return; }
     if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
     if (t.slice(-5) === '/bolt') { onBolt(msg); return; }
+    if (t.slice(-8) === '/gatereq') { onGateReq(); return; }
     if (t.slice(-4) === '/mob') { onMobState(msg); return; }
     if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
@@ -2845,6 +2869,7 @@
       client.subscribe(mtopic('mdeath'));
       client.subscribe(mtopic('gate'));
       client.subscribe(mtopic('bolt'));
+      client.subscribe(mtopic('gatereq'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -4206,9 +4231,8 @@
 
   // ── the tear ──────────────────────────────────────────────────────
   const GATE_NEED = 10;
-  const gateKills = new Map();                              // per-player monkey kills (owner side)
   const deathSeen = new Set();
-  let myKills = 0, gateUnlocked = false;
+  let myKills = 0, gateUnlocked = false, riftRetry = 0;
   const rift = {
     state: 'LOCKED', present: false, x: 0, y: 0, z: 0, ry: 0, seed: 0,
     group: null, tear: null, fibreI: null, moteI: null, near: 0, dist: 999,
@@ -4398,19 +4422,17 @@
     const key = mi + ':' + seq;
     if (deathSeen.has(key)) return;
     deathSeen.add(key);
-    if (by === MP.id) { myKills++; saveGate(); }
-    if (mobSim()) {                                        // the owner keeps everyone's tally
-      const n = (gateKills.get(by) || 0) + 1;
-      gateKills.set(by, n);
-      if (n >= GATE_NEED && !gateUnlocked) {
-        gateUnlocked = true;
-        notify('何かが 成立した', 3600);
-        openGate();
-      }
-    } else if (by === MP.id && myKills >= GATE_NEED && !gateUnlocked) {
-      gateUnlocked = true; notify('何かが 成立した', 3600);
+    if (by !== MP.id) return;                    // only what I killed counts toward my gate
+    myKills++; saveGate();
+    if (myKills < GATE_NEED || gateUnlocked) return;
+    gateUnlocked = true; saveGate();
+    notify('何か様子がおかしい…', 4200);
+    if (mobSim()) openGate();                    // I own the world, so I site it
+    else if (MP.connected && MP.client) {        // otherwise ask whoever does
+      try { MP.client.publish(mtopic('gatereq'), JSON.stringify({ id: MP.id })); } catch (e) {}
     }
   }
+  function onGateReq() { if (mobSim() && !rift.present) { gateUnlocked = true; openGate(); } }
   function onDeathMsg(msg) { applyMonkeyDeath(msg.i, msg.by, msg.s); }
 
   // ── rift audio ────────────────────────────────────────────────────
@@ -4595,6 +4617,10 @@
       buildMats[i].uniforms.uTime.value = cityT;
     }
     if (gateCool > 0) gateCool -= dt;
+    if (gateUnlocked && !rift.present && mobSim() && wState === WS.NORMAL) {
+      riftRetry -= dt;
+      if (riftRetry <= 0) { riftRetry = 4; openGate(); }
+    }
     updateLightning(dt);
     if (wState === WS.BACK) {
       updateSpores(dt);
