@@ -666,6 +666,15 @@
     major:   new THREE.Color(0xFFFFFF),
   };
   const FOG_DENSITY = 0.0038;
+  // How much brighter the other side runs than the grade it is built from. It
+  // has no day and no night — one fixed overcast — so this is a single exposure
+  // knob rather than a curve, and it is the only place the number lives: the
+  // light rig, the fog, the cloud lid, the wet road and the rotten concrete all
+  // read it. Raise it and the whole world lifts together.
+  // Set so the other side measures about one and a half times the front world's
+  // night, which is the only state of the front world worth comparing it to —
+  // still under half of its daylight, so it stays a dark place you can see in.
+  const BACK_LIT = 2.2;
   const SUN_DIR = new THREE.Vector3(0.5, 0.62, -0.42).normalize();
 
   const WORLD = 700;          // metres across (movement clamp)
@@ -780,7 +789,8 @@
   // ---- sky dome ----
   const skyU = { uZenith: { value: C.zenith.clone() }, uHorizon: { value: C.horizon.clone() },
                  uSun: { value: C.sun.clone() }, uSunDir: { value: SUN_DIR },
-                 uBack: { value: 0 }, uBolt: { value: 0 }, uTime: { value: 0 } };
+                 uBack: { value: 0 }, uBolt: { value: 0 }, uTime: { value: 0 },
+                 uBackLit: { value: BACK_LIT } };
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(1200, 32, 20),
     new THREE.ShaderMaterial({
@@ -794,7 +804,7 @@
         }`,
       fragmentShader: `
         uniform vec3 uZenith, uHorizon, uSun, uSunDir;
-        uniform float uBack, uBolt, uTime;
+        uniform float uBack, uBolt, uTime, uBackLit;
         varying vec3 vDir;
         float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float vnoise(vec2 p) {
@@ -820,7 +830,7 @@
             deck += vec3(0.42, 0.045, 0.030) * glow * (0.30 + uBolt * 3.4);
             deck += vec3(0.30, 0.035, 0.028) * uBolt * (0.25 + 0.75 * smoothstep(0.2, 0.9, n));
             deck = mix(deck * 1.25, deck, smoothstep(0.30, 0.85, t));   // heavier overhead
-            col = mix(col, deck, uBack);
+            col = mix(col, deck * uBackLit, uBack);
           }
           gl_FragColor = vec4(col, 1.0);
         }`
@@ -839,6 +849,7 @@
       uPitch: { value: PITCH }, uRW: { value: RW }, uHalf: { value: HALF },
       // night: the asphalt drops away and the street lamps pool light on it
       uNight: { value: 0 }, uLamp: { value: new THREE.Color(0xffdca8) }, uBack: { value: 0 },
+      uBackLit: { value: BACK_LIT },
       uLampX0: { value: -N * PITCH + 15 }, uCity: { value: N * PITCH },
     },
     vertexShader: `
@@ -846,7 +857,7 @@
       void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vW = wp.xyz; vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `
       uniform vec3 uRoad, uCurb, uPaint, uZebra, uFogCol, uLamp;
-      uniform float uFogDens, uPitch, uRW, uHalf, uNight, uLampX0, uCity, uBack;
+      uniform float uFogDens, uPitch, uRW, uHalf, uNight, uLampX0, uCity, uBack, uBackLit;
       varying vec3 vW; varying float vFog;
       void main() {
         float dx = abs(vW.x - uPitch * floor(vW.x / uPitch + 0.5));   // dist to nearest N-S road centre
@@ -866,21 +877,24 @@
         // ---- after dark the street itself goes nearly black and only the
         //  lamps light it. The lamp row is rebuilt analytically here so the
         //  pools land exactly under the posts placed on the CPU side.
-        col *= mix(1.0, 0.22, uNight);
-        if (uNight > 0.01) {
+        //  The other side has no night, so its road never takes the after-dark
+        //  drop and never catches a lamp pool — every lamp over there is dead.
+        float nite = uNight * (1.0 - uBack);
+        col *= mix(1.0, 0.22, nite);
+        if (nite > 0.01) {
           float lampX = uLampX0 + 30.0 * floor((vW.x - uLampX0) / 30.0 + 0.5);
           float gapX = abs(lampX - uPitch * floor(lampX / uPitch + 0.5));   // no lamp inside an intersection
           if (gapX >= uRW + 4.0 && abs(lampX) <= uCity - 15.0 && abs(vW.z) <= uCity + 12.0) {
             float ldx = vW.x - lampX, ldz = dz - (uRW + 1.5);   // the head hangs 0.7 m out over the kerb
             float pool = smoothstep(11.0, 1.0, sqrt(ldx * ldx + ldz * ldz));
-            col += uLamp * (uNight * 0.50 * pool * pool);
+            col += uLamp * (nite * 0.50 * pool * pool);
           }
         }
         if (uBack > 0.001) {
           float g = fract(sin(dot(floor(vW.xz * 0.35), vec2(12.99, 78.23))) * 43758.545);
           vec3 wet = mix(col, vec3(0.072, 0.096, 0.092), 0.78) * (0.60 + 0.26 * g);
           wet += vec3(0.008, 0.026, 0.020) * step(0.78, g);      // patches of growth in the cracks
-          col = mix(col, wet, uBack);
+          col = mix(col, wet * uBackLit, uBack);
         }
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -974,7 +988,7 @@
         uWall: { value: new THREE.Color(L.wall) }, uWin: { value: new THREE.Color(L.win) },
         uLit: { value: new THREE.Color(0xffe3a4) }, uRoof: { value: new THREE.Color(0x585e66) },
         uGlass: { value: L.glass }, uSunDir: { value: SUN_DIR }, uNight: { value: 0 },
-        uBack: { value: 0 }, uTime: { value: 0 },
+        uBack: { value: 0 }, uTime: { value: 0 }, uBackLit: { value: BACK_LIT },
         uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
       },
       vertexShader: `
@@ -988,7 +1002,7 @@
           vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
-        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass, uNight, uBack, uTime;
+        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass, uNight, uBack, uTime, uBackLit;
         varying vec3 vW; varying vec3 vN; varying float vFog;
         float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
@@ -1028,7 +1042,10 @@
             emit = mix(emit, win * alive * flick * 1.5, uBack);
           }
           float ndl = max(dot(n, uSunDir), 0.0);
-          col *= (0.56 + 0.60 * ndl) * (1.0 - uNight * 0.68);
+          //  No night over there, so the after-dark knock-down is faded out with
+          //  uBack and the fixed overcast exposure takes its place.
+          col *= (0.56 + 0.60 * ndl) * (1.0 - uNight * 0.68 * (1.0 - uBack));
+          col *= mix(1.0, uBackLit, uBack);
           col += uLit * emit;
           float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
           gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -4620,31 +4637,18 @@
     paintCars(back);
     if (!back) { for (const k of [carHeadI, carTailI, carSignI]) k.instanceMatrix.needsUpdate = true; }
     scene.fog.density = back ? FOG_DENSITY * 2.1 : FOG_DENSITY;
-    if (back) { startBackBed(); } else { stopBackBed(); }
     saveGate();
   }
-  // the air itself: a low bed of wind and far-off groaning while you are over there
-  let backBed = null;
-  function startBackBed() {
-    if (backBed || !audioReady()) return;
-    const t = actx.currentTime;
-    const out = actx.createGain(); out.gain.value = 0;
-    out.connect(master);
-    const wind = actx.createBufferSource(); wind.buffer = noiseBuf; wind.loop = true;
-    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 300; bp.Q.value = 0.35;
-    const wg = actx.createGain(); wg.gain.value = 0.11;
-    wind.connect(bp); bp.connect(wg); wg.connect(out);
-    const groan = actx.createOscillator(); groan.type = 'sine'; groan.frequency.value = 47;
-    const gg = actx.createGain(); gg.gain.value = 0.12;
-    const glfo = actx.createOscillator(); glfo.type = 'sine'; glfo.frequency.value = 0.052;
-    const glg = actx.createGain(); glg.gain.value = 0.09;
-    glfo.connect(glg); glg.connect(gg.gain);
-    groan.connect(gg); gg.connect(out);
-    wind.start(t); groan.start(t); glfo.start(t);
-    out.gain.setTargetAtTime(1, t, 1.2);
-    backBed = { out };
-  }
-  function stopBackBed() { if (backBed) try { backBed.out.gain.setTargetAtTime(0, actx.currentTime, 0.5); } catch (e) {} }
+  // There is deliberately no ambient bed over here. There used to be one — a
+  // looping band-passed noise source for wind — and it was wrong twice over. It
+  // hissed continuously, which reads as a fault in the game rather than as
+  // weather, and it never tore down: stopping it only faded the gain, so the
+  // second crossing found the node still there, returned early and left you in
+  // silence. That silence is the version worth keeping. The other side is
+  // carried by its own music, the tear's voice and the thunder — all of which
+  // start and stop cleanly, and all of which answer to the volume settings.
+  // If a bed is ever wanted here again, make it tonal and make stop() a real
+  // teardown; do not put a looping noise source on the master bus.
 
   function beginTransition(to) {
     if (transT > 0) return;
@@ -4699,15 +4703,24 @@
     if (wState === WS.BACK) {
       updateSpores(dt);
       // a bolt throws the whole city into relief for a few frames
+      // The standing level is lifted by BACK_LIT; the bolt's own contribution is
+      // not, so a strike still reads as a strike instead of blowing out a world
+      // that is already a good deal brighter than it used to be.
       const b = boltFlash * boltFlash;
-      light.intensity = 0.05 + b * 2.4;
+      light.intensity = 0.05 * BACK_LIT + b * 2.4;
       light.color.setRGB(1, 0.30 + b * 0.1, 0.24);
-      hemiLight.intensity = 0.44 + b * 0.55;
+      hemiLight.intensity = 0.44 * BACK_LIT + b * 0.55;
       hemiLight.color.setRGB(0.26 + b * 0.4, 0.36 + b * 0.06, 0.37 + b * 0.05);
       hemiLight.groundColor.setRGB(0.07, 0.10, 0.10);
-      ambLight.intensity = 0.22 + b * 0.30;
-      scene.fog.color.setRGB(0.062 + b * 0.25, 0.084 + b * 0.02, 0.088 + b * 0.02);
+      ambLight.intensity = 0.22 * BACK_LIT + b * 0.30;
+      scene.fog.color.setRGB(0.062 * BACK_LIT + b * 0.25, 0.084 * BACK_LIT + b * 0.02, 0.088 * BACK_LIT + b * 0.02);
       renderer.setClearColor(scene.fog.color);
+      // The shader meshes carry their own fog colour, and until now nothing over
+      // here touched it — so the road and the buildings still faded into the
+      // front world's horizon, which meant the far end of the street turned blue
+      // at noon and black at midnight in a place that has neither. Everything
+      // fades into the same dead overcast now.
+      for (let i = 0; i < fogMats.length; i++) fogMats[i].uniforms.uFogCol.value.lerp(scene.fog.color, backAmt);
     }
     // the tear
     if (rift.present) {
