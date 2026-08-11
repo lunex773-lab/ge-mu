@@ -454,6 +454,19 @@
     color: #cdf4ff; font-size: 11px; font-weight: 600; letter-spacing: .14em;
   }
   #reveal.on { display: flex; }
+  #gate-prompt {
+    position: absolute; left: 50%; bottom: calc(31% + env(safe-area-inset-bottom));
+    transform: translateX(-50%); display: none; align-items: center; gap: 12px;
+    padding: 9px 20px; border-radius: 4px; pointer-events: auto; cursor: pointer;
+    background: rgba(40,6,6,.80); border: 1px solid rgba(255,80,60,.62);
+    color: #ffd4cc; font-size: 12px; font-weight: 700; letter-spacing: .22em;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #gate-prompt span {
+    font-size: 10px; letter-spacing: .1em; color: #ff8b72;
+    border: 1px solid rgba(255,120,90,.5); border-radius: 3px; padding: 2px 7px;
+  }
+  #gate-prompt.on { display: flex; }
   #rage span { color: #fff; font-variant-numeric: tabular-nums; }
   @keyframes ragepulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
 
@@ -510,6 +523,7 @@
   <div id="chatfeed"></div>
   <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
   <div id="reveal"><b>🧭 敵の位置</b><span id="reveal-t">30</span></div>
+  <div id="gate-prompt"><b>触れる</b><span>E</span></div>
   <div id="compass"><i></i><div id="compass-strip"></div></div>
   <div id="hitmarker"></div>
   <div id="notification"></div>
@@ -764,7 +778,8 @@
 
   // ---- sky dome ----
   const skyU = { uZenith: { value: C.zenith.clone() }, uHorizon: { value: C.horizon.clone() },
-                 uSun: { value: C.sun.clone() }, uSunDir: { value: SUN_DIR } };
+                 uSun: { value: C.sun.clone() }, uSunDir: { value: SUN_DIR },
+                 uBack: { value: 0 }, uBolt: { value: 0 }, uTime: { value: 0 } };
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(1200, 32, 20),
     new THREE.ShaderMaterial({
@@ -778,7 +793,14 @@
         }`,
       fragmentShader: `
         uniform vec3 uZenith, uHorizon, uSun, uSunDir;
+        uniform float uBack, uBolt, uTime;
         varying vec3 vDir;
+        float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),
+                     mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
         void main() {
           vec3 d = normalize(vDir);
           float t = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
@@ -786,6 +808,19 @@
           col = mix(col, uHorizon * 0.94, smoothstep(0.50, 0.32, t));
           float a = max(dot(d, uSunDir), 0.0);
           col += uSun * (pow(a, 260.0) * 1.4 + pow(a, 6.0) * 0.16);
+          if (uBack > 0.001) {
+            // a lid of cloud that never clears, lit from inside by something red
+            vec2 q = d.xz / max(abs(d.y) + 0.22, 0.14);
+            float n = vnoise(q * 1.7 + uTime * 0.006) * 0.55
+                    + vnoise(q * 4.1 - uTime * 0.011) * 0.30
+                    + vnoise(q * 9.3 + uTime * 0.020) * 0.15;
+            vec3 deck = mix(vec3(0.028, 0.040, 0.044), vec3(0.085, 0.105, 0.108), n);
+            float glow = pow(max(n - 0.34, 0.0) * 1.7, 2.2);
+            deck += vec3(0.42, 0.045, 0.030) * glow * (0.30 + uBolt * 3.4);
+            deck += vec3(0.30, 0.035, 0.028) * uBolt * (0.25 + 0.75 * smoothstep(0.2, 0.9, n));
+            deck = mix(deck * 1.25, deck, smoothstep(0.30, 0.85, t));   // heavier overhead
+            col = mix(col, deck, uBack);
+          }
           gl_FragColor = vec4(col, 1.0);
         }`
     })
@@ -802,7 +837,7 @@
       uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
       uPitch: { value: PITCH }, uRW: { value: RW }, uHalf: { value: HALF },
       // night: the asphalt drops away and the street lamps pool light on it
-      uNight: { value: 0 }, uLamp: { value: new THREE.Color(0xffdca8) },
+      uNight: { value: 0 }, uLamp: { value: new THREE.Color(0xffdca8) }, uBack: { value: 0 },
       uLampX0: { value: -N * PITCH + 15 }, uCity: { value: N * PITCH },
     },
     vertexShader: `
@@ -810,7 +845,7 @@
       void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vW = wp.xyz; vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `
       uniform vec3 uRoad, uCurb, uPaint, uZebra, uFogCol, uLamp;
-      uniform float uFogDens, uPitch, uRW, uHalf, uNight, uLampX0, uCity;
+      uniform float uFogDens, uPitch, uRW, uHalf, uNight, uLampX0, uCity, uBack;
       varying vec3 vW; varying float vFog;
       void main() {
         float dx = abs(vW.x - uPitch * floor(vW.x / uPitch + 0.5));   // dist to nearest N-S road centre
@@ -839,6 +874,12 @@
             float pool = smoothstep(11.0, 1.0, sqrt(ldx * ldx + ldz * ldz));
             col += uLamp * (uNight * 0.50 * pool * pool);
           }
+        }
+        if (uBack > 0.001) {
+          float g = fract(sin(dot(floor(vW.xz * 0.35), vec2(12.99, 78.23))) * 43758.545);
+          vec3 wet = mix(col, vec3(0.072, 0.096, 0.092), 0.78) * (0.60 + 0.26 * g);
+          wet += vec3(0.008, 0.026, 0.020) * step(0.78, g);      // patches of growth in the cracks
+          col = mix(col, wet, uBack);
         }
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -921,6 +962,7 @@
         uWall: { value: new THREE.Color(L.wall) }, uWin: { value: new THREE.Color(L.win) },
         uLit: { value: new THREE.Color(0xffe3a4) }, uRoof: { value: new THREE.Color(0x585e66) },
         uGlass: { value: L.glass }, uSunDir: { value: SUN_DIR }, uNight: { value: 0 },
+        uBack: { value: 0 }, uTime: { value: 0 },
         uFogCol: { value: C.horizon.clone() }, uFogDens: { value: FOG_DENSITY },
       },
       vertexShader: `
@@ -934,7 +976,7 @@
           vec4 mv = viewMatrix * wp; vFog = -mv.z; gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
-        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass, uNight;
+        uniform vec3 uWall, uWin, uLit, uRoof, uSunDir, uFogCol; uniform float uFogDens, uGlass, uNight, uBack, uTime;
         varying vec3 vW; varying vec3 vN; varying float vFog;
         float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
@@ -955,6 +997,23 @@
             // spandrel band at every slab line, and a darker plinth at the base
             col = mix(col, uWall * 0.78, step(fract(ru), 0.10));
             col = mix(col, uWall * 0.62, step(vW.y, 1.2));
+          }
+          if (uBack > 0.001) {
+            // Same building, same windows, same floor lines — but the concrete is
+            // damp and rotten, and nearly every light in the city is dead. A few
+            // are not, and those flicker.
+            float hc2 = abs(n.y) > 0.5 ? vW.x : (abs(n.x) > abs(n.z) ? vW.z : vW.x);
+            float grime = h21(vec2(floor(hc2 * 0.55), floor(vW.y * 0.30)));
+            float run = fract(hc2 * 0.31 + grime * 7.0);
+            float streak = smoothstep(0.42, 0.0, abs(run - 0.5)) * smoothstep(0.0, 26.0, vW.y);
+            vec3 rot = mix(col, vec3(0.150, 0.196, 0.186), 0.70);      // blue-green rot
+            rot *= 0.74 + 0.22 * grime - 0.16 * streak;
+            rot += vec3(0.014, 0.046, 0.034) * step(0.62, grime);      // patches of growth
+            rot = mix(rot, rot * 0.62, step(vW.y, 2.6));               // sodden at the base
+            col = mix(col, rot, uBack);
+            float alive = step(0.978, h21(vec2(floor(hc2 / 3.6) * 13.0 + floor(vW.y / 3.5), 5.0)));
+            float flick = step(0.35, fract(sin(uTime * 2.3 + floor(vW.y / 3.5) * 4.7) * 43758.545));
+            emit = mix(emit, win * alive * flick * 1.5, uBack);
           }
           float ndl = max(dot(n, uSunDir), 0.0);
           col *= (0.56 + 0.60 * ndl) * (1.0 - uNight * 0.68);
@@ -1508,12 +1567,13 @@
   //  up together with nightF, and the extra geometry is only drawn after dark ----
   let lightsLit = null;
   function updateStreetLights() {
-    lampMat.emissive.copy(LAMP_OFF).lerp(LAMP_ON, nightF);
-    lampGlowMat.opacity = 0.48 * nightF;
-    carHeadMat.color.copy(HEAD_DAY).lerp(HEAD_NIGHT, nightF);
-    carTailMat.color.copy(TAIL_DAY).lerp(TAIL_NIGHT, nightF);
-    carBeamMat.opacity = 0.14 * nightF;
-    const lit = nightF > 0.05;
+    const nf = wState === WS.BACK ? 0 : nightF;     // every light in the backside is out
+    lampMat.emissive.copy(LAMP_OFF).lerp(LAMP_ON, nf);
+    lampGlowMat.opacity = 0.48 * nf;
+    carHeadMat.color.copy(HEAD_DAY).lerp(HEAD_NIGHT, nf);
+    carTailMat.color.copy(TAIL_DAY).lerp(TAIL_NIGHT, nf);
+    carBeamMat.opacity = 0.14 * nf;
+    const lit = nf > 0.05;
     if (lit !== lightsLit) {
       lightsLit = lit;
       slGlow.visible = lit; carBeamI.visible = lit;
@@ -1732,7 +1792,7 @@
   }
   // run down anything on the crossing — the box test the player already gets
   function mowDownPeds(bx, bz, heading, hw, hl, speed) {
-    if (speed < 5) return;
+    if (speed < 5 || wState === WS.BACK) return;
     const ch = Math.cos(heading), sh = Math.sin(heading);
     for (let i = 0; i < peds.length; i++) {
       const e = peds[i];
@@ -1769,7 +1829,7 @@
           else if (c.eaters >= CORPSE_FEEDERS || (c.eaters >= 1 && c.age > CORPSE_GIVEUP)) c.eatT = CORPSE_EAT;
         }
       }
-      drawCorpse(c);
+      if (wState !== WS.BACK) drawCorpse(c);
     }
   }
   function drawCorpse(c) {
@@ -1866,7 +1926,7 @@
       b.ph += dt;
       b.mesh.position.y = b.y + Math.sin(b.ph * 2) * 0.12;
       b.mesh.rotation.y += dt * 1.6;
-      if (!dead && (hp < HP_MAX || reserve < RESERVE_MAX)) {
+      if (!dead && wState === WS.NORMAL && (hp < HP_MAX || reserve < RESERVE_MAX)) {
         const dx = p.x - b.x, dz = p.z - b.z;
         if (dx * dx + dz * dz < 3.24) {                 // within ~1.8 m
           hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
@@ -1927,7 +1987,7 @@
       c.mesh.position.y = c.y + Math.sin(c.ph * 1.7) * 0.12;
       c.spin.rotation.y += dt * 1.1;
       c.needle.rotation.y = Math.sin(c.ph * 1.3) * 0.10;         // the needle keeps pointing north
-      if (dead) continue;
+      if (dead || wState === WS.BACK) continue;
       const dx = p.x - c.x, dz = p.z - c.z;
       if (dx * dx + dz * dz < 3.24) {                            // within ~1.8 m
         revealT = REVEAL_TIME; playHeal();
@@ -1960,7 +2020,7 @@
   }
   function monkeyMelee(ped, dt) {             // damage is decided locally, on the synced positions
     ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
-    if (dead || !ped.aggro) return;
+    if (dead || !ped.aggro || wState === WS.BACK) return;   // the troop is not over there
     const dx = p.x - ped.wx, dz = p.z - ped.wz;
     if (dx * dx + dz * dz < 3.61 && ped.meleeCd <= 0 && monkeyHitCd <= 0) {     // within 1.9 m
       applyDamage(11, null); playHurt(); ped.meleeCd = 0.7; monkeyHitCd = 0.4;  // caps swarm DPS
@@ -2023,7 +2083,7 @@
     if (rageT <= 0) calmMonkeys();
   }
   function runOver(bx, bz, heading, hw, hl, speed, dmg) {
-    if (dead || carHitCd > 0 || speed < 4) return;
+    if (dead || carHitCd > 0 || speed < 4 || wState === WS.BACK) return;
     const dx = p.x - bx, dz = p.z - bz, ch = Math.cos(heading), sh = Math.sin(heading);
     const lz = dx * sh + dz * ch, lx = dx * ch - dz * sh;
     if (Math.abs(lx) < hw + PRAD && Math.abs(lz) < hl + PRAD) {
@@ -2153,6 +2213,7 @@
           if (gr) for (let i = 0; i < gr.length; i++) gr[i].visible = near;
         }
       }
+      if (wState === WS.BACK) { ped.group.visible = false; return; }   // the troop stays in the normal world
       poseMonkey(ped.group.userData, { stride: ped.phase, walk, run: running, air: 0, crouch: 0, land: 0, time: cityT, eat });
       ped.group.position.set(ped.wx, 0, ped.wz);
       ped.group.rotation.set(0, heading, lean);                 // face forward, lean into the turn
@@ -2164,6 +2225,7 @@
     // like they are doing — so cutting a corner reads as a short jog.
     const lean = -easePose(ped, g.bx, g.bz, g.heading, dt, 3.2, Math.max(4.6, ped.speed * 1.6), 7, 4.5) * 0.07;
     const bx = ped.wx = ped.rx, bz = ped.wz = ped.rz, heading = ped.hd;
+    if (wState === WS.BACK) return;                 // nobody walks these streets any more
     const spd = ped.rspd, run = spd > 2.6, walk = Math.min(1, spd / (run ? 3.6 : 1.5));
     ped.phase += dt * spd * (run ? 3.4 : 5.0);
     const sw = Math.sin(ped.phase), swc = Math.cos(ped.phase), amp = run ? 1.35 : 1;
@@ -2193,7 +2255,8 @@
     // updates every frame, so nothing you can actually see stutters.
     cityFrame++;
     const FAR2 = 90 * 90;
-    for (let k = 0; k < cars.length; k++) {
+    const drive = wState !== WS.BACK;               // the traffic died where it stood
+    if (drive) for (let k = 0; k < cars.length; k++) {
       const c = cars[k];
       if (c._x !== undefined) {
         const dx = c._x - p.x, dz = c._z - p.z;
@@ -2201,16 +2264,18 @@
       }
       updateCar(c, dt, k);
     }
-    updateFerraris(dt);
+    if (drive) updateFerraris(dt);
     for (let k = 0; k < peds.length; k++) {
       const e = peds[k];
       const dx = e.wx - p.x, dz = e.wz - p.z;
       if (dx * dx + dz * dz > FAR2) { if ((cityFrame + k) % 3) continue; updatePed(e, dt * 3); continue; }
       updatePed(e, dt);
     }
-    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carWheelI.instanceMatrix.needsUpdate = true;
-    carHeadI.instanceMatrix.needsUpdate = carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
-    if (carBeamI.visible) carBeamI.instanceMatrix.needsUpdate = true;
+    if (drive) {
+      carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carWheelI.instanceMatrix.needsUpdate = true;
+      carHeadI.instanceMatrix.needsUpdate = carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
+      if (carBeamI.visible) carBeamI.instanceMatrix.needsUpdate = true;
+    }
     updateStreetLights();
     for (const m of humanI) m.instanceMatrix.needsUpdate = true;
     for (const m of skids) { if (m.userData.life > 0) { m.userData.life -= dt; m.material.opacity = Math.max(0, m.userData.life / 4) * 0.45; if (m.userData.life <= 0) m.visible = false; } }
@@ -2538,7 +2603,9 @@
     }
     const b = [];
     for (const c of corpses) if (c.active) b.push(c.cid, Math.round(c.x * 10), Math.round(c.z * 10), c.colr);
-    const payload = JSON.stringify({ id: MP.id, r: Math.round(rageT * 10), m: a, c: b });
+    const msg = { id: MP.id, r: Math.round(rageT * 10), m: a, c: b };
+    if (rift.present) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10), Math.round(rift.ry * 1000), rift.seed];
+    const payload = JSON.stringify(msg);
     MP.txBytes += payload.length;
     try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
   }
@@ -2585,6 +2652,10 @@
     for (const c of corpses) {                             // eaten over there — clear it here too
       if (c.active && !live.has(c.cid) && c.age > 2) freeCorpse(c);
     }
+    if (msg.g && !rift.present) {                          // the tear is already open in this room
+      gateUnlocked = true;
+      placeGate(msg.g[0] / 10, msg.g[1] / 10, msg.g[2] / 10, msg.g[3] / 1000, msg.g[4]);
+    }
   }
   function onMqttMessage(t, buf) {
     MP.rxBytes += buf.length;
@@ -2596,6 +2667,9 @@
     }
     if (t.slice(-7) === '/mobhit') { if (mobPub()) onMobHit(msg); return; }
     if (t.slice(-7) === '/corpse') { onCorpseMsg(msg); return; }
+    if (t.slice(-7) === '/mdeath') { onDeathMsg(msg); return; }
+    if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
+    if (t.slice(-5) === '/bolt') { onBolt(msg); return; }
     if (t.slice(-4) === '/mob') { onMobState(msg); return; }
     if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
@@ -2626,13 +2700,13 @@
   function sendMobHit(m, dmg) {
     if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly
     m.hpHold = performance.now() + 1200;
-    try { MP.client.publish(mtopic('mobhit'), JSON.stringify({ i: m.mi, d: dmg })); } catch (e) {}
+    try { MP.client.publish(mtopic('mobhit'), JSON.stringify({ i: m.mi, d: dmg, by: MP.id })); } catch (e) {}
   }
   function onMobHit(msg) {
     const m = monkeyPeds[msg.i];
     if (!m || m.hp <= 0 || (m.pooled && !m.active)) return;
     m.hp -= msg.d || DMG; m.aggro = true;
-    if (m.hp <= 0) m.killed = true;
+    if (m.hp <= 0) { m.killed = true; emitMonkeyDeath(m, msg.by); }   // the owner confirms the kill
     enrageMonkeys();
   }
 
@@ -2757,6 +2831,9 @@
       client.subscribe(mtopic('mob'));
       client.subscribe(mtopic('mobhit'));
       client.subscribe(mtopic('corpse'));
+      client.subscribe(mtopic('mdeath'));
+      client.subscribe(mtopic('gate'));
+      client.subscribe(mtopic('bolt'));
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -3264,7 +3341,8 @@
     // nearest obstacle: exact ray-vs-box against every building's walls, floor
     // slabs and solid mass — so floors, piers and sills all give real cover and
     // the open window bands give real firing lines.
-    const blockDist = Math.min(MAX_RANGE, rayCity(_ro, _rd));
+    let blockDist = Math.min(MAX_RANGE, rayCity(_ro, _rd));
+    if (wState === WS.BACK) blockDist = Math.min(blockDist, rayWrecks(_ro, _rd));
     // nearest targetable peer in front of that
     let hitId = null, hitDist = Infinity, hitMonkey = null;
     for (const [id, peer] of MP.peers) {
@@ -3304,7 +3382,8 @@
     if (hitId) { sendHit(hitId); showHit(false); }
     if (hitMonkey) {
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; showHit(hitMonkey.hp <= 0);
-      if (hitMonkey.hp <= 0) hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
+      if (hitMonkey.hp <= 0) { hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
+        if (mobSim()) emitMonkeyDeath(hitMonkey, MP.id); }
       enrageMonkeys();                                 // the whole troop comes for you
       sendMobHit(hitMonkey, DMG);                      // and the owner makes it stick for everyone
     }
@@ -3503,6 +3582,8 @@
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
       '  TROOP ' + (mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '\n' +
+      'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
+      '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2);
@@ -3659,6 +3740,7 @@
   addEventListener('keydown', (ev) => {
     if (typing()) return;                                    // don't drive the game while typing chat
     if (ev.code === 'Enter' && dead) { doContinue(); return; }
+    if (ev.code === 'KeyE' && !ev.repeat) wantInteract = true;   // reach into the tear
     if (mode !== 'pc') return;
     keys[ev.code] = true;
     if (ev.code === 'Space') ev.preventDefault();
@@ -3820,6 +3902,754 @@
   });
   refreshSfxUI();
 
+  // ══════════════════════════════════════════════════════════════════
+  //  BACKSIDE WORLD
+  //  Not a second map. The same city — same streets, same buildings, same
+  //  floors and windows — run through a transformation layer: the concrete
+  //  rots, vines take the walls, spores hang in the air, every light dies,
+  //  and the sky closes over with a storm that never breaks. You get there
+  //  through a tear in the world, and the tear only opens once you have
+  //  killed ten monkeys.
+  // ══════════════════════════════════════════════════════════════════
+  const WS = { NORMAL: 0, BACK: 1 };
+  let wState = WS.NORMAL;          // which world we are standing in
+  let backAmt = 0;                 // 0..1 crossfade that drives every backside shader
+  let transT = 0, transTo = -1;    // world-transition timer
+  let gateCool = 0;                // stops you bouncing straight back through
+
+  // deterministic per-seed randomness, so every client grows the same city
+  function mulberry(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const WORLD_SEED = 0x5eed17;
+
+  // place one instance as a segment running from A to B (vines, fibres)
+  const _segU = new THREE.Vector3(0, 1, 0), _segD = new THREE.Vector3(), _segQ = new THREE.Quaternion();
+  function setSeg(inst, k, ax, ay, az, bx, by, bz, rad) {
+    _segD.set(bx - ax, by - ay, bz - az);
+    const len = _segD.length() || 0.001;
+    _segD.divideScalar(len);
+    _segQ.setFromUnitVectors(_segU, _segD);
+    _d.position.set(ax, ay, az); _d.quaternion.copy(_segQ); _d.scale.set(rad, len, rad);
+    _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
+  }
+
+  // ── vines ─────────────────────────────────────────────────────────
+  //  Grown against the architecture, not scattered: each one starts on a
+  //  building face and works its way down it, then spills onto the ground.
+  //  Damp, shaded walls (low floors, narrow gaps between buildings) carry
+  //  far more than open, high, sunlit ones.
+  const VINE_SEG = 7, NUM_VINE = 460;
+  const vineGeo = new THREE.CylinderGeometry(0.05, 0.085, 1, 5); vineGeo.translate(0, 0.5, 0);
+  const vineMat = new THREE.MeshLambertMaterial({ color: 0x46654f });
+  const vineI = new THREE.InstancedMesh(vineGeo, vineMat, NUM_VINE * VINE_SEG);
+  vineI.frustumCulled = false; vineI.visible = false; scene.add(vineI);
+  const budGeo = new THREE.IcosahedronGeometry(0.12, 0);
+  const budMat = new THREE.MeshLambertMaterial({ color: 0x6a8f74, emissive: 0x122a1c });
+  const budI = new THREE.InstancedMesh(budGeo, budMat, NUM_VINE);
+  budI.frustumCulled = false; budI.visible = false; scene.add(budI);
+  let vinesGrown = false;
+  function growVines() {
+    if (vinesGrown) return;
+    vinesGrown = true;
+    const rnd = mulberry(WORLD_SEED ^ 0x1e), hidden = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+    let k = 0, b = 0;
+    for (let n = 0; n < NUM_VINE && buildingList.length; n++) {
+      const bd = buildingList[(rnd() * buildingList.length) | 0];
+      const face = (rnd() * 4) | 0;                       // which wall
+      const ax = face < 2 ? 1 : 0;                        // 0 = z-face, 1 = x-face
+      const sgn = face & 1 ? 1 : -1;
+      // moisture: low on the wall and in the shade grows more, high and open grows less
+      const top = Math.min(bd.h - 1.5, 3 + rnd() * rnd() * 26);
+      const damp = 1 - Math.min(1, top / 30);
+      if (rnd() > 0.25 + damp * 0.75) continue;           // dry, lit wall — nothing takes
+      let x, z, nx = 0, nz = 0;
+      if (ax) { x = bd.cx + sgn * (bd.hw + 0.14); z = bd.cz + (rnd() * 2 - 1) * bd.hd * 0.92; nx = sgn; }
+      else { z = bd.cz + sgn * (bd.hd + 0.14); x = bd.cx + (rnd() * 2 - 1) * bd.hw * 0.92; nz = sgn; }
+      let py = top, px = x, pz = z;
+      const drift = (rnd() - 0.5) * 0.7, gy = height(x, z);
+      for (let s = 0; s < VINE_SEG; s++) {
+        const t = s / VINE_SEG;
+        let qx = px, qy = py, qz = pz;
+        const step = 1.1 + rnd() * 1.5;
+        if (py > gy + 0.35) {                             // running down the wall
+          qy = Math.max(gy, py - step);
+          if (ax) qz += drift * step + (rnd() - 0.5) * 0.35;
+          else qx += drift * step + (rnd() - 0.5) * 0.35;
+        } else {                                          // spilling out over the pavement
+          qy = gy + 0.1 + rnd() * 0.12;
+          qx += nx * (0.5 + rnd() * 0.9) + (rnd() - 0.5) * 0.5;
+          qz += nz * (0.5 + rnd() * 0.9) + (rnd() - 0.5) * 0.5;
+        }
+        const r = 1 - t * 0.55;
+        setSeg(vineI, k++, px, py, pz, qx, qy, qz, r);
+        px = qx; py = qy; pz = qz;
+      }
+      _d.position.set(px, py, pz); _d.quaternion.set(0, 0, 0, 1);
+      _d.scale.setScalar(0.7 + rnd() * 0.8); _d.updateMatrix(); budI.setMatrixAt(b++, _d.matrix);
+    }
+    for (let i = k; i < NUM_VINE * VINE_SEG; i++) vineI.setMatrixAt(i, hidden);
+    for (let i = b; i < NUM_VINE; i++) budI.setMatrixAt(i, hidden);
+    vineI.instanceMatrix.needsUpdate = budI.instanceMatrix.needsUpdate = true;
+    vineI.count = NUM_VINE * VINE_SEG; budI.count = NUM_VINE;
+  }
+
+  // ── spores ────────────────────────────────────────────────────────
+  //  A drifting volume that travels with you and wraps around, so a few
+  //  hundred instances read as a whole city full of them. Denser inside
+  //  buildings than out on the street, exactly as the air feels heavier there.
+  const NUM_SPORE = 300, SPORE_BOX = 26;
+  const sporeGeo = new THREE.PlaneGeometry(0.05, 0.05);
+  const sporeMat = new THREE.MeshBasicMaterial({
+    color: 0xdCe8e0, transparent: true, opacity: 0.55, depthWrite: false,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  });
+  const sporeI = new THREE.InstancedMesh(sporeGeo, sporeMat, NUM_SPORE);
+  sporeI.frustumCulled = false; sporeI.visible = false; scene.add(sporeI);
+  const spores = [];
+  { const r = mulberry(WORLD_SEED ^ 0x5b);
+    for (let i = 0; i < NUM_SPORE; i++) spores.push({
+      x: (r() - 0.5) * SPORE_BOX, y: r() * 7, z: (r() - 0.5) * SPORE_BOX,
+      vy: 0.04 + r() * 0.09, ph: r() * 6.28, sw: 0.3 + r() * 0.8, sc: 0.6 + r() * 1.5,
+    }); }
+  function updateSpores(dt) {
+    const inside = indoors(p.x, p.z, p.y - EYE);
+    const want = inside ? NUM_SPORE : (NUM_SPORE * 0.42) | 0;
+    sporeI.count = want;
+    const half = SPORE_BOX * 0.5;
+    for (let i = 0; i < want; i++) {
+      const s = spores[i];
+      s.ph += dt * 0.7;
+      s.y += s.vy * dt;
+      s.x += Math.sin(s.ph) * s.sw * dt;
+      s.z += Math.cos(s.ph * 0.83) * s.sw * dt;
+      let wx = s.x - p.x, wy = s.y - p.y, wz = s.z - p.z;
+      if (wx > half) s.x -= SPORE_BOX; else if (wx < -half) s.x += SPORE_BOX;
+      if (wz > half) s.z -= SPORE_BOX; else if (wz < -half) s.z += SPORE_BOX;
+      if (wy > 9) s.y -= 11; else if (wy < -2.5) s.y += 11;
+      _d.position.set(s.x, s.y, s.z);
+      _d.quaternion.copy(camera.quaternion);
+      _d.scale.setScalar(s.sc);
+      _d.updateMatrix(); sporeI.setMatrixAt(i, _d.matrix);
+    }
+    sporeI.instanceMatrix.needsUpdate = true;
+  }
+  // standing under a floor slab counts as inside
+  function indoors(x, z, feetY) {
+    const near = cityNear(x, z);
+    for (let i = 0; i < near.length; i++) {
+      const r = near[i];
+      if (x < r.bounds.x0 || x > r.bounds.x1 || z < r.bounds.z0 || z > r.bounds.z1) continue;
+      for (const b of r.slabs) if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && b.y0 > feetY + 0.5) return true;
+    }
+    return false;
+  }
+
+  // ── wrecks ────────────────────────────────────────────────────────
+  //  Nothing drives over here. The traffic died where it stood, and it is
+  //  solid: you walk around it, and it stops a bullet.
+  const wrecks = [];
+  let wrecksBuilt = false;
+  const carPaintOrig = [];
+  function buildWrecks() {
+    if (wrecksBuilt) return;
+    wrecksBuilt = true;
+    const rnd = mulberry(WORLD_SEED ^ 0xc4);
+    const hidden = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+    for (let k = 0; k < cars.length; k++) {
+      const c = cars[k];
+      if (k >= 96) { wrecks.push(null); continue; }        // a thinner, deader city
+      // strewn along the road graph: some in the lanes, some slewed onto the kerb
+      let i, j, di, dj;
+      do { i = ((rnd() * (2 * N + 1)) | 0) - N; j = ((rnd() * (2 * N + 1)) | 0) - N;
+           const d = DIRS[(rnd() * 4) | 0]; di = d[0]; dj = d[1]; } while (Math.abs(i + di) > N || Math.abs(j + dj) > N);
+      const s = 0.08 + rnd() * 0.84;
+      const kerb = rnd() < 0.35;
+      const off = kerb ? (rnd() < 0.5 ? -1 : 1) * (RW + 1.6 + rnd() * 2.4) : (rnd() < 0.5 ? -LANE : LANE);
+      const x = (i + s * di) * PITCH + dj * off, z = (j + s * dj) * PITCH - di * off;
+      const head = Math.atan2(di, dj) + (rnd() - 0.5) * (kerb ? 1.9 : 0.5);
+      wrecks.push({ x, z, y: height(x, z), rot: head, W: c.W, H: c.H, L: c.L,
+                    cabH: c.cabH, cabL: c.cabL, cabZ: c.cabZ, tilt: (rnd() - 0.5) * 0.10,
+                    hw: c.W / 2, hl: c.L / 2, wheels: rnd() < 0.55 });
+    }
+    const ca = carBodyI.instanceColor.array;
+    for (let k = 0; k < cars.length; k++) carPaintOrig.push(new THREE.Color(ca[k * 3], ca[k * 3 + 1], ca[k * 3 + 2]));
+    void hidden;
+  }
+  function poseWrecks() {
+    const hidden = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
+    for (let k = 0; k < cars.length; k++) {
+      const w = wrecks[k];
+      if (!w) {                                            // this one simply is not here
+        carBodyI.setMatrixAt(k, hidden); carCabI.setMatrixAt(k, hidden);
+        carHeadI.setMatrixAt(k, hidden); carTailI.setMatrixAt(k, hidden); carSignI.setMatrixAt(k, hidden);
+        for (let q = 0; q < 4; q++) carWheelI.setMatrixAt(k * 4 + q, hidden);
+        continue;
+      }
+      const di = Math.sin(w.rot), dj = Math.cos(w.rot), by = w.y + CWY + w.H / 2;
+      _d.position.set(w.x, by, w.z); _d.rotation.set(0, w.rot, w.tilt, 'YXZ');
+      _d.scale.set(w.W, w.H, w.L); _d.updateMatrix(); carBodyI.setMatrixAt(k, _d.matrix);
+      if (w.cabL > 0) setPart(carCabI, k, w.x, w.z, di, dj, w.rot, 0, w.y + CWY + w.H + w.cabH / 2 - 0.04, w.cabZ, w.W * 0.86, w.cabH, w.cabL, w.tilt);
+      else carCabI.setMatrixAt(k, hidden);
+      const wxo = w.W / 2 - 0.02, wzo = w.L / 2 - 0.95;
+      for (let q = 0; q < 4; q++) {
+        if (!w.wheels && q > 1) { carWheelI.setMatrixAt(k * 4 + q, hidden); continue; }
+        setPart(carWheelI, k * 4 + q, w.x, w.z, di, dj, w.rot,
+                (q & 1 ? 1 : -1) * wxo, w.y + CWY, (q < 2 ? 1 : -1) * wzo, 1, 1, 1);
+      }
+      carHeadI.setMatrixAt(k, hidden); carTailI.setMatrixAt(k, hidden); carSignI.setMatrixAt(k, hidden);
+    }
+    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = true;
+    carWheelI.instanceMatrix.needsUpdate = carHeadI.instanceMatrix.needsUpdate = true;
+    carTailI.instanceMatrix.needsUpdate = carSignI.instanceMatrix.needsUpdate = true;
+  }
+  const _rust = new THREE.Color(0x2b2622), _cc2 = new THREE.Color();
+  function paintCars(back) {
+    for (let k = 0; k < cars.length; k++) {
+      const c = carPaintOrig[k]; if (!c) continue;
+      _cc2.copy(c); if (back) _cc2.lerp(_rust, 0.66);
+      carBodyI.setColorAt(k, _cc2);
+    }
+    carBodyI.instanceColor.needsUpdate = true;
+  }
+  // push the player out of a wreck (oriented box, exact)
+  function wreckCollide(pos, rad) {
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k]; if (!w) continue;
+      const dx = pos.x - w.x, dz = pos.z - w.z;
+      if (dx * dx + dz * dz > 36) continue;
+      const ch = Math.cos(w.rot), sh = Math.sin(w.rot);
+      const lz = dx * sh + dz * ch, lx = dx * ch - dz * sh;
+      const ex = w.hw + rad, ez = w.hl + rad;
+      if (Math.abs(lx) >= ex || Math.abs(lz) >= ez) continue;
+      const px = ex - Math.abs(lx), pz = ez - Math.abs(lz);
+      let nx = 0, nz = 0;
+      if (px < pz) nx = lx < 0 ? -px : px; else nz = lz < 0 ? -pz : pz;
+      pos.x += nx * ch + nz * sh; pos.z += -nx * sh + nz * ch;
+    }
+  }
+  // and stop a round on one
+  function rayWrecks(ro, rd) {
+    let best = Infinity;
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k]; if (!w) continue;
+      const dx = ro.x - w.x, dz = ro.z - w.z;
+      const ch = Math.cos(w.rot), sh = Math.sin(w.rot);
+      const ox = dx * ch - dz * sh, oz = dx * sh + dz * ch;
+      const rx = rd.x * ch - rd.z * sh, rz = rd.x * sh + rd.z * ch;
+      const oy = ro.y - (w.y + CWY), ry = rd.y;
+      let tmin = 0, tmax = best;
+      const lo = [-w.hw, 0, -w.hl], hi = [w.hw, w.H + w.cabH, w.hl];
+      const o = [ox, oy, oz], dd = [rx, ry, rz];
+      let miss = false;
+      for (let a = 0; a < 3; a++) {
+        if (Math.abs(dd[a]) < 1e-9) { if (o[a] < lo[a] || o[a] > hi[a]) { miss = true; break; } continue; }
+        let t1 = (lo[a] - o[a]) / dd[a], t2 = (hi[a] - o[a]) / dd[a];
+        if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+        if (t1 > tmin) tmin = t1;
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) { miss = true; break; }
+      }
+      if (!miss && tmin > 0.05 && tmin < best) best = tmin;
+    }
+    return best;
+  }
+
+  // ── red lightning ─────────────────────────────────────────────────
+  //  One bolt is an event, not a flicker: the cloud lights from inside, the
+  //  city is thrown into relief for a few frames, and the thunder arrives
+  //  seconds later from where the bolt was.
+  let boltNext = 5, boltFlash = 0, thunderIn = -1, thunderD = 0;
+  function fireBolt(seed) {
+    const r = mulberry(seed);
+    const a = r() * 6.2832, d = 160 + r() * 420;
+    const bx = p.x + Math.cos(a) * d, bz = p.z + Math.sin(a) * d;
+    boltFlash = 1;
+    thunderIn = 0.25 + d / 330;                            // sound lags the light
+    thunderD = d;
+    void bx; void bz;
+  }
+  function publishBolt(seed) {
+    if (!MP.connected || !MP.client) return;
+    try { MP.client.publish(mtopic('bolt'), JSON.stringify({ id: MP.id, s: seed })); } catch (e) {}
+  }
+  function onBolt(msg) { if (msg.id !== MP.id && wState === WS.BACK) fireBolt(msg.s); }
+  function updateLightning(dt) {
+    if (boltFlash > 0) boltFlash = Math.max(0, boltFlash - dt * 2.6);
+    if (thunderIn > 0) { thunderIn -= dt; if (thunderIn <= 0) { playThunder(thunderD); thunderIn = -1; } }
+    if (wState !== WS.BACK) return;
+    boltNext -= dt;
+    if (boltNext <= 0) {
+      boltNext = 7 + Math.random() * 13;
+      if (mobSim()) {                                       // the troop's owner calls the weather
+        const seed = (Math.random() * 2147483646) | 0;
+        fireBolt(seed); publishBolt(seed);
+      }
+    }
+  }
+
+  // ── the tear ──────────────────────────────────────────────────────
+  const GATE_NEED = 10;
+  const gateKills = new Map();                              // per-player monkey kills (owner side)
+  const deathSeen = new Set();
+  let myKills = 0, gateUnlocked = false;
+  const rift = {
+    state: 'LOCKED', present: false, x: 0, y: 0, z: 0, ry: 0, seed: 0,
+    group: null, tear: null, fibreI: null, moteI: null, near: 0, dist: 999,
+  };
+
+  const tearU = { uT: { value: 0 }, uNear: { value: 0 } };
+  function makeGate() {
+    const g = new THREE.Group();
+    const tear = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.4, 1, 1), new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, uniforms: tearU,
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      fragmentShader: `
+        uniform float uT, uNear; varying vec2 vUv;
+        void main() {
+          vec2 uv = vUv * 2.0 - 1.0;
+          float y = uv.y;
+          // an irregular split, not a portal: the edges wander and breathe
+          float wob = sin(y * 5.3 + uT * 0.55) * 0.11 + sin(y * 12.1 - uT * 0.31) * 0.05;
+          float w = max(1.0 - y * y, 0.0) * (0.30 + 0.045 * sin(uT * 0.8 + y * 3.0)) * (0.88 + 0.30 * uNear);
+          float d = abs(uv.x - wob) / max(w, 0.0015);
+          if (d > 1.7) discard;
+          float core = 1.0 - smoothstep(0.0, 0.72, d);
+          float edge = smoothstep(1.5, 0.5, d) * (1.0 - core);
+          float flick = 0.72 + 0.28 * sin(uT * 3.3 + y * 7.0) * sin(uT * 1.1);
+          // the split has to read from across a street, so the lips carry real
+          // light while the middle stays a hole with nothing in it
+          vec3 col = vec3(0.95, 0.055, 0.035) * edge * (1.5 + uNear * 1.6) * flick;
+          col += vec3(1.0, 0.42, 0.26) * pow(edge, 4.0) * (1.4 + uNear * 2.2);
+          col += vec3(0.10, 0.006, 0.004) * core;          // the barest ember inside
+          gl_FragColor = vec4(col, max(core, min(1.0, edge * 1.3)));
+        }`,
+    }));
+    tear.position.y = 1.75; g.add(tear);
+    // fibres: wet threads out of the split, biting into the wall and the floor
+    const fibGeo = new THREE.CylinderGeometry(0.018, 0.035, 1, 4); fibGeo.translate(0, 0.5, 0);
+    const fibMat = new THREE.MeshBasicMaterial({ color: 0x6b1410, transparent: true, opacity: 0.85 });
+    const fibreI = new THREE.InstancedMesh(fibGeo, fibMat, 22 * 4);
+    fibreI.frustumCulled = false; g.add(fibreI);
+    const moteGeo = new THREE.PlaneGeometry(0.06, 0.06);
+    const moteMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.5,
+      depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const moteI = new THREE.InstancedMesh(moteGeo, moteMat, 26);
+    moteI.frustumCulled = false; g.add(moteI);
+    g.visible = false; scene.add(g);
+    rift.group = g; rift.tear = tear; rift.fibreI = fibreI; rift.moteI = moteI;
+    rift.fibres = []; rift.motes = [];
+  }
+  makeGate();
+
+  function shapeGate(seed) {
+    const r = mulberry(seed);
+    rift.fibres.length = 0; rift.motes.length = 0;
+    for (let i = 0; i < 22; i++) {
+      // start on the split, end bitten into the wall, floor or ceiling
+      const sy = 0.55 + r() * 2.5, sx = (r() - 0.5) * 0.5;
+      const along = (r() - 0.5) * 4.2;
+      const dest = r();
+      const ey = dest < 0.45 ? 0.02 + r() * 0.3 : (dest < 0.8 ? 0.4 + r() * 3.2 : 3.2 + r() * 0.9);
+      const ez = 0.06 + r() * 0.5;
+      rift.fibres.push({ sx, sy, ex: along, ey, ez, ph: r() * 6.28, sw: 0.4 + r() * 0.9, r: 0.6 + r() * 0.9 });
+    }
+    for (let i = 0; i < 26; i++) rift.motes.push({ a: r() * 6.28, rad: 0.4 + r() * 1.5, y: r() * 3.2, sp: 0.15 + r() * 0.4, sc: 0.5 + r() * 1.4 });
+  }
+  function poseGate(dt) {
+    const f = rift.fibres, t = cityT;
+    for (let i = 0; i < f.length; i++) {
+      const o = f[i], sway = Math.sin(t * 0.55 + o.ph) * o.sw * 0.18;
+      let px = o.sx, py = o.sy, pz = 0.05;
+      for (let s = 0; s < 4; s++) {                          // four links along a bent curve
+        const u = (s + 1) / 4, v = u * u;
+        const qx = o.sx + (o.ex - o.sx) * v + sway * u * (1 - u) * 3.0;
+        const qy = o.sy + (o.ey - o.sy) * u;
+        const qz = 0.05 + o.ez * v;
+        setSeg(rift.fibreI, i * 4 + s, px, py, pz, qx, qy, qz, o.r * (1 - u * 0.55));
+        px = qx; py = qy; pz = qz;
+      }
+    }
+    rift.fibreI.instanceMatrix.needsUpdate = true;
+    for (let i = 0; i < rift.motes.length; i++) {
+      const m = rift.motes[i];
+      m.a += dt * m.sp; m.y += dt * 0.12; if (m.y > 3.6) m.y -= 3.7;
+      _d.position.set(Math.cos(m.a) * m.rad, m.y, 0.15 + Math.sin(m.a) * 0.25);
+      _d.quaternion.set(0, 0, 0, 1); _d.scale.setScalar(m.sc);
+      _d.updateMatrix(); rift.moteI.setMatrixAt(i, _d.matrix);
+    }
+    rift.moteI.instanceMatrix.needsUpdate = true;
+  }
+
+  // Where the tear opens. Never in front of you: candidate surfaces all over
+  // the map are scored, and the best one wins — inside a building, in a narrow
+  // gap, low down and a long way off beats the middle of a main road.
+  function scoreSite(bd, face, floor, inside, px, pz) {
+    let sc = 0;
+    if (inside) sc += 30;
+    if (floor > 0) sc += 12;                    // upstairs, out of the way
+    const d = Math.hypot(px - p.x, pz - p.z);
+    if (d < 70) return -1000;                   // never on top of the player
+    sc += Math.min(30, d / 12);
+    let gap = 999;                              // how close the opposite building is
+    for (let i = 0; i < buildingList.length; i++) {
+      const o = buildingList[i]; if (o === bd) continue;
+      const dx = Math.abs(o.cx - px), dz = Math.abs(o.cz - pz);
+      if (dx > 26 || dz > 26) continue;
+      gap = Math.min(gap, Math.max(0, Math.max(dx - o.hw, dz - o.hd)));
+    }
+    if (gap < 9) sc += 18;                      // an alley: dark and easy to miss
+    const rx = Math.abs(px - PITCH * Math.round(px / PITCH));
+    const rz = Math.abs(pz - PITCH * Math.round(pz / PITCH));
+    if (rx < 3 || rz < 3) sc -= 30;             // out in the middle of the carriageway
+    if (Math.abs(px) < 40 && Math.abs(pz) < 40) sc -= 60;   // the scramble is a spawn point
+    if (bd.h > 20) sc += 8;
+    void face;
+    return sc;
+  }
+  function findGateSite() {
+    let best = null, bestScore = -1e9;
+    const rnd = mulberry((Math.random() * 2147483646) | 0);
+    for (let n = 0; n < 220 && buildingList.length; n++) {
+      const bd = buildingList[(rnd() * buildingList.length) | 0];
+      const face = (rnd() * 4) | 0, ax = face < 2, sgn = face & 1 ? 1 : -1;
+      const inside = rnd() < 0.6;
+      const lift = inside ? 0.16 : 0.16;
+      const maxFloor = Math.max(0, Math.min(4, Math.floor((bd.accH || bd.h) / 3.5) - 1));
+      const floor = inside ? ((rnd() * (maxFloor + 1)) | 0) : 0;
+      const y = floor * 3.5;
+      let px, pz, ry;
+      if (ax) {
+        px = bd.cx + sgn * (bd.hw - (inside ? lift : -lift));
+        pz = bd.cz + (rnd() * 1.4 - 0.7) * bd.hd;
+        ry = inside ? (sgn > 0 ? -Math.PI / 2 : Math.PI / 2) : (sgn > 0 ? Math.PI / 2 : -Math.PI / 2);
+      } else {
+        pz = bd.cz + sgn * (bd.hd - (inside ? lift : -lift));
+        px = bd.cx + (rnd() * 1.4 - 0.7) * bd.hw;
+        ry = inside ? (sgn > 0 ? Math.PI : 0) : (sgn > 0 ? 0 : Math.PI);
+      }
+      if (inside && floor === 0 && !clearAt(px + Math.sin(ry) * 1.2, pz + Math.cos(ry) * 1.2, 0.6)) continue;
+      if (!inside && !clearAt(px + Math.sin(ry) * 1.4, pz + Math.cos(ry) * 1.4, 0.7)) continue;
+      const sc = scoreSite(bd, face, floor, inside, px, pz);
+      if (sc > bestScore) { bestScore = sc; best = { x: px, y: y + (floor === 0 ? height(px, pz) : 0), z: pz, ry }; }
+    }
+    return best;
+  }
+  function placeGate(x, y, z, ry, seed) {
+    rift.x = x; rift.y = y; rift.z = z; rift.ry = ry; rift.seed = seed;
+    rift.group.position.set(x, y, z);
+    rift.group.rotation.set(0, ry, 0);
+    rift.group.visible = true;
+    rift.present = true; rift.state = 'ACTIVE';
+    shapeGate(seed);
+    saveGate();
+  }
+  function publishGate() {
+    if (!MP.connected || !MP.client) return;
+    try {
+      MP.client.publish(mtopic('gate'), JSON.stringify({
+        id: MP.id, x: Math.round(rift.x * 10), y: Math.round(rift.y * 10),
+        z: Math.round(rift.z * 10), r: Math.round(rift.ry * 1000), s: rift.seed,
+      }));
+    } catch (e) {}
+  }
+  function onGateMsg(msg) {
+    if (rift.present || msg.id === MP.id) return;
+    gateUnlocked = true;
+    placeGate(msg.x / 10, msg.y / 10, msg.z / 10, msg.r / 1000, msg.s);
+  }
+  function openGate() {                                    // owner only
+    if (rift.present) return;                              // one tear per world, ever
+    rift.state = 'SPAWNING';
+    const site = findGateSite();
+    if (!site) { rift.state = 'LOCKED'; return; }
+    placeGate(site.x, site.y, site.z, site.ry, (Math.random() * 2147483646) | 0);
+    publishGate();
+  }
+
+  // A kill only counts when the troop's owner confirms the monkey actually
+  // died, and every death carries a sequence number, so the same monkey can
+  // never be counted twice however the packets arrive.
+  function emitMonkeyDeath(mk, by) {
+    mk.dseq = (mk.dseq || 0) + 1;
+    applyMonkeyDeath(mk.mi, by, mk.dseq);
+    if (MP.connected && MP.client) {
+      const pay = JSON.stringify({ i: mk.mi, by, s: mk.dseq });
+      for (let n = 0; n < 2; n++) setTimeout(() => { try { MP.client.publish(mtopic('mdeath'), pay); } catch (e) {} }, n * 130);
+    }
+  }
+  function applyMonkeyDeath(mi, by, seq) {
+    const key = mi + ':' + seq;
+    if (deathSeen.has(key)) return;
+    deathSeen.add(key);
+    if (by === MP.id) { myKills++; saveGate(); }
+    if (mobSim()) {                                        // the owner keeps everyone's tally
+      const n = (gateKills.get(by) || 0) + 1;
+      gateKills.set(by, n);
+      if (n >= GATE_NEED && !gateUnlocked) {
+        gateUnlocked = true;
+        notify('何かが 成立した', 3600);
+        openGate();
+      }
+    } else if (by === MP.id && myKills >= GATE_NEED && !gateUnlocked) {
+      gateUnlocked = true; notify('何かが 成立した', 3600);
+    }
+  }
+  function onDeathMsg(msg) { applyMonkeyDeath(msg.i, msg.by, msg.s); }
+
+  // ── rift audio ────────────────────────────────────────────────────
+  //  Six layers, not a loop: two very low drones a fifth apart, an organic
+  //  resonance that beats against them, a whisper of filtered noise, a wind
+  //  bed, and an occasional lurch of detune. Distance moves the volume, the
+  //  pitch, the filter and the panning together.
+  let gAudio = null;
+  function startGateAudio() {
+    if (gAudio || !audioReady()) return;
+    const t = actx.currentTime;
+    const out = actx.createGain(); out.gain.value = 0;
+    const pan = actx.createStereoPanner ? actx.createStereoPanner() : null;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 180; lp.Q.value = 0.8;
+    const res = actx.createBiquadFilter(); res.type = 'peaking'; res.frequency.value = 128; res.Q.value = 7; res.gain.value = 9;
+    lp.connect(res); res.connect(out);
+    if (pan) { out.connect(pan); pan.connect(master); } else out.connect(master);
+    const o1 = actx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 38;
+    const o2 = actx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 57;
+    const o3 = actx.createOscillator(); o3.type = 'triangle'; o3.frequency.value = 76.4;
+    const g1 = actx.createGain(); g1.gain.value = 0.55;
+    const g2 = actx.createGain(); g2.gain.value = 0.30;
+    const g3 = actx.createGain(); g3.gain.value = 0.12;
+    o1.connect(g1); o2.connect(g2); o3.connect(g3);
+    g1.connect(lp); g2.connect(lp); g3.connect(lp);
+    const wh = actx.createBufferSource(); wh.buffer = noiseBuf; wh.loop = true;
+    const wb = actx.createBiquadFilter(); wb.type = 'bandpass'; wb.frequency.value = 520; wb.Q.value = 0.6;
+    const wg = actx.createGain(); wg.gain.value = 0.05;
+    wh.connect(wb); wb.connect(wg); wg.connect(lp);
+    const lfo = actx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.09;
+    const lfoG = actx.createGain(); lfoG.gain.value = 5.5;
+    lfo.connect(lfoG); lfoG.connect(o2.frequency);
+    o1.start(t); o2.start(t); o3.start(t); wh.start(t); lfo.start(t);
+    gAudio = { out, pan, lp, res, o1, o2, o3, wg };
+  }
+  function stopGateAudio() {
+    if (!gAudio) return;
+    try { gAudio.out.gain.setTargetAtTime(0, actx.currentTime, 0.2); } catch (e) {}
+  }
+  function updateGateAudio(dist) {
+    if (!rift.present || !sfxOn) { if (gAudio) try { gAudio.out.gain.value = 0; } catch (e) {} return; }
+    if (!gAudio) { startGateAudio(); if (!gAudio) return; }
+    const n = Math.max(0, 1 - dist / 32);                   // silent past ~32 m
+    const k = n * n;
+    try {
+      gAudio.out.gain.value = k * 0.95 * sfxVol;
+      gAudio.lp.frequency.value = 130 + k * 900;            // opens up as you close in
+      gAudio.res.gain.value = 5 + k * 16;
+      gAudio.o1.frequency.value = 36 + k * 9;               // and drags upward in pitch
+      gAudio.o2.frequency.value = 54 + k * 13;
+      gAudio.wg.gain.value = 0.03 + k * 0.13;
+      if (gAudio.pan) {                                     // which side of you it is on
+        const dx = rift.x - p.x, dz = rift.z - p.z;
+        const rel = Math.atan2(dx, dz) - (-yaw);
+        gAudio.pan.pan.value = Math.max(-1, Math.min(1, -Math.sin(rel) * Math.min(1, dist / 4)));
+      }
+    } catch (e) {}
+  }
+  function playThunder(dist) {
+    if (!audioReady()) return;
+    const t = actx.currentTime, v = Math.max(0.08, 1 - dist / 700);
+    const src = actx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(240, t); lp.frequency.exponentialRampToValueAtTime(70, t + 2.2);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.55 * v, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.4);
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 2.5);
+  }
+
+  // ── the world switch ──────────────────────────────────────────────
+  const NORMAL_ONLY = [];        // filled once every mesh exists
+  function collectNormalOnly() {
+    if (NORMAL_ONLY.length) return;
+    NORMAL_ONLY.push(carHeadI, carTailI, carSignI, carBeamI, sigGrn, sigYel, sigRed,
+      pedCase, pedRedI, pedGrnI, slGlow, leaves, ...humanI);   // trunks stay: bare dead trees
+    for (const f of ferraris) NORMAL_ONLY.push(f.mesh);
+    for (const b of bananas) NORMAL_ONLY.push(b.mesh);
+    for (const c of compassItems) NORMAL_ONLY.push(c.mesh);
+    for (const nf of neonFlicker) NORMAL_ONLY.push(nf.mesh);
+  }
+  // The interiors, the poles and the street furniture are ordinary Lambert
+  // materials, so they get the same treatment one level up: the colour itself
+  // is pushed toward wet rot and pulled back again, which leaves every mesh,
+  // every batch and every draw call exactly where it was.
+  const ROT_COL = new THREE.Color(0x2f3d37);
+  const rotList = [];
+  function collectRot() {
+    if (rotList.length) return;
+    const add = (m, k) => { if (m && m.color) rotList.push({ m, o: m.color.clone(), k: k === undefined ? 0.72 : k }); };
+    for (const key in IMAT) if (key !== 'warn') add(IMAT[key]);
+    add(IMAT.warn, 0.92);                     // even the aircraft lights are out
+    add(poleMat, 0.6); add(caseMat, 0.5); add(trunkMat, 0.75);
+    add(wheelMat, 0.4); add(carGlassMat, 0.7);
+  }
+  function rotWorld(back) {
+    collectRot();
+    for (const r of rotList) { r.m.color.copy(r.o); if (back) r.m.color.lerp(ROT_COL, r.k); }
+  }
+  function setWorld(w) {
+    if (w === wState) return;
+    wState = w;
+    const back = w === WS.BACK;
+    collectNormalOnly();
+    if (back) { growVines(); buildWrecks(); poseWrecks(); }
+    // the crowd, the traffic and the troop simply are not over here
+    for (const o of NORMAL_ONLY) if (o) o.visible = !back;
+    rotWorld(back);
+    for (const m of monkeyPeds) if (m.group) m.group.visible = false;
+    vineI.visible = budI.visible = sporeI.visible = back;
+    paintCars(back);
+    if (!back) { for (const k of [carHeadI, carTailI, carSignI]) k.instanceMatrix.needsUpdate = true; }
+    scene.fog.density = back ? FOG_DENSITY * 2.1 : FOG_DENSITY;
+    if (back) { startBackBed(); } else { stopBackBed(); }
+    saveGate();
+  }
+  // the air itself: a low bed of wind and far-off groaning while you are over there
+  let backBed = null;
+  function startBackBed() {
+    if (backBed || !audioReady()) return;
+    const t = actx.currentTime;
+    const out = actx.createGain(); out.gain.value = 0;
+    out.connect(master);
+    const wind = actx.createBufferSource(); wind.buffer = noiseBuf; wind.loop = true;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 300; bp.Q.value = 0.35;
+    const wg = actx.createGain(); wg.gain.value = 0.11;
+    wind.connect(bp); bp.connect(wg); wg.connect(out);
+    const groan = actx.createOscillator(); groan.type = 'sine'; groan.frequency.value = 47;
+    const gg = actx.createGain(); gg.gain.value = 0.12;
+    const glfo = actx.createOscillator(); glfo.type = 'sine'; glfo.frequency.value = 0.052;
+    const glg = actx.createGain(); glg.gain.value = 0.09;
+    glfo.connect(glg); glg.connect(gg.gain);
+    groan.connect(gg); gg.connect(out);
+    wind.start(t); groan.start(t); glfo.start(t);
+    out.gain.setTargetAtTime(1, t, 1.2);
+    backBed = { out };
+  }
+  function stopBackBed() { if (backBed) try { backBed.out.gain.setTargetAtTime(0, actx.currentTime, 0.5); } catch (e) {} }
+
+  function beginTransition(to) {
+    if (transT > 0) return;
+    transTo = to; transT = 1.15;
+    rift.state = 'ENTERING';
+    camShake = Math.max(camShake, 0.5);
+    if (gAudio) try { gAudio.o1.frequency.setTargetAtTime(120, actx.currentTime, 0.35); } catch (e) {}
+  }
+  function updateTransition(dt) {
+    if (transT <= 0) return;
+    const was = transT;
+    transT -= dt;
+    const k = Math.max(0, transT / 1.15);
+    fxEl.style.opacity = String(0.15 + (1 - Math.abs(k - 0.5) * 2) * 0.85);
+    fxEl.style.background = 'radial-gradient(120% 120% at 50% 50%, rgba(210,30,20,0) 18%, rgba(190,20,14,.96))';
+    camShake = Math.max(camShake, 0.35 * (1 - k));
+    if (was > 0.55 && transT <= 0.55) {                    // the swap itself, mid-blackout
+      setWorld(transTo);
+      const back = Math.sin(rift.ry), bz2 = Math.cos(rift.ry);
+      p.x = rift.x + back * 2.6; p.z = rift.z + bz2 * 2.6;  // step out clear of the tear
+      p.y = supportHeight(p.x, p.z, p.y - EYE) + EYE;
+      gateCool = 3.0;
+      notify(transTo === WS.BACK ? '裏' : '表', 2200);
+    }
+    if (transT <= 0) {
+      transT = 0; transTo = -1; rift.state = 'ACTIVE';
+      fxEl.style.opacity = '0'; fxEl.style.background = '';
+    }
+  }
+
+  // ── per-frame ─────────────────────────────────────────────────────
+  const riftPrompt = $('gate-prompt');
+  function updateBackside(dt) {
+    // crossfade every backside shader in and out with the world switch
+    const want = wState === WS.BACK ? 1 : 0;
+    if (backAmt !== want) backAmt = Math.abs(backAmt - want) < 0.02 ? want : backAmt + (want - backAmt) * Math.min(1, dt * 3.5);
+    skyU.uBack.value = backAmt; skyU.uBolt.value = boltFlash * boltFlash;
+    skyU.uTime.value = cityT;
+    groundMat.uniforms.uBack.value = backAmt;
+    for (let i = 0; i < buildMats.length; i++) {
+      buildMats[i].uniforms.uBack.value = backAmt;
+      buildMats[i].uniforms.uTime.value = cityT;
+    }
+    if (gateCool > 0) gateCool -= dt;
+    updateLightning(dt);
+    if (wState === WS.BACK) {
+      updateSpores(dt);
+      // a bolt throws the whole city into relief for a few frames
+      const b = boltFlash * boltFlash;
+      light.intensity = 0.05 + b * 2.4;
+      light.color.setRGB(1, 0.30 + b * 0.1, 0.24);
+      hemiLight.intensity = 0.44 + b * 0.55;
+      hemiLight.color.setRGB(0.26 + b * 0.4, 0.36 + b * 0.06, 0.37 + b * 0.05);
+      hemiLight.groundColor.setRGB(0.07, 0.10, 0.10);
+      ambLight.intensity = 0.22 + b * 0.30;
+      scene.fog.color.setRGB(0.062 + b * 0.25, 0.084 + b * 0.02, 0.088 + b * 0.02);
+      renderer.setClearColor(scene.fog.color);
+    }
+    // the tear
+    if (rift.present) {
+      const dx = rift.x - p.x, dy = rift.y + 1.7 - p.y, dz = rift.z - p.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      rift.dist = d;
+      rift.near = Math.max(0, 1 - d / 12);
+      tearU.uT.value = cityT;
+      tearU.uNear.value = rift.near;
+      const showDetail = d < 45;                            // LOD: threads and motes up close only
+      rift.fibreI.visible = rift.moteI.visible = showDetail;
+      if (showDetail) poseGate(dt);
+      updateGateAudio(d);
+      const canEnter = d < 3.2 && transT <= 0 && gateCool <= 0 && !dead;
+      riftPrompt.classList.toggle('on', canEnter);
+      if (canEnter && wantInteract) { wantInteract = false; beginTransition(wState === WS.NORMAL ? WS.BACK : WS.NORMAL); }
+      if (d < 2.4 && transT <= 0) {                         // the air bends this close
+        camera.fov = BASE_FOV + Math.sin(cityT * 2.2) * (2.4 - d) * 1.6;
+        camera.updateProjectionMatrix();
+      }
+    } else {
+      riftPrompt.classList.remove('on');
+      updateGateAudio(999);
+    }
+    wantInteract = false;
+    updateTransition(dt);
+  }
+  let wantInteract = false;
+
+  riftPrompt.addEventListener('pointerdown', (ev) => { ev.preventDefault(); ev.stopPropagation(); wantInteract = true; });
+
+  // ── save / load ───────────────────────────────────────────────────
+  function saveGate() {
+    try {
+      localStorage.setItem('contour.rift', JSON.stringify({
+        k: myKills, u: gateUnlocked, w: wState,
+        g: rift.present ? [rift.x, rift.y, rift.z, rift.ry, rift.seed] : null,
+      }));
+    } catch (e) {}
+  }
+  function loadGate() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('contour.rift') || 'null'); } catch (e) {}
+    if (!s) return;
+    myKills = s.k || 0; gateUnlocked = !!s.u;
+    // the same tear, in the same place — never a fresh one somewhere else
+    if (s.g) placeGate(s.g[0], s.g[1], s.g[2], s.g[3], s.g[4]);
+    // the world you were standing in is recorded, but a new session always starts
+    // on the normal side: waking up stranded in the backside with the tear a
+    // quarter of a map away is not a good way to be handed the game back
+  }
+  loadGate();
+
   // ── minimap (top-left) + full-screen map ───────────────────────────
   const miniCv = $('minimap'), miniCtx = miniCv.getContext('2d');
   const bigCv = $('bigmap'), bigCtx = bigCv.getContext('2d');
@@ -3837,9 +4667,9 @@
       ctx.beginPath(); ctx.moveTo(0, vz); ctx.lineTo(size, vz); ctx.stroke();
     }
     ctx.fillStyle = '#F6D21C';                              // bananas
-    for (const b of bananas) { if (!b.active) continue; const m = w2m(b.x, b.z, size); ctx.beginPath(); ctx.arc(m[0], m[1], full ? 7 : 3.2, 0, 6.3); ctx.fill(); }
+    if (wState === WS.NORMAL) for (const b of bananas) { if (!b.active) continue; const m = w2m(b.x, b.z, size); ctx.beginPath(); ctx.arc(m[0], m[1], full ? 7 : 3.2, 0, 6.3); ctx.fill(); }
     ctx.fillStyle = '#6eebff';                              // compasses
-    for (const c of compassItems) {
+    if (wState === WS.NORMAL) for (const c of compassItems) {
       if (!c.active) continue;
       const m = w2m(c.x, c.z, size), r = full ? 7 : 3.4;
       ctx.beginPath(); ctx.moveTo(m[0], m[1] - r); ctx.lineTo(m[0] + r, m[1]); ctx.lineTo(m[0], m[1] + r); ctx.lineTo(m[0] - r, m[1]);
@@ -3984,6 +4814,7 @@
     // --- building collision: push out of walls the body overlaps vertically, so
     //  doorways let you in and window bands stay open above the sill ---
     cityCollide(p, p.y - EYE, p.y - EYE + 1.7, PRAD);
+    if (wState === WS.BACK) wreckCollide(p, PRAD);   // and the dead traffic is solid
 
     // --- gravity + ground (street, floor slabs, or stairs) ---
     vy -= GRAV * dt;
@@ -4069,6 +4900,7 @@
     updateMusic();
     updateEffects(dt);
     updateDayNight(dt);
+    updateBackside(dt);
     updateQuality(dt);
     updateHud(dt);
     updateMinimap(dt);
