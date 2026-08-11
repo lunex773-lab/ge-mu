@@ -3141,7 +3141,7 @@
   //  rival player comes within ~45 m; the two layers crossfade. Everything is
   //  synthesised (no asset files), routed under the SFX master gain. ──────────
   let inGame = false;
-  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null;
+  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null;
   let musicStep = 0, musicNext = 0, musicIntensity = 0;
   const MSTEP = 0.15;                                   // seconds per 8th-note step
   function makeDistCurve(k) {
@@ -3156,6 +3156,7 @@
     musicGain = actx.createGain(); musicGain.gain.value = sfxOn ? bgmVol : 0; musicGain.connect(actx.destination);
     calmGain = actx.createGain(); calmGain.gain.value = 1; calmGain.connect(musicGain);
     intenseGain = actx.createGain(); intenseGain.gain.value = 0.0001; intenseGain.connect(musicGain);
+    dreadGain = actx.createGain(); dreadGain.gain.value = 0.0001; dreadGain.connect(musicGain);
     const dist = actx.createWaveShaper(); dist.curve = makeDistCurve(28); dist.oversample = '2x';
     const distOut = actx.createGain(); distOut.gain.value = 0.9;
     dist.connect(distOut); distOut.connect(intenseGain);
@@ -3201,20 +3202,52 @@
     }
     if ((step & 15) === 8) mtone(intenseGain, r * 4, t, 0.35, 'square', 0.12, 0.01);   // lead stab
   }
+  // dread: what plays on the other side. A Phrygian stack that slides a
+  // semitone and never resolves, one chord every four and a bit seconds, with
+  // a far-off bell and the occasional breath. Nothing from the normal world
+  // plays over there — both of its layers are shut off, not ducked.
+  const dreadChords = [
+    [73.42, 110.00, 146.83],   //  D  – A  – D
+    [77.78, 116.54, 155.56],   //  E♭ – B♭ – E♭   the slip: the room tilts
+    [65.41,  98.00, 130.81],   //  C  – G  – C
+    [69.30, 103.83, 138.59],   //  D♭ – A♭ – D♭
+  ];
+  function dreadStep(step, t) {
+    const ch = dreadChords[(step >> 5) & 3];
+    if ((step & 31) === 0) {
+      for (let i = 0; i < ch.length; i++) mtone(dreadGain, ch[i], t, MSTEP * 34, 'sine', i ? 0.055 : 0.09, 1.7);
+      mtone(dreadGain, ch[0] * 1.0595, t, MSTEP * 34, 'sine', 0.020, 2.1);        // a semitone off the root
+    }
+    if ((step & 31) === 18) mtone(dreadGain, ch[0] * 6, t, 3.0, 'triangle', 0.030, 0.01);   // a bell, a long way off
+    if ((step & 63) === 44 && noiseBuf) {                                          // a breath through the streets
+      const s = actx.createBufferSource(); s.buffer = noiseBuf;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 420; bp.Q.value = 0.5;
+      const g = actx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.055, t + 1.1);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+      s.connect(bp); bp.connect(g); g.connect(dreadGain); s.start(t); s.stop(t + 3.3);
+    }
+  }
   function updateMusic() {
     if (!inGame || !audioReady()) return;
     ensureMusic();
+    const back = wState === WS.BACK;
     let nearest = Infinity;
     for (const [, peer] of MP.peers) { if (peer.dead) continue; const dx = peer.cur.x - p.x, dz = peer.cur.z - p.z; const d = Math.hypot(dx, dz); if (d < nearest) nearest = d; }
-    const target = nearest < 45 ? 1 : 0;
+    const target = back ? 0 : (nearest < 45 ? 1 : 0);
     musicIntensity += (target - musicIntensity) * 0.05;
     const t = actx.currentTime;
-    intenseGain.gain.setTargetAtTime(Math.max(0.0001, musicIntensity), t, 0.4);
-    calmGain.gain.setTargetAtTime(Math.max(0.0001, 1 - musicIntensity), t, 0.4);
+    dreadGain.gain.setTargetAtTime(back ? 1 : 0.0001, t, 1.1);
+    intenseGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, musicIntensity), t, 0.4);
+    calmGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, 1 - musicIntensity), t, 0.4);
     if (musicNext < t) musicNext = t + 0.05;                 // resync after any pause (tab hidden / SFX off)
     while (musicNext < t + 0.25) {
-      if (musicIntensity < 0.985) calmStep(musicStep, musicNext);
-      if (musicIntensity > 0.015) intenseStep(musicStep, musicNext);
+      if (back) dreadStep(musicStep, musicNext);
+      else {
+        if (musicIntensity < 0.985) calmStep(musicStep, musicNext);
+        if (musicIntensity > 0.015) intenseStep(musicStep, musicNext);
+      }
       musicStep = (musicStep + 1) & 63; musicNext += MSTEP;
     }
   }
@@ -4469,27 +4502,40 @@
     const t = actx.currentTime;
     const out = actx.createGain(); out.gain.value = 0;
     const pan = actx.createStereoPanner ? actx.createStereoPanner() : null;
-    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 180; lp.Q.value = 0.8;
-    const res = actx.createBiquadFilter(); res.type = 'peaking'; res.frequency.value = 128; res.Q.value = 7; res.gain.value = 9;
-    lp.connect(res); res.connect(out);
     if (pan) { out.connect(pan); pan.connect(master); } else out.connect(master);
-    const o1 = actx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 38;
-    const o2 = actx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 57;
-    const o3 = actx.createOscillator(); o3.type = 'triangle'; o3.frequency.value = 76.4;
-    const g1 = actx.createGain(); g1.gain.value = 0.55;
-    const g2 = actx.createGain(); g2.gain.value = 0.30;
-    const g3 = actx.createGain(); g3.gain.value = 0.12;
-    o1.connect(g1); o2.connect(g2); o3.connect(g3);
-    g1.connect(lp); g2.connect(lp); g3.connect(lp);
-    const wh = actx.createBufferSource(); wh.buffer = noiseBuf; wh.loop = true;
-    const wb = actx.createBiquadFilter(); wb.type = 'bandpass'; wb.frequency.value = 520; wb.Q.value = 0.6;
-    const wg = actx.createGain(); wg.gain.value = 0.05;
-    wh.connect(wb); wb.connect(wg); wg.connect(lp);
-    const lfo = actx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.09;
-    const lfoG = actx.createGain(); lfoG.gain.value = 5.5;
-    lfo.connect(lfoG); lfoG.connect(o2.frequency);
-    o1.start(t); o2.start(t); o3.start(t); wh.start(t); lfo.start(t);
-    gAudio = { out, pan, lp, res, o1, o2, o3, wg };
+    // it breathes rather than sits flat
+    const breath = actx.createGain(); breath.gain.value = 1; breath.connect(out);
+    const swell = actx.createOscillator(); swell.type = 'sine'; swell.frequency.value = 0.058;
+    const swellG = actx.createGain(); swellG.gain.value = 0.34;
+    swell.connect(swellG); swellG.connect(breath.gain); swell.start(t);
+    // two vowel formants over the stack turn a chord into something closer to
+    // voices — this is what makes it read as a sound rather than a machine
+    const f1 = actx.createBiquadFilter(); f1.type = 'peaking'; f1.frequency.value = 620; f1.Q.value = 3.2; f1.gain.value = 11;
+    const f2 = actx.createBiquadFilter(); f2.type = 'peaking'; f2.frequency.value = 1180; f2.Q.value = 4.0; f2.gain.value = 8;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 360; lp.Q.value = 0.55;
+    lp.connect(f1); f1.connect(f2); f2.connect(breath);
+    // A sung chord, not a hum: an octave stack in just intervals, each voice a
+    // pair a fraction of a hertz apart so they beat slowly against each other,
+    // and one interval that does not belong — the tritone, kept low enough that
+    // it unsettles without ever announcing itself.
+    const STACK = [
+      [55.00, 0.30, 'sawtooth'],   // root
+      [82.50, 0.22, 'sawtooth'],   // fifth
+      [110.0, 0.17, 'triangle'],   // octave
+      [165.0, 0.085, 'triangle'],  // twelfth
+      [220.0, 0.055, 'sine'],      // double octave
+      [77.78, 0.038, 'sine'],      // tritone — the wrong one
+    ];
+    const voices = [];
+    for (const [f, v, type] of STACK) {
+      for (const d of [-0.31, 0.31]) {
+        const o = actx.createOscillator(); o.type = type; o.frequency.value = f + d;
+        const g = actx.createGain(); g.gain.value = v * 0.5;
+        o.connect(g); g.connect(lp); o.start(t);
+        voices.push({ o, f, d });
+      }
+    }
+    gAudio = { out, pan, lp, f1, f2, voices };
   }
   function stopGateAudio() {
     if (!gAudio) return;
@@ -4498,15 +4544,18 @@
   function updateGateAudio(dist) {
     if (!rift.present || !sfxOn) { if (gAudio) try { gAudio.out.gain.value = 0; } catch (e) {} return; }
     if (!gAudio) { startGateAudio(); if (!gAudio) return; }
-    const n = Math.max(0, 1 - dist / 32);                   // silent past ~32 m
+    const n = Math.max(0, 1 - dist / 34);                   // nothing at all past ~34 m
     const k = n * n;
     try {
       gAudio.out.gain.value = k * 0.95 * sfxVol;
-      gAudio.lp.frequency.value = 130 + k * 900;            // opens up as you close in
-      gAudio.res.gain.value = 5 + k * 16;
-      gAudio.o1.frequency.value = 36 + k * 9;               // and drags upward in pitch
-      gAudio.o2.frequency.value = 54 + k * 13;
-      gAudio.wg.gain.value = 0.03 + k * 0.13;
+      gAudio.lp.frequency.value = 240 + k * 2400;           // the chord opens up as you close in
+      gAudio.f1.frequency.value = 560 + k * 260;            // and the vowel opens with it
+      gAudio.f2.frequency.value = 1080 + k * 520;
+      const rise = 1 + k * 0.035;                           // and it climbs, very slightly
+      for (let i = 0; i < gAudio.voices.length; i++) {
+        const v = gAudio.voices[i];
+        v.o.frequency.value = (v.f + v.d) * rise;
+      }
       if (gAudio.pan) {                                     // which side of you it is on
         const dx = rift.x - p.x, dz = rift.z - p.z;
         const rel = Math.atan2(dx, dz) - (-yaw);
@@ -4602,7 +4651,7 @@
     transTo = to; transT = 1.15;
     rift.state = 'ENTERING';
     camShake = Math.max(camShake, 0.5);
-    if (gAudio) try { gAudio.o1.frequency.setTargetAtTime(120, actx.currentTime, 0.35); } catch (e) {}
+    if (gAudio) try { for (const v of gAudio.voices) v.o.frequency.setTargetAtTime((v.f + v.d) * 2.4, actx.currentTime, 0.4); } catch (e) {}
   }
   function updateTransition(dt) {
     if (transT <= 0) return;
@@ -4745,6 +4794,14 @@
       const m = w2m(c.x, c.z, size), r = full ? 7 : 3.4;
       ctx.beginPath(); ctx.moveTo(m[0], m[1] - r); ctx.lineTo(m[0] + r, m[1]); ctx.lineTo(m[0], m[1] + r); ctx.lineTo(m[0] - r, m[1]);
       ctx.closePath(); ctx.fill();
+    }
+    if (rift.present) {                                   // the tear, always marked
+      const m = w2m(rift.x, rift.z, size), r = full ? 9 : 4.6;
+      const pulse = 0.55 + 0.45 * Math.abs(Math.sin(cityT * 1.6));
+      ctx.fillStyle = 'rgba(226,26,18,' + pulse.toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(m[0], m[1], r, 0, 6.3); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,110,80,.9)'; ctx.lineWidth = full ? 3 : 1.6;
+      ctx.beginPath(); ctx.arc(m[0], m[1], r + (full ? 6 : 3), 0, 6.3); ctx.stroke();
     }
     // other players are hidden — only a compass pickup reveals them, for 30 s,
     // and going invisible drops you off even that (the cloak beats the compass)
