@@ -3262,7 +3262,7 @@
   //  rival player comes within ~45 m; the two layers crossfade. Everything is
   //  synthesised (no asset files), routed under the SFX master gain. ──────────
   let inGame = false;
-  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null;
+  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null, huntGain = null;
   let musicStep = 0, musicNext = 0, musicIntensity = 0;
   const MSTEP = 0.15;                                   // seconds per 8th-note step
   function makeDistCurve(k) {
@@ -3278,6 +3278,7 @@
     calmGain = actx.createGain(); calmGain.gain.value = 1; calmGain.connect(musicGain);
     intenseGain = actx.createGain(); intenseGain.gain.value = 0.0001; intenseGain.connect(musicGain);
     dreadGain = actx.createGain(); dreadGain.gain.value = 0.0001; dreadGain.connect(musicGain);
+    huntGain = actx.createGain(); huntGain.gain.value = 0.0001; huntGain.connect(musicGain);
     const dist = actx.createWaveShaper(); dist.curve = makeDistCurve(28); dist.oversample = '2x';
     const distOut = actx.createGain(); distOut.gain.value = 0.9;
     dist.connect(distOut); distOut.connect(intenseGain);
@@ -3350,6 +3351,55 @@
       s.connect(bp); bp.connect(g); g.connect(dreadGain); s.start(t); s.stop(t + 3.3);
     }
   }
+  //  hunt: what plays when the commander has you. It is the dread layer with
+  //  something moving inside it — the same unresolved Phrygian world, so the
+  //  other side still sounds like itself, but now there is a pulse under it
+  //  that will not let go. Two things carry it: a low ostinato in seven, which
+  //  never lines up with the four-bar chord and so never lets you settle into a
+  //  count, and a heartbeat that is deliberately uneven. Nothing is fast. The
+  //  pressure comes from it not stopping.
+  const huntRoot = [36.71, 38.89, 32.70, 34.65];      // an octave under the dread chords
+  function huntStep(step, t) {
+    const r = huntRoot[(step >> 5) & 3];
+    // the ostinato: seven steps against the chord's thirty-two
+    const k = step % 7;
+    if (k === 0 || k === 3 || k === 5) {
+      mtone(huntGain, r, t, MSTEP * 2.4, 'square', k === 0 ? 0.085 : 0.045, 0.02);
+      mtone(huntGain, r * 1.4983, t, MSTEP * 2.0, 'square', 0.020, 0.02);        // a bare fifth over it
+    }
+    if ((step & 31) === 0) {                                                      // the chord, still not resolving
+      mtone(huntGain, r * 2, t, MSTEP * 30, 'sawtooth', 0.048, 2.2);
+      mtone(huntGain, r * 2.1189, t, MSTEP * 30, 'sawtooth', 0.026, 2.6);         // a semitone above it
+      mtone(huntGain, r * 2.8284, t, MSTEP * 30, 'sine', 0.020, 2.0);             // and the tritone
+    }
+    //  a heartbeat that is not quite regular: two thumps, then a gap that moves
+    if ((step & 15) === 2 || (step & 15) === 5 || (step & 31) === 24) {
+      mtone(huntGain, r * 0.5, t, 0.30, 'sine', 0.16, 0.01);
+    }
+    if ((step & 63) === 40) mtone(huntGain, r * 12, t, 2.4, 'triangle', 0.018, 0.01);   // the bell, much higher now
+    if ((step & 63) === 56 && noiseBuf) {                                          // and something drawing breath
+      const s2 = actx.createBufferSource(); s2.buffer = noiseBuf; s2.loop = true; s2.playbackRate.value = 0.5;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 240; bp.Q.value = 0.7;
+      const g = actx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.075, t + 0.9);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+      s2.connect(bp); bp.connect(g); g.connect(huntGain); s2.start(t); s2.stop(t + 2.7);
+    }
+  }
+  //  Is a commander actually on to us? Not merely present — the music should
+  //  change when it has you, and change back when it loses you or dies.
+  function mfEngaged() {
+    if (wState !== WS.BACK) return false;
+    for (const m of flayers) {
+      if (!m.live || m.dead) continue;
+      if (!m.hasT || cityT - m.seeT > 20) continue;
+      if (Math.hypot(m.x - p.x, m.z - p.z) > 170) continue;
+      return true;
+    }
+    return false;
+  }
+
   function updateMusic() {
     if (!inGame || !audioReady()) return;
     ensureMusic();
@@ -3359,13 +3409,22 @@
     const target = back ? 0 : (nearest < 45 ? 1 : 0);
     musicIntensity += (target - musicIntensity) * 0.05;
     const t = actx.currentTime;
-    dreadGain.gain.setTargetAtTime(back ? 1 : 0.0001, t, 1.1);
+    //  On the other side one of two layers plays, never both: the ambient dread,
+    //  or the hunt while a commander has you. They cross over slowly — four
+    //  seconds — because a hard cut would announce the boss louder than the boss
+    //  does, and the whole point is that the room changes under you.
+    const hunt = back && mfEngaged();
+    dreadGain.gain.setTargetAtTime(back && !hunt ? 1 : 0.0001, t, hunt ? 2.0 : 1.4);
+    huntGain.gain.setTargetAtTime(hunt ? 1 : 0.0001, t, hunt ? 1.4 : 2.2);
     intenseGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, musicIntensity), t, 0.4);
     calmGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, 1 - musicIntensity), t, 0.4);
     if (musicNext < t) musicNext = t + 0.05;                 // resync after any pause (tab hidden / SFX off)
     while (musicNext < t + 0.25) {
-      if (back) dreadStep(musicStep, musicNext);
-      else {
+      if (back) {
+        //  both are scheduled through the crossover so neither arrives mid-phrase
+        if (dreadGain.gain.value > 0.02 || !hunt) dreadStep(musicStep, musicNext);
+        if (huntGain.gain.value > 0.02 || hunt) huntStep(musicStep, musicNext);
+      } else {
         if (musicIntensity < 0.985) calmStep(musicStep, musicNext);
         if (musicIntensity > 0.015) intenseStep(musicStep, musicNext);
       }
@@ -4474,6 +4533,7 @@
   const D_CALL_R = 50, D_CALL_MAX = 4, D_CALL_CD = 14;
   const D_BITE_R = 2.25, D_BITE_DMG = 9;
   const D_LIKED = 7.5;                   // the standoff distance one prefers to hold
+  const D_SEP = 3.6;                     // how much room each one insists on having
   const DOG_SEED = 0x0d06;
 
   // ---- the body ----------------------------------------------------
@@ -4927,15 +4987,31 @@
     const dx = tx - d.x, dz = tz - d.z, dd = Math.hypot(dx, dz);
     let ux = dd > 0.01 ? dx / dd : Math.sin(d.hd), uz = dd > 0.01 ? dz / dd : Math.cos(d.hd);
     if (sep !== false) {
+      //  Everything nearby pushes, not just packmates. Separation used to run
+      //  over the dog's own pack only, which is fine while the packs are spread
+      //  across the district and useless the moment they all converge on one
+      //  player: packs re-form at six members, so twenty dogs arriving together
+      //  become four packs that are each perfectly spaced *internally* and
+      //  completely blind to the other three. They stack into a wall. Forty-odd
+      //  creatures is a couple of thousand cheap distance tests a frame, which
+      //  is nothing next to looking like that screenshot.
       let sx = 0, sz = 0;
-      const pk = dogPacks[d.pack];
-      if (pk) for (const mi of pk.members) {
-        if (mi === d.slot) continue;
-        const o = dogs[mi]; if (!o || !o.live || o.dead) continue;
-        const ex = d.x - o.x, ez = d.z - o.z, e2 = ex * ex + ez * ez;
-        if (e2 < 6.25 && e2 > 1e-4) { const e = Math.sqrt(e2); sx += ex / e * (1 - e / 2.5); sz += ez / e * (1 - e / 2.5); }
+      for (const o of dogs) {
+        if (o === d || !o.live || o.dead) continue;
+        const ex = d.x - o.x, ez = d.z - o.z;
+        if (ex > D_SEP || ex < -D_SEP || ez > D_SEP || ez < -D_SEP) continue;   // cheap reject first
+        const e2 = ex * ex + ez * ez;
+        if (e2 < D_SEP * D_SEP && e2 > 1e-4) {
+          const e = Math.sqrt(e2), w = 1 - e / D_SEP;
+          sx += ex / e * w * w; sz += ez / e * w * w;                            // firmer the closer it is
+        }
       }
-      ux += sx * 1.4; uz += sz * 1.4;
+      for (const o of gorgons) {                    // and they do not stand in the big one's way either
+        if (!o.live || o.dead) continue;
+        const ex = d.x - o.x, ez = d.z - o.z, e2 = ex * ex + ez * ez;
+        if (e2 < 30 && e2 > 1e-4) { const e = Math.sqrt(e2), w = 1 - e / 5.5; sx += ex / e * w * 2.2; sz += ez / e * w * 2.2; }
+      }
+      ux += sx * 2.6; uz += sz * 2.6;
       const un = Math.hypot(ux, uz) || 1; ux /= un; uz /= un;
     }
     const want = Math.atan2(ux, uz);
@@ -5064,8 +5140,12 @@
         break;
       }
       case 'chase': {
+        //  come in on your own line, not down the same corridor as everyone else
         const want = Math.max(D_LIKED * 0.45, D_BITE_R * 0.8);
-        dogStep(d, d.tx - fx * want, d.tz - fz * want, d.tdist > 16 ? 8.4 : 6.2, dt);
+        const off = ((d.slot * 2.399) % 6.2832) - Math.PI;
+        const apx = d.tx - fx * want - fz * Math.sin(off) * 3.2;
+        const apz = d.tz - fz * want + fx * Math.sin(off) * 3.2;
+        dogStep(d, apx, apz, d.tdist > 16 ? 8.4 : 6.2, dt);
         wantMaw = 0.45; wantTail = 0.7; wantCrouch = 0.1;
         break;
       }
@@ -5086,17 +5166,24 @@
         break;
       }
       case 'reposition': {
-        //  off the centre line — sideways and a little back, still watching
+        //  off the centre line — sideways and a little back, still watching, and
+        //  each one swings out to its own radius so two never pick the same spot
         const sx = -fz * d.strafe, sz = fx * d.strafe;
-        const want = D_LIKED + 1.5;
-        const gx = d.tx - fx * want + sx * 5.5, gz = d.tz - fz * want + sz * 5.5;
+        const want = D_LIKED + 1.5 + (d.slot % 4) * 1.4;
+        const gx = d.tx - fx * want + sx * (4.5 + (d.slot % 3) * 1.8), gz = d.tz - fz * want + sz * (4.5 + (d.slot % 3) * 1.8);
         if (!clearAt(gx, gz, 0.8)) d.strafe = -d.strafe;
         dogStep(d, gx, gz, 5.4, dt);
         wantMaw = 0.35; wantTail = 0.5;
         break;
       }
-      case 'observe': {                     // hold at range, head fixed on you
-        const gx = d.tx - fx * (D_LIKED + 5), gz = d.tz - fz * (D_LIKED + 5);
+      case 'observe': {
+        //  Watchers ring the target rather than queueing up behind it: each one
+        //  keeps its own bearing, derived from its slot so it is stable, and its
+        //  own distance. Sending them all to the same point behind the player is
+        //  what turns a pack into a crowd.
+        const ring = D_LIKED + 5 + (d.slot % 5) * 1.9;
+        const bear = Math.atan2(fx, fz) + Math.PI + ((d.slot * 2.399) % 6.2832) * 0.34 - 0.55;
+        const gx = d.tx + Math.sin(bear) * ring, gz = d.tz + Math.cos(bear) * ring;
         dogStep(d, gx, gz, 2.4, dt);
         wantMaw = 0.16; wantTail = 0.35; wantCrouch = 0.35;
         break;
