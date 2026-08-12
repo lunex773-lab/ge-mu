@@ -490,7 +490,28 @@
     transition: transform .18s linear;
   }
   #boss.rage i u { background: linear-gradient(90deg, #a01008, #ff3a18 55%, #ffb066); }
+  #boss.king b { color: #d9c6a6; text-shadow: 0 0 12px rgba(140,26,16,.85); letter-spacing: .46em; }
+  #boss.king i u { background: linear-gradient(90deg, #4a0c08, #8c1a10 58%, #d8683a); }
   @keyframes ragepulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
+
+  /* The mental attack. Not a monster in the room — the room itself going wrong,
+     which is the whole point of it: no light show, no particles, just the edges
+     of your vision curdling and the picture refusing to sit still. */
+  #psy {
+    position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0;
+    mix-blend-mode: hard-light;
+    background:
+      radial-gradient(ellipse 120% 88% at 50% 50%, rgba(0,0,0,0) 38%, rgba(74,6,4,.62) 78%, rgba(20,0,0,.9) 100%),
+      radial-gradient(ellipse 60% 50% at 22% 34%, rgba(120,22,14,.34), rgba(0,0,0,0) 70%),
+      radial-gradient(ellipse 55% 46% at 78% 66%, rgba(90,14,44,.30), rgba(0,0,0,0) 70%);
+  }
+  #psy.on { animation: psycrawl 5.5s ease-in-out infinite; }
+  @keyframes psycrawl {
+    0%,100% { transform: scale(1.02) translate(0,0); filter: hue-rotate(0deg); }
+    27%     { transform: scale(1.07) translate(-1.1%, .7%); filter: hue-rotate(-16deg); }
+    58%     { transform: scale(1.04) translate(.9%, -.6%);  filter: hue-rotate(11deg); }
+    81%     { transform: scale(1.09) translate(-.4%, -1%);  filter: hue-rotate(-7deg); }
+  }
 
   /* ---- scope button + ADS overlay ---- */
   #scopebtn {
@@ -544,7 +565,8 @@
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
   <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
-  <div id="boss"><b>MIND FLAYER</b><i><u id="boss-hp"></u></i></div>
+  <div id="boss"><b id="boss-name">MIND FLAYER</b><i><u id="boss-hp"></u></i></div>
+  <div id="psy"></div>
   <div id="reveal"><b>🧭 敵の位置</b><span id="reveal-t">30</span></div>
   <div id="gate-prompt"><b>触れる</b><span>E</span></div>
   <div id="compass"><i></i><div id="compass-strip"></div></div>
@@ -2748,6 +2770,7 @@
     }
     if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
+    if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
     if (rift.present) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10), Math.round(rift.ry * 1000), rift.seed];
     const payload = JSON.stringify(msg);
     MP.txBytes += payload.length;
@@ -2806,6 +2829,7 @@
     applyDogSnapshot(msg.k);
     applyGorSnapshot(msg.q);
     applyMfSnapshot(msg.f);
+    applyVecSnapshot(msg.v);
   }
   function onMqttMessage(t, buf) {
     MP.rxBytes += buf.length;
@@ -2819,6 +2843,7 @@
     if (t.slice(-5) === '/dhit') { if (mobPub()) onDogHit(msg); return; }
     if (t.slice(-5) === '/ghit') { if (mobPub()) onGorHit(msg); return; }
     if (t.slice(-6) === '/mfhit') { if (mobPub()) onMfHit(msg); return; }
+    if (t.slice(-5) === '/vhit') { if (mobPub()) onVecHit(msg); return; }
     if (t.slice(-7) === '/corpse') { onCorpseMsg(msg); return; }
     if (t.slice(-7) === '/mdeath') { onDeathMsg(msg); return; }
     if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
@@ -2987,6 +3012,7 @@
       client.subscribe(mtopic('dhit'));
       client.subscribe(mtopic('ghit'));
       client.subscribe(mtopic('mfhit'));
+      client.subscribe(mtopic('vhit'));
       client.subscribe(mtopic('corpse'));
       client.subscribe(mtopic('mdeath'));
       client.subscribe(mtopic('gate'));
@@ -3262,7 +3288,7 @@
   //  rival player comes within ~45 m; the two layers crossfade. Everything is
   //  synthesised (no asset files), routed under the SFX master gain. ──────────
   let inGame = false;
-  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null, huntGain = null;
+  let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null, huntGain = null, throneGain = null;
   let musicStep = 0, musicNext = 0, musicIntensity = 0;
   const MSTEP = 0.15;                                   // seconds per 8th-note step
   function makeDistCurve(k) {
@@ -3279,6 +3305,7 @@
     intenseGain = actx.createGain(); intenseGain.gain.value = 0.0001; intenseGain.connect(musicGain);
     dreadGain = actx.createGain(); dreadGain.gain.value = 0.0001; dreadGain.connect(musicGain);
     huntGain = actx.createGain(); huntGain.gain.value = 0.0001; huntGain.connect(musicGain);
+    throneGain = actx.createGain(); throneGain.gain.value = 0.0001; throneGain.connect(musicGain);
     const dist = actx.createWaveShaper(); dist.curve = makeDistCurve(28); dist.oversample = '2x';
     const distOut = actx.createGain(); distOut.gain.value = 0.9;
     dist.connect(distOut); distOut.connect(intenseGain);
@@ -3389,6 +3416,36 @@
   }
   //  Is a commander actually on to us? Not merely present — the music should
   //  change when it has you, and change back when it loses you or dies.
+  // ---- the king's music -------------------------------------------------
+  //  §50/§51/§65: he does not announce himself. Where the hunt layer runs at
+  //  you — seven against thirty-two, a heartbeat that will not settle — this one
+  //  barely moves: a held drone a fifth apart from itself, and a single low bell
+  //  every four bars. Nothing hurries. That is the character: he is not worried,
+  //  and the music is not worried on his behalf.
+  const throneRoot = 27.5;                                // A0, under the floor
+  function throneStep(step, t) {
+    if ((step & 63) === 0) {
+      mtone(throneGain, throneRoot, t, MSTEP * 66, 'sine', 0.115, 3.2);
+      mtone(throneGain, throneRoot * 1.4983, t, MSTEP * 66, 'sine', 0.052, 4.0);   // a bare fifth, no third
+      mtone(throneGain, throneRoot * 4.0, t, MSTEP * 66, 'triangle', 0.017, 5.0);
+    }
+    //  the bell — struck once, allowed to die out over most of a phrase
+    if ((step & 63) === 8) mtone(throneGain, throneRoot * 6, t, 5.2, 'sine', 0.040, 0.006);
+    if ((step & 63) === 40) mtone(throneGain, throneRoot * 9.0, t, 4.4, 'sine', 0.022, 0.006);
+    //  and something breathing in a very large room, far too slowly
+    if ((step & 31) === 16 && audioReady()) {
+      const n = actx.createBufferSource(), len = Math.floor(actx.sampleRate * 2.6);
+      const b = actx.createBuffer(1, len, actx.sampleRate), ch = b.getChannelData(0);
+      for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      n.buffer = b;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 150; bp.Q.value = 0.7;
+      const g = actx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.030, t + 1.5);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+      n.connect(bp); bp.connect(g); g.connect(throneGain); n.start(t); n.stop(t + 2.7);
+    }
+  }
   function mfEngaged() {
     if (wState !== WS.BACK) return false;
     for (const m of flayers) {
@@ -3413,17 +3470,22 @@
     //  or the hunt while a commander has you. They cross over slowly — four
     //  seconds — because a hard cut would announce the boss louder than the boss
     //  does, and the whole point is that the room changes under you.
-    const hunt = back && mfEngaged();
-    dreadGain.gain.setTargetAtTime(back && !hunt ? 1 : 0.0001, t, hunt ? 2.0 : 1.4);
+    //  and the king outranks both of them, in the music as everywhere else: once
+    //  he is awake and near, the other two layers go, whatever they were doing.
+    const throne = back && vecPresent();
+    const hunt = back && !throne && mfEngaged();
+    dreadGain.gain.setTargetAtTime(back && !hunt && !throne ? 1 : 0.0001, t, (hunt || throne) ? 2.0 : 1.4);
     huntGain.gain.setTargetAtTime(hunt ? 1 : 0.0001, t, hunt ? 1.4 : 2.2);
+    throneGain.gain.setTargetAtTime(throne ? 1 : 0.0001, t, throne ? 3.4 : 3.0);
     intenseGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, musicIntensity), t, 0.4);
     calmGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, 1 - musicIntensity), t, 0.4);
     if (musicNext < t) musicNext = t + 0.05;                 // resync after any pause (tab hidden / SFX off)
     while (musicNext < t + 0.25) {
       if (back) {
-        //  both are scheduled through the crossover so neither arrives mid-phrase
-        if (dreadGain.gain.value > 0.02 || !hunt) dreadStep(musicStep, musicNext);
+        //  all three are scheduled through the crossover so none arrives mid-phrase
+        if (dreadGain.gain.value > 0.02 || (!hunt && !throne)) dreadStep(musicStep, musicNext);
         if (huntGain.gain.value > 0.02 || hunt) huntStep(musicStep, musicNext);
+        if (throneGain.gain.value > 0.02 || throne) throneStep(musicStep, musicNext);
       } else {
         if (musicIntensity < 0.985) calmStep(musicStep, musicNext);
         if (musicIntensity > 0.015) intenseStep(musicStep, musicNext);
@@ -3652,6 +3714,19 @@
         if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = mm; }
       }
     }
+    //  the king: a man-shaped target, so it is hit where a man is hit — head,
+    //  chest, hips — and the crown behind him is not a hitbox, because a shot
+    //  that connects with a waving tendril would feel like a lie
+    let hitVec = null;
+    if (wState === WS.BACK && vec.live && !vec.dead) {
+      const lift = vec.hover * 1.45;
+      for (let q = 0; q < 3; q++) {
+        const yy = [V_HIP + lift, V_HIP + 0.98 + lift, V_HIP + 1.94 + lift][q], rr = [0.66, 0.86, 0.55][q];
+        _cc.set(vec.x, vec.y + yy, vec.z);
+        const t = raySphere(_ro, _rd, _cc, rr);
+        if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = null; hitVec = vec; }
+      }
+    }
     // and so are the people on the street: one round drops them
     let hitWalker = null;
     if (wState === WS.NORMAL) for (let i = 0; i < peds.length; i++) {
@@ -3661,12 +3736,12 @@
       if (dx * dx + dz * dz > 32400) continue;     // beyond 180 m, skip the sphere test
       _cc.set(e.wx, 1.15, e.wz);                   // chest height, tall enough for a level crosshair
       const t = raySphere(_ro, _rd, _cc, 0.62);
-      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = null; hitWalker = e; }
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = null; hitVec = null; hitWalker = e; }
     }
-    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker || hitDog || hitGor || hitMf) ? hitDist : blockDist);
+    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker || hitDog || hitGor || hitMf || hitVec) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     flashMuzzle(_mz);
-    if (!hitId && !hitMonkey && !hitWalker && !hitDog && !hitGor && !hitMf) spawnImpact(_end);   // sparks + dust where the round lands
+    if (!hitId && !hitMonkey && !hitWalker && !hitDog && !hitGor && !hitMf && !hitVec) spawnImpact(_end);   // sparks + dust where the round lands
     dogNoise(p.x, p.z, 1.0, 'shot');                 // and every dog in the district hears it
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     ammo--; updateAmmoUI();
@@ -3701,6 +3776,11 @@
       showHit(hitMf.hp - DMG <= 0);
       hurtFlayer(hitMf, DMG, p.x, p.z);
       sendMfHit(hitMf, DMG);
+    }
+    if (hitVec) {
+      showHit(vec.vuln > 0);                             // §58: the window reads as a clean hit
+      hurtVecna(DMG, p.x, p.z);
+      sendVecHit(DMG);
     }
   }
 
@@ -4464,7 +4544,10 @@
   // push the player out of a wreck (oriented box, exact)
   function wreckCollide(pos, rad) {
     for (let k = 0; k < wrecks.length; k++) {
-      const w = wrecks[k]; if (!w) continue;
+      //  a wreck in the air is not a wall. It has been picked up — by the
+      //  commander's throw or by the king's orbit — and leaving its box on the
+      //  road would fence the street off with something that is not there.
+      const w = wrecks[k]; if (!w || w.held || w.thrown) continue;
       const dx = pos.x - w.x, dz = pos.z - w.z;
       if (dx * dx + dz * dz > 36) continue;
       const ch = Math.cos(w.rot), sh = Math.sin(w.rot);
@@ -4481,7 +4564,7 @@
   function rayWrecks(ro, rd) {
     let best = Infinity;
     for (let k = 0; k < wrecks.length; k++) {
-      const w = wrecks[k]; if (!w) continue;
+      const w = wrecks[k]; if (!w || w.held || w.thrown) continue;   // nor does it block a shot
       const dx = ro.x - w.x, dz = ro.z - w.z;
       const ch = Math.cos(w.rot), sh = Math.sin(w.rot);
       const ox = dx * ch - dz * sh, oz = dx * sh + dz * ch;
@@ -7678,7 +7761,7 @@
       if (mfBed) { const d = Math.sqrt(nearest.d2);
         try { mfBed.out.gain.value = Math.max(0, 1 - d / 300) * 0.55 * sfxVol; } catch (e) {} }
       const m = nearest.m;
-      const show = m.tdist < 130 && (m.hasT && cityT - m.seeT < 24);
+      const show = m.tdist < 130 && (m.hasT && cityT - m.seeT < 24) && !vecBarOwns;
       if (bossEl) {
         bossEl.classList.toggle('on', show);
         bossEl.classList.toggle('rage', !!m.panicked);
@@ -7686,7 +7769,7 @@
       }
     } else {
       mfBedOff();
-      if (bossEl) bossEl.classList.remove('on');
+      if (bossEl && !vecBarOwns) bossEl.classList.remove('on');
     }
   }
 
@@ -7746,6 +7829,1450 @@
     }
     return { live, hp, dogs: linkedD, gors: linkedG, panic, summon: summ,
              share: +mfShareAcc.toFixed(1), thrown: !!mfThrown };
+  }
+
+
+  // ══ VECNA · king of the backside world ════════════════════════════
+  //  The other three are animals. This one is a person who stopped being one,
+  //  and the difference has to be legible in every system, not just in the HP
+  //  bar: he walks, he does not charge; he lifts the street instead of biting
+  //  you; and the thing he is actually doing — the reason he outranks a
+  //  thirteen-metre commander — is that everything else out there is already
+  //  listening to him.
+  //
+  //  §61: world-unique. There is one, the world holds one, and he is not a
+  //  spawn table. §26: the state machine is the personality — DORMANT and
+  //  OBSERVE come before anything violent, and he spends real time in them.
+  const V_HP = MF_HP * 3;                  // 12600
+  const V_SIGHT = 124, V_LINK = 190;       // he hears through the whole district
+  const V_HEIGHT = 5.1, V_HIP = 2.72;
+  const VL1 = 1.45, VL2 = 1.38;            // thigh / shin
+  const VA1 = 1.15, VA2 = 1.10;            // upper arm / forearm at rest
+  const V_EXT = 4.6;                       // §13: how far past rest the arm goes
+  const V_WAVE_R = 26, V_WAVE_DMG = 26;    // §8
+  const V_LIMB_R = 11.5, V_LIMB_DMG = 22;  // §14
+  const V_GRAB_R = 34, V_GRAB_DMG = 30;    // §15 — never lethal on its own
+  const V_THROW_DMG = 34;
+  const V_ORBIT_MAX = 5;                   // §11/§12, and the ceiling is the point
+  const V_TEND = 9, V_TSEG = 5;            // the crown
+  //  §36: five phases, cut by health. Each one changes what he is willing to do,
+  //  not how much damage he does — a boss that only scales numbers is the thing
+  //  §57 says not to build.
+  const V_PHASE = [0.82, 0.60, 0.40, 0.18];
+  const vecEl = { name: null };
+
+  const vecSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const vecVineMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const vecBoneMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  //  §48: wet, marked, rotten, cracked — and explicitly *not* metal. Where the
+  //  flayer got a cold plated sheen this one gets none: the highlight is the
+  //  broad wet lift of skin, and the hard parts are bone, not armour.
+  vecSkinMat.uniforms.uSkin.value.setHex(0x4a4441); vecSkinMat.uniforms.uDeep.value.setHex(0x0c0807);
+  vecSkinMat.uniforms.uWet.value = 0.95; vecSkinMat.uniforms.uGloss.value = 0.10;
+  vecSkinMat.uniforms.uAmbCol.value.setHex(0x7b7772);
+  vecVineMat.uniforms.uSkin.value.setHex(0x2e1c19); vecVineMat.uniforms.uDeep.value.setHex(0x090302);
+  vecVineMat.uniforms.uWet.value = 0.62; vecVineMat.uniforms.uGloss.value = 0.14;
+  vecVineMat.uniforms.uAmbCol.value.setHex(0x776058);
+  vecBoneMat.uniforms.uSkin.value.setHex(0xa79781); vecBoneMat.uniforms.uDeep.value.setHex(0x2a231b);
+  vecBoneMat.uniforms.uWet.value = 0.70; vecBoneMat.uniforms.uGloss.value = 0.55;
+  vecBoneMat.uniforms.uAmbCol.value.setHex(0x9d9382);
+  //  §49: no light show. The glow is off at rest and only comes up while he is
+  //  actually holding something with his mind, so the ember under the skin reads
+  //  as effort rather than as decoration.
+  for (const mt of [vecSkinMat, vecVineMat, vecBoneMat]) mt.uniforms.uGlowCol.value.setHex(0x8c1a10);
+
+  //  10 ovoids (cranium, face, jaw, chest, abdomen, pelvis, 2 shoulders,
+  //  2 thighs) · 102 bones (neck, 4 limb bones, 20 finger bones, 6 toes,
+  //  45 tendril segments, 22 surface vines) · 30 knuckles · 16 plates · 18 claws
+  const V_OVOID = 10, V_BONE = 102, V_KNUC = 30, V_PLATE = 16, V_CLAW = 18;
+  const vecOvoidI = dIM(dogOvoidGeo, vecSkinMat, V_OVOID);
+  const vecBoneI = dIM(dogBoneGeo, vecVineMat, V_BONE);
+  const vecKnucI = dIM(dogKnucGeo, vecVineMat, V_KNUC);
+  const vecPlateI = dIM(dogPetalGeo, vecSkinMat, V_PLATE);
+  const vecClawI = dIM(dogPetalGeo, vecBoneMat, V_CLAW);
+  const vecParts = [vecOvoidI, vecBoneI, vecKnucI, vecPlateI, vecClawI];
+
+  // ---- the body ------------------------------------------------------
+  //  A man's proportions pushed until they stop being a man's: the arms are
+  //  too long before they extend at all, the fingers are half the length of a
+  //  forearm, and the whole of him is strung with the growth that replaced his
+  //  skin. Behind the shoulders, the crown — nine tendrils that are the largest
+  //  thing about him and the only part that never stops moving.
+  const vOvoids = [], vBones = [], vKnucs = [], vPlates = [], vClaws = [];
+  const vRnd = mulberry(0x7ec4a);
+  const VK = {};
+  {
+    const root = new THREE.Object3D(); VK.root = root;
+    const body = dnode(root, 0, 0, 0); VK.body = body;
+    const pelvis = dnode(body, 0, V_HIP, 0); VK.pelvis = pelvis;
+    const spine = dnode(pelvis, 0, 0.10, -0.04); VK.spine = spine;
+    const chest = dnode(spine, 0, 0.88, 0.02); VK.chest = chest;
+    const neck = dnode(chest, 0, 0.62, 0.04); VK.neck = neck;
+    const head = dnode(neck, 0, 0.34, 0.02); VK.head = head;
+    const jaw = dnode(head, 0, -0.16, 0.10); VK.jaw = jaw;
+
+    dvis(chest, vOvoids, 0.58, 0.80, 0.40, 0, 0.16, 0);                  // chest
+    dvis(spine, vOvoids, 0.41, 0.60, 0.31, 0, 0.30, -0.02);              // a starved waist
+    dvis(pelvis, vOvoids, 0.46, 0.32, 0.35, 0, -0.04, 0);                // pelvis
+    dvis(neck, vBones, 0.150, 0.38, 0.155, 0, 0.36, 0);                  // throat
+    dvis(head, vOvoids, 0.34, 0.40, 0.39, 0, 0.12, -0.08);               // cranium
+    dvis(head, vOvoids, 0.255, 0.29, 0.235, 0, -0.05, 0.235);            // the face that is left
+    dvis(jaw, vOvoids, 0.185, 0.135, 0.215, 0, -0.07, 0.115);            // the jaw, pushed forward
+
+    //  §48: the ribs read through the skin, because there is not much skin
+    for (const sd of [-1, 1]) for (let i = 0; i < 4; i++) {
+      const n = dnode(chest, 0.10 * sd, 0.44 - i * 0.21, 0.30);
+      n.rotation.set(1.44, 0.9 * sd, 0.30 * sd, 'YXZ');
+      dvis(n, vPlates, 0.055, 0.50 - i * 0.04, 0.10);
+    }
+    for (let i = 0; i < 4; i++) {                                         // brow and temples
+      const sd = i < 2 ? -1 : 1, j = i & 1;
+      const n = dnode(head, (0.20 + j * 0.10) * sd, 0.20 + j * 0.14, 0.16 - j * 0.16);
+      n.rotation.set(-0.5 - j * 0.5, 0.5 * sd, 0.7 * sd, 'YXZ');
+      dvis(n, vPlates, 0.045, 0.24 + j * 0.10, 0.07);
+    }
+    for (const sd of [-1, 1]) {
+      const sh = dnode(chest, 0.44 * sd, 0.44, 0);
+      dvis(sh, vOvoids, 0.24, 0.23, 0.25);                                // shoulder mass
+      dvis(sh, vKnucs, 0.19, 0.19, 0.19);
+      for (let i = 0; i < 2; i++) {                                       // spurs off the deltoid
+        const n = dnode(sh, 0.10 * sd, 0.10, -0.10 + i * 0.20);
+        n.rotation.set(-0.9 + i * 0.4, 0, (0.9 + i * 0.3) * sd, 'YXZ');
+        dvis(n, vPlates, 0.05, 0.30 - i * 0.06, 0.08);
+      }
+      //  the arm. Everything below the shoulder is stretchable, so the visual
+      //  bones are kept as handles and their length is written every frame.
+      const up = dnode(sh, 0, 0, 0);
+      const upVis = dvis(up, vBones, 0.135, VA1, 0.135);
+      const fore = dnode(up, 0, -VA1, 0);
+      const foreVis = dvis(fore, vBones, 0.108, VA2, 0.108);
+      dvis(fore, vKnucs, 0.128, 0.122, 0.128);                            // elbow
+      const hand = dnode(fore, 0, -VA2, 0);
+      dvis(hand, vKnucs, 0.115, 0.10, 0.13, 0, -0.04, 0.01);              // wrist / palm
+      //  §"長い指": five of them, two joints each, and far too long
+      const fingers = [];
+      for (let f = 0; f < 5; f++) {
+        const thumb = f === 4;
+        const sx = thumb ? 0.15 * sd : (-0.105 + (f - 1.5) * 0.070) * -sd;
+        const base = dnode(hand, sx, -0.06, thumb ? 0.02 : 0.05 - Math.abs(f - 1.5) * 0.018);
+        const L1 = thumb ? 0.30 : 0.40 - Math.abs(f - 1.5) * 0.035;
+        const L2 = thumb ? 0.26 : 0.34 - Math.abs(f - 1.5) * 0.030;
+        dvis(base, vBones, 0.030, L1, 0.030);
+        const mid = dnode(base, 0, -L1, 0);
+        dvis(mid, vBones, 0.024, L2, 0.024);
+        const tip = dnode(mid, 0, -L2, 0);
+        tip.rotation.x = Math.PI;                                          // claw points on down the finger
+        dvis(tip, vClaws, 0.030, 0.16, 0.030);
+        fingers.push({ base, mid, splay: thumb ? 0.85 * sd : (f - 1.5) * 0.19 * -sd, thumb });
+      }
+      //  the leg
+      const hip = dnode(pelvis, 0.21 * sd, -0.10, 0);
+      dvis(hip, vOvoids, 0.235, 0.46, 0.255, 0, -0.34, 0);                 // thigh mass
+      dvis(hip, vBones, 0.165, VL1, 0.165);
+      const knee = dnode(hip, 0, -VL1, 0);
+      dvis(knee, vKnucs, 0.150, 0.140, 0.150);
+      dvis(knee, vBones, 0.130, VL2, 0.130);
+      const ankle = dnode(knee, 0, -VL2, 0);
+      dvis(ankle, vKnucs, 0.125, 0.115, 0.125);
+      const foot = dnode(ankle, 0, 0, 0);
+      dvis(foot, vKnucs, 0.155, 0.085, 0.235, 0, -0.055, 0.12);
+      for (let t = 0; t < 3; t++) {                                        // long toes, splayed
+        const n = dnode(foot, (t - 1) * 0.095, -0.065, 0.24);
+        n.rotation.set(1.50, (t - 1) * 0.30, 0, 'YXZ');
+        dvis(n, vBones, 0.034, 0.24, 0.034);
+      }
+      VK[sd < 0 ? 'armL' : 'armR'] = { sh, up, upVis, fore, foreVis, hand, fingers, sd };
+      VK[sd < 0 ? 'legL' : 'legR'] = { hip, knee, ankle, foot, sd };
+    }
+    VK.arms = [VK.armL, VK.armR];
+    VK.legs = [VK.legL, VK.legR];
+
+    //  §"巨大な触手・有機構造": the crown. Nine of them off the upper back,
+    //  fanned in an arc, each five segments long — this is the silhouette, and
+    //  it is why he does not need to be thirteen metres tall to fill a street.
+    VK.tendrils = [];
+    for (let i = 0; i < V_TEND; i++) {
+      const u = i / (V_TEND - 1) - 0.5;                    // -0.5 … +0.5 across the back
+      const base = dnode(chest, u * 0.86, 0.46 - Math.abs(u) * 0.30, -0.26);
+      const segs = [];
+      let par = base;
+      for (let j = 0; j < V_TSEG; j++) {
+        const L = 1.30 - j * 0.14;
+        const n = dnode(par, 0, j === 0 ? 0 : -(1.30 - (j - 1) * 0.14), 0);
+        dvis(n, vBones, 0.205 - j * 0.034, L, 0.205 - j * 0.034);
+        segs.push({ n, L });
+        par = n;
+      }
+      dvis(par, vKnucs, 0.070, 0.070, 0.070, 0, -(1.30 - (V_TSEG - 1) * 0.14), 0);   // the tip
+      VK.tendrils.push({ base, segs, u, ph: vRnd() * 6.2832, sp: 0.7 + vRnd() * 0.5 });
+    }
+
+    //  §"不自然な皮膚": the growth that took the place of skin. Fixed seed, so
+    //  it is chaotic and yet identical on every machine that loads the page.
+    {
+      const hosts = [chest, spine, pelvis, head, VK.armL.up, VK.armR.up,
+                     VK.armL.fore, VK.armR.fore, VK.legL.hip, VK.legR.hip, VK.legL.knee];
+      for (let i = 0; i < 22; i++) {
+        const h = hosts[i % hosts.length];
+        const a = vRnd() * 6.2832, r = 0.16 + vRnd() * 0.26;
+        const n = dnode(h, Math.sin(a) * r, -vRnd() * 0.70, Math.cos(a) * r * 0.8);
+        n.rotation.set((vRnd() - 0.3) * 2.2, a, (vRnd() - 0.5) * 1.6, 'YXZ');
+        dvis(n, vBones, 0.024 + vRnd() * 0.014, 0.30 + vRnd() * 0.44, 0.024 + vRnd() * 0.014);
+        if (i < 9) dvis(n, vKnucs, 0.045, 0.038, 0.045, 0, -0.05, 0);      // a nodule where two meet
+      }
+    }
+    //  §6 of the reference sheet: no light in the eyes, and teeth that are not
+    //  arranged the way teeth are arranged
+    for (let i = 0; i < 8; i++) {
+      const t = (i / 7 - 0.5) * 2, upj = i < 4;
+      const n = dnode(upj ? head : jaw, t * 0.15, upj ? -0.16 : -0.05, 0.24);
+      n.rotation.set(upj ? 2.7 : 0.45, t * 0.4, (vRnd() - 0.5) * 0.5, 'YXZ');
+      dvis(n, vClaws, 0.024, 0.075 + vRnd() * 0.045, 0.024);
+    }
+
+    const got = [vOvoids.length, vBones.length, vKnucs.length, vPlates.length, vClaws.length];
+    const want = [V_OVOID, V_BONE, V_KNUC, V_PLATE, V_CLAW];
+    for (let i = 0; i < want.length; i++) {
+      if (got[i] !== want[i]) console.error('vecna rig: part ' + i + ' built ' + got[i] + ', reserved ' + want[i]);
+    }
+  }
+
+  // ---- the pose ------------------------------------------------------
+  //  §46/§47. The pieces the animator drives, and why each exists:
+  //    hover   he stops using the ground — feet point, body rises
+  //    armUp   §7's raised hand, the gesture that lifts a car
+  //    armExt  §13's procedural stretch: bone lengths written, not a scale hack
+  //    grip    fingers close; spread opens them
+  //    flare   the crown opens out — threat, and the tell before a wave
+  //    arch    §40's phase change, when he stops being composed
+  const _vT = new THREE.Vector3(), _vH = new THREE.Vector3();
+  function poseVecna(s, dt, footIK) {
+    const mv = Math.min(1, s.sp / 3.6);
+    const ph = s.gaitPh;
+    const brth = Math.sin(cityT * 0.62) * 0.5 + 0.5;
+    const hov = s.hover;
+    //  ride height: the walk bobs, the hover lifts him clear of it entirely
+    const bob = Math.sin(ph * 12.566) * 0.075 * mv;
+    VK.body.position.set(0, bob + hov * 1.45 - (s.dead ? Math.min(2.9, s.deadT * 2.1) : 0), 0);
+    VK.body.rotation.set(
+      -0.02 + s.lean * 0.5 - s.arch * 0.36 + s.stagger * 0.14 + hov * 0.10, 0,
+      Math.sin(ph * 6.2832) * 0.026 * mv + s.stagger * Math.sin(cityT * 13) * 0.09, 'YXZ');
+
+    //  spine: a slow breath, a counter-rotation against the hips while walking,
+    //  and the arch backwards when a phase turns over
+    VK.spine.rotation.set(0.05 + brth * 0.022 - s.arch * 0.30, Math.sin(ph * 6.2832) * 0.10 * mv, 0, 'YXZ');
+    VK.chest.rotation.set(-0.02 - brth * 0.03 - s.arch * 0.22, -Math.sin(ph * 6.2832) * 0.17 * mv, 0, 'YXZ');
+    VK.chest.scale.set(1 + brth * 0.017, 1, 1 + brth * 0.026);
+    VK.pelvis.rotation.set(0, Math.sin(ph * 6.2832) * 0.13 * mv, 0, 'YXZ');
+    //  §"威圧的で静かな存在感": the head leads, and it moves slower than anything
+    //  a frightened animal would manage
+    VK.neck.rotation.set(0.10 - s.headPitch * 0.30 + s.arch * 0.42, s.headYaw * 0.42, 0, 'YXZ');
+    VK.head.rotation.set(-0.06 - s.headPitch * 0.42 + s.arch * 0.30, s.headYaw * 0.58, s.headYaw * 0.10, 'YXZ');
+    VK.jaw.rotation.x = 0.06 + s.maw * 0.62 + s.arch * 0.30;
+
+    // ---- the arms ----
+    for (let i = 0; i < 2; i++) {
+      const A = VK.arms[i], sd = A.sd;
+      const raise = s.armUp[i], ext = s.armExt[i];
+      //  the resting arm hangs and swings a little out of phase with the legs;
+      //  the raised arm comes up and forward, which is the reference's pose
+      const swing = Math.sin(ph * 6.2832 + (i ? 0 : Math.PI)) * 0.34 * mv;
+      //  A bone hangs down its own −Y, so −π/2 about X lays the whole arm out
+      //  along +Z — straight ahead. As the stretch comes on, the resting pose is
+      //  blended out and replaced by that: by the time it is fully extended the
+      //  arm is pointing at whatever he is aiming it at rather than wherever it
+      //  happened to be hanging, which is the difference between a strike and a
+      //  limb that grew sideways.
+      const aimX = -1.52 + s.aimPitch * 0.95;
+      const restX = -swing * 0.8 - raise * 2.05 - s.arch * 1.5;
+      const restY = raise * 0.22 * sd + s.aimYaw * raise;
+      A.sh.rotation.set(
+        restX * (1 - ext) + aimX * ext,
+        restY * (1 - ext) + s.aimYaw * 1.15 * ext,
+        (0.20 + raise * 0.34 + s.arch * 0.62 + s.flare * 0.10) * sd * (1 - ext * 0.88), 'YXZ');
+      A.up.rotation.set(s.aimPitch * raise * (1 - ext), 0, 0, 'YXZ');
+      //  §47: the stretch is real length, written into the bone and the joint
+      //  that hangs off it, so the elbow ends up where the longer bone puts it
+      const l1 = VA1 * (1 + ext * V_EXT), l2 = VA2 * (1 + ext * V_EXT);
+      A.upVis.scale.set(0.135 * (1 - ext * 0.46), l1, 0.135 * (1 - ext * 0.46));
+      A.foreVis.scale.set(0.108 * (1 - ext * 0.44), l2, 0.108 * (1 - ext * 0.44));
+      A.fore.position.y = -l1;
+      A.hand.position.y = -l2;
+      //  the elbow only bends when the arm is not being used as a spear
+      A.fore.rotation.set((0.30 + swing * 0.5 + raise * 0.55) * (1 - ext), 0, 0, 'YXZ');
+      A.hand.rotation.set(-0.10 - raise * 0.30 + s.grip * 0.55, 0, 0, 'YXZ');
+      //  fingers: splayed when he is holding the world still, closed when he has
+      //  hold of you. They are never quite at rest — there is always a curl
+      //  travelling down the hand.
+      for (let f = 0; f < A.fingers.length; f++) {
+        const F = A.fingers[f];
+        const idle = Math.sin(cityT * 0.9 + f * 1.1 + i * 2.2) * 0.09 + 0.16;
+        const curl = idle * (1 - s.spread) + s.grip * 1.25;
+        F.base.rotation.set(curl * 0.85, F.splay * (0.4 + s.spread * 1.5), F.thumb ? 0.5 * sd : 0, 'YXZ');
+        F.mid.rotation.x = curl * 1.35;
+      }
+    }
+
+    // ---- the crown ----
+    //  A travelling wave down each chain, phase-offset per tendril so they never
+    //  agree, plus a flare that opens the whole fan outward and back. This is
+    //  the part that has to look alive when he is standing perfectly still.
+    for (let i = 0; i < VK.tendrils.length; i++) {
+      const T = VK.tendrils[i];
+      //  A bone hangs down its own −Y, so a chain left at rest falls to the
+      //  pavement. The base is turned most of the way over — past vertical and
+      //  leaning back — and every segment after it curls forward by a little,
+      //  which is what turns a hanging rope into an arch standing over him.
+      //  Opening the fan stands the roots up and *relaxes* the curl, so the
+      //  whole crown rises and spreads at once instead of merely swinging.
+      T.base.rotation.set(2.40 + s.flare * 0.38,
+                          T.u * (1.15 + s.flare * 1.75),
+                          -T.u * (0.60 + s.flare * 1.05), 'YXZ');
+      const curl = -(0.31 - s.flare * 0.17);
+      for (let j = 0; j < T.segs.length; j++) {
+        const w = Math.sin(cityT * T.sp * 1.35 - j * 0.82 + T.ph) * (0.09 + 0.040 * j) * (1 - s.flare * 0.35);
+        T.segs[j].n.rotation.set(curl * (j > 0 ? 1 : 0.45) + w, w * 0.55,
+                                 Math.sin(cityT * T.sp + T.ph + j) * 0.06, 'YXZ');
+      }
+    }
+
+    // ---- the legs ----
+    //  Two-bone IK on a cycloid, phases half a cycle apart. In the hover the
+    //  gait is abandoned and the legs simply hang, toes down — which is the
+    //  clearest single read that he has stopped walking like a person.
+    for (let i = 0; i < 2; i++) {
+      const L = VK.legs[i];
+      if (s.dead) {
+        L.hip.rotation.set(-0.35 - i * 0.2, 0.2 * L.sd, 0, 'YXZ');
+        L.knee.rotation.x = 1.9; L.ankle.rotation.x = 0.5;
+        continue;
+      }
+      if (hov > 0.02) {
+        const dangle = Math.sin(cityT * 0.8 + i * 2.1) * 0.06;
+        L.hip.rotation.set(0.22 + dangle, 0, 0.05 * L.sd, 'YXZ');
+        L.knee.rotation.x = 0.30 + dangle * 0.6;
+        L.ankle.rotation.x = -0.95;                       // pointed
+        if (hov > 0.98) continue;
+      }
+      let f = (ph + i * 0.5) % 1; if (f < 0) f += 1;
+      const stride = 2.35 * mv;
+      let fz = 0, lift = 0;
+      if (f < 0.5) { const u = f / 0.5; fz = stride * 0.5 - stride * u; }
+      else {
+        const v = (f - 0.5) / 0.5, e = v * v * (3 - 2 * v);
+        fz = -stride * 0.5 + stride * e;
+        lift = Math.sin(Math.PI * v) * 0.72 * mv;
+      }
+      const tx = L.hip.position.x, tz = fz;
+      _vH.set(L.hip.position.x, 0, L.hip.position.z);
+      const dx = tx - _vH.x, dz = tz - _vH.z;
+      const horiz = Math.hypot(dx, dz);
+      let ty = -(V_HIP + L.hip.position.y) + lift;
+      if (footIK) {
+        const wx = s.x + Math.sin(s.hd) * tz + Math.cos(s.hd) * tx;
+        const wz = s.z + Math.cos(s.hd) * tz - Math.sin(s.hd) * tx;
+        ty = (supportHeight(wx, wz, s.y + 2) - s.y) - (V_HIP + L.hip.position.y) + lift;
+      }
+      const d = Math.max(1e-3, Math.hypot(ty, horiz));
+      const reach = Math.min(d, VL1 + VL2 - 0.01);
+      const phi = Math.atan2(-horiz, -ty);
+      const c1 = (VL1 * VL1 + reach * reach - VL2 * VL2) / (2 * VL1 * reach);
+      const c2 = (VL1 * VL1 + VL2 * VL2 - reach * reach) / (2 * VL1 * VL2);
+      const a1 = Math.acos(Math.max(-1, Math.min(1, c1)));
+      const a2 = Math.acos(Math.max(-1, Math.min(1, c2)));
+      //  knee sign −1: a human knee, folding forward. The flayer's folds the
+      //  other way and that one difference is most of why this reads as a man.
+      const hipX = phi + a1, kneeX = -(Math.PI - a2);
+      const bl = hov > 0.02 ? 1 - hov : 1;
+      L.hip.rotation.set(hipX * bl + (1 - bl) * L.hip.rotation.x, Math.atan2(dx, dz) * bl, 0, 'YXZ');
+      L.knee.rotation.x = kneeX * bl + (1 - bl) * L.knee.rotation.x;
+      L.ankle.rotation.x = (-(hipX + kneeX) * 0.85) * bl + (1 - bl) * -0.95;
+    }
+    VK.root.position.set(s.x, s.y, s.z);
+    VK.root.rotation.y = s.hd;
+    VK.root.updateMatrixWorld(true);
+  }
+  function writeVecna() {
+    for (let i = 0; i < V_OVOID; i++) vecOvoidI.setMatrixAt(i, vOvoids[i].matrixWorld);
+    for (let i = 0; i < V_BONE; i++) vecBoneI.setMatrixAt(i, vBones[i].matrixWorld);
+    for (let i = 0; i < V_KNUC; i++) vecKnucI.setMatrixAt(i, vKnucs[i].matrixWorld);
+    for (let i = 0; i < V_PLATE; i++) vecPlateI.setMatrixAt(i, vPlates[i].matrixWorld);
+    for (let i = 0; i < V_CLAW; i++) vecClawI.setMatrixAt(i, vClaws[i].matrixWorld);
+  }
+
+  // ---- the one of him ------------------------------------------------
+  //  the arrays exist before he does, so nothing that runs a frame early can
+  //  reach into an undefined pose
+  const vec = { live: false, orbit: [], armUp: [0, 0], armUpWant: [0, 0], armExt: [0, 0], armExtWant: [0, 0] };
+  let vecOn = false, vecSpawnCd = 210, vecFrame = 0, vecHoldSpawn = false, vecDrawn = false, vecBarOwns = false;
+  function vecSpawnSpot() {
+    //  §27: he is somewhere, being somewhere. Far out, in the open, and never
+    //  in front of you — you are supposed to find him, not be handed him.
+    let best = null, bestS = -1;
+    for (let i = 0; i < 80; i++) {
+      const x = (Math.random() * 2 - 1) * WORLD * 0.40, z = (Math.random() * 2 - 1) * WORLD * 0.40;
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (d < 150 || d > 330) continue;
+      if (!clearAt(x, z, 2.2)) continue;
+      let s = d * 0.02 + Math.random() * 3;
+      const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+      if (Math.abs(x - bi * PITCH) < RW && Math.abs(z - bj * PITCH) < RW) s += 7;
+      if (s > bestS) { bestS = s; best = { x, z }; }
+    }
+    return best;
+  }
+  function spawnVecna(at) {
+    const spot = at || vecSpawnSpot(); if (!spot) return null;
+    Object.assign(vec, {
+      live: true, x: spot.x, z: spot.z, y: supportHeight(spot.x, spot.z, 1),
+      hd: Math.random() * 6.2832, sp: 0, hp: V_HP, phase: 0,
+      st: 'dormant', stT: 0, gaitPh: Math.random(), lean: 0,
+      hover: 0, hoverWant: 0, flare: 0, flareWant: 0, arch: 0, archWant: 0,
+      armUp: [0, 0], armUpWant: [0, 0], armExt: [0, 0], armExtWant: [0, 0],
+      grip: 0, gripWant: 0, spread: 0, spreadWant: 0, maw: 0, mawWant: 0,
+      aimYaw: 0, aimPitch: 0, headYaw: 0, headPitch: 0, headYawWant: 0, headPitchWant: 0,
+      stagger: 0, vuln: 0, atk: null, atkCd: 6, dead: false, deadT: 0,
+      see: 0, seeT: -99, tx: spot.x, tz: spot.z, tdist: 999, hasT: false,
+      wx: spot.x, wz: spot.z, wanderT: 0, cmdT: 0, mentalT: 22 + Math.random() * 20,
+      orbit: [], stepBeat: -1, voiceT: 6, lod: 0, awake: false,
+      netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, rspd: 0, hpHold: 0,
+      dodgeX: 0, dodgeZ: 0, lastPX: p.x, lastPZ: p.z,
+    });
+    return vec;
+  }
+  function vecHide() {
+    for (let i = 0; i < V_OVOID; i++) vecOvoidI.setMatrixAt(i, _dHideM);
+    for (let i = 0; i < V_BONE; i++) vecBoneI.setMatrixAt(i, _dHideM);
+    for (let i = 0; i < V_KNUC; i++) vecKnucI.setMatrixAt(i, _dHideM);
+    for (let i = 0; i < V_PLATE; i++) vecPlateI.setMatrixAt(i, _dHideM);
+    for (let i = 0; i < V_CLAW; i++) vecClawI.setMatrixAt(i, _dHideM);
+    for (const q of vecParts) q.instanceMatrix.needsUpdate = true;
+    vecDrawn = false;
+  }
+  function clearVecna() {
+    vecDropOrbit();
+    psyRelease(0);
+    vec.live = false; vec.dead = false; vec.atk = null;
+    vecHide();
+  }
+  //  §52: felt before seen. This is the gate the music, the drone and the
+  //  screen all hang off, and it is deliberately generous with distance —
+  //  he should be changing the room long before he is a shape in it.
+  function vecPresent() {
+    return !!(vec.live && !vec.dead && vec.awake && Math.hypot(vec.x - p.x, vec.z - p.z) < 250);
+  }
+
+  // ---- the hive ------------------------------------------------------
+  //  §20–§25. The network is not a list — it is distance, exactly as the
+  //  flayer's is, one tier up and much wider. §24 is the reason there is a
+  //  radius at all: without one he would be inescapable, which is not
+  //  frightening, it is just unfair.
+  function vecCommand(dt) {
+    vec.cmdT -= dt;
+    const known = vec.hasT && cityT - vec.seeT < 26;
+    //  §23 HIVE SENSE — what anything of his sees, he sees. Upward first,
+    //  because a king who has to look for you himself is not a king.
+    for (const m of flayers) {
+      if (!m.live || m.dead || !m.hasT || cityT - m.seeT > 8) continue;
+      if (Math.hypot(m.x - vec.x, m.z - vec.z) > V_LINK) continue;
+      vec.hasT = true; vec.tx = m.tx; vec.tz = m.tz; vec.seeT = Math.max(vec.seeT, m.seeT);
+    }
+    for (const g of gorgons) {
+      if (!g.live || g.dead || !g.hasT || cityT - g.seeT > 8) continue;
+      if (Math.hypot(g.x - vec.x, g.z - vec.z) > V_LINK) continue;
+      vec.hasT = true; vec.tx = g.tx; vec.tz = g.tz; vec.seeT = Math.max(vec.seeT, g.seeT);
+    }
+    for (const d of dogs) {
+      if (!d.live || d.dead || !d.hasT || cityT - d.seeT > 8) continue;
+      if (Math.hypot(d.x - vec.x, d.z - vec.z) > V_LINK) continue;
+      vec.hasT = true; vec.tx = d.tx; vec.tz = d.tz; vec.seeT = Math.max(vec.seeT, d.seeT);
+    }
+    if (!vec.awake || vec.dead) return;
+    //  §22/§55: the override. Sent on a clock, not every frame — §22 says not to
+    //  use it constantly and it is right: an order that never stops arriving is
+    //  indistinguishable from no order at all.
+    if (vec.cmdT > 0) return;
+    vec.cmdT = 2.6;
+    if (!known) return;
+    let sent = 0;
+    //  §55 COMMAND PRIORITY: down the chain. The flayer is told, and what the
+    //  flayer does with its own escort is still the flayer's business — that is
+    //  §21's command chain rather than VECNA driving forty bodies himself.
+    for (const m of flayers) {
+      if (!m.live || m.dead) continue;
+      if (Math.hypot(m.x - vec.x, m.z - vec.z) > V_LINK) continue;
+      m.hasT = true; m.tx = vec.tx; m.tz = vec.tz; m.seeT = cityT;
+      if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
+      m.panicked = false;                         // §53: nothing of his runs away
+      if (m.st === 'flee') { m.st = 'track'; m.stT = 0; }
+      sent++;
+    }
+    for (const g of gorgons) {
+      if (!g.live || g.dead) continue;
+      if (Math.hypot(g.x - vec.x, g.z - vec.z) > V_LINK) continue;
+      g.hasT = true; g.tx = vec.tx; g.tz = vec.tz; g.seeT = cityT;
+      if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+      sent++;
+    }
+    for (const d of dogs) {
+      if (!d.live || d.dead) continue;
+      if (Math.hypot(d.x - vec.x, d.z - vec.z) > V_LINK) continue;
+      d.hasT = true; d.tx = vec.tx; d.tz = vec.tz; d.seeT = cityT;
+      //  §53: they do not hide and they do not break off while he is watching
+      if (d.st === 'wander' || d.st === 'idle' || d.st === 'hide' || d.st === 'flee') { d.st = 'chase'; d.stT = 0; }
+      sent++;
+    }
+    vec.cmdSent = sent;
+  }
+  function vecHiveCount() {
+    let n = 0;
+    for (const d of dogs) if (d.live && !d.dead && Math.hypot(d.x - vec.x, d.z - vec.z) <= V_LINK) n++;
+    for (const g of gorgons) if (g.live && !g.dead && Math.hypot(g.x - vec.x, g.z - vec.z) <= V_LINK) n++;
+    for (const m of flayers) if (m.live && !m.dead && Math.hypot(m.x - vec.x, m.z - vec.z) <= V_LINK) n++;
+    return n;
+  }
+
+  // ---- telekinesis ---------------------------------------------------
+  //  §7/§10/§11/§12/§44/§45. The orbit holds real wrecks — the same instances
+  //  the street is made of — so what he lifts is gone from where it was, and
+  //  what he throws is still lying where it landed afterwards.
+  const _vkM = new THREE.Matrix4(), _vkQ = new THREE.Quaternion(), _vkE = new THREE.Euler(), _vkS = new THREE.Vector3(1, 1, 1);
+  function vecPickWrecks(want) {
+    //  §45: not at random. A thing that can reach the player beats a thing that
+    //  is merely close, and a thing already at their feet is no use to anybody.
+    const cand = [];
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k];
+      if (!w || w.thrown || w.held) continue;
+      const d = Math.hypot(w.x - vec.x, w.z - vec.z);
+      if (d > 46) continue;
+      //  and only when he actually has somewhere to throw it: with no target,
+      //  tx/tz is still his own spawn point, so this test would quietly rule out
+      //  every wreck standing near him — which is all of the good ones
+      const known = vec.hasT && cityT - vec.seeT < 26;
+      const toP = known ? Math.hypot(w.x - vec.tx, w.z - vec.tz) : 1e9;
+      if (toP < 12) continue;                            // not one already at their feet
+      cand.push({ k, s: (toP < 60 ? 40 : 0) + (46 - d) });
+    }
+    cand.sort((a, b) => b.s - a.s);
+    return cand.slice(0, want).map((c) => c.k);
+  }
+  function vecLift(want) {
+    const room = Math.min(want, V_ORBIT_MAX - vec.orbit.length);
+    if (room <= 0) return 0;
+    const picks = vecPickWrecks(room);
+    for (const k of picks) {
+      const w = wrecks[k];
+      w.held = true;
+      vec.orbit.push({ k, a: Math.random() * 6.2832, r: 5.4 + Math.random() * 3.2,
+                       h: 2.6 + Math.random() * 3.4, spin: (Math.random() - 0.5) * 2.4, roll: 0, y0: w.y, rise: 0 });
+    }
+    if (picks.length) playVecLift();
+    return picks.length;
+  }
+  function vecDropOrbit() {
+    if (!vec.orbit || !vec.orbit.length) return;
+    for (const o of vec.orbit) { const w = wrecks[o.k]; if (w) { w.held = false; w.y = o.y0; } }
+    vec.orbit.length = 0;
+    poseWrecks();                       // and they are back on the road where they fell
+  }
+  function vecHurl() {
+    //  one at a time, and the arm does it — the throw is aimed from the hand
+    if (!vec.orbit.length) return false;
+    const o = vec.orbit.shift();
+    const w = wrecks[o.k];
+    if (!w) return false;
+    const sx = vec.x + Math.sin(o.a) * o.r, sz = vec.z + Math.cos(o.a) * o.r;
+    const sy = vec.y + o.h + 1.6;
+    const dx = vec.tx - sx, dz = vec.tz - sz, d = Math.max(4, Math.hypot(dx, dz));
+    const t = Math.max(0.55, d / 44);                     // faster and flatter than the flayer's lob
+    vecThrown.push({ k: o.k, x: sx, y: sy, z: sz,
+                     vx: dx / t, vz: dz / t,
+                     vy: (supportHeight(vec.tx, vec.tz, 2) + 1.2 - sy + 0.5 * 26 * t * t) / t,
+                     spin: o.spin, roll: o.roll, t: 0, hit: 0, y0: o.y0 });
+    w.thrown = true; w.held = false;
+    playVecHurl();
+    return true;
+  }
+  const vecThrown = [];
+  function updateVecThrown(dt) {
+    for (let i = vecThrown.length - 1; i >= 0; i--) {
+      const T = vecThrown[i];
+      T.t += dt;
+      T.vy -= 26 * dt;
+      T.x += T.vx * dt; T.y += T.vy * dt; T.z += T.vz * dt;
+      T.roll += T.spin * dt;
+      const w = wrecks[T.k];
+      if (!w) { vecThrown.splice(i, 1); continue; }
+      if (!T.hit && Math.hypot(T.x - p.x, T.z - p.z) < 4.2 && Math.abs(T.y - p.y) < 4.2 && !dead && wState === WS.BACK) {
+        T.hit = 1;
+        applyDamage(V_THROW_DMG, null);
+        camShake = Math.max(camShake, 0.95);
+      }
+      const gy = supportHeight(T.x, T.z, T.y + 1);
+      if (T.y <= gy + 0.4 || T.t > 7) {
+        w.x = T.x; w.z = T.z; w.y = gy; w.rot += T.roll * 0.4; w.tilt = (Math.random() - 0.5) * 0.5;
+        w.thrown = false; w.held = false;
+        poseWrecks();
+        _vT.set(T.x, gy + 0.6, T.z); spawnImpact(_vT);
+        playMfCrash(Math.hypot(T.x - p.x, T.z - p.z), 0);
+        const near = Math.hypot(T.x - p.x, T.z - p.z);
+        if (near < 24) camShake = Math.max(camShake, 0.5 * (1 - near / 24));
+        vecThrown.splice(i, 1);
+        continue;
+      }
+      _vkE.set(T.roll, w.rot, T.roll * 0.6, 'YXZ');
+      _vkQ.setFromEuler(_vkE);
+      _vT.set(T.x, T.y, T.z);
+      _vkM.compose(_vT, _vkQ, _vkS);
+      carBodyI.setMatrixAt(T.k, _vkM);
+      carCabI.setMatrixAt(T.k, _vkM);
+      carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = true;
+    }
+  }
+  function updateVecOrbit(dt) {
+    if (!vec.orbit.length) return;
+    let dirty = false;
+    for (const o of vec.orbit) {
+      const w = wrecks[o.k]; if (!w) continue;
+      o.rise = Math.min(1, o.rise + dt * 1.1);
+      o.a += dt * 0.42;
+      o.roll += o.spin * dt * 0.35;
+      const e = o.rise * o.rise * (3 - 2 * o.rise);          // it comes up unwillingly, then hangs
+      const x = vec.x + Math.sin(o.a) * o.r, z = vec.z + Math.cos(o.a) * o.r;
+      const y = o.y0 + (vec.y + o.h - o.y0) * e + Math.sin(cityT * 0.9 + o.a) * 0.18 * e;
+      _vkE.set(o.roll * 0.5, w.rot + o.a * 0.3, o.roll, 'YXZ');
+      _vkQ.setFromEuler(_vkE);
+      _vT.set(x, y, z);
+      _vkM.compose(_vT, _vkQ, _vkS);
+      carBodyI.setMatrixAt(o.k, _vkM);
+      carCabI.setMatrixAt(o.k, _vkM);
+      dirty = true;
+    }
+    if (dirty) carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = true;
+  }
+
+  // ---- the grab ------------------------------------------------------
+  //  §15. Off your feet, dragged in, thrown. It hurts and it is frightening
+  //  and it is explicitly not a kill: the damage is fixed, it cannot take the
+  //  last of your health, and it always ends by letting go.
+  let psyHold = null;
+  function psyGrab() {
+    if (dead || psyHold) return false;
+    psyHold = { t: 0, ph: 'lift', y0: p.y, sx: p.x, sz: p.z, hurt: 0 };
+    playVecGrab();
+    notify('動けない', 1600);
+    return true;
+  }
+  function psyRelease(vyOut) {
+    if (!psyHold) return;
+    psyHold = null;
+    vy = vyOut || 0;
+    grounded = false;
+  }
+  function updatePsyHold(dt) {
+    const H = psyHold;
+    grounded = false;
+    H.t += dt;
+    const gy = supportHeight(p.x, p.z, p.y - EYE) + EYE;
+    if (H.ph === 'lift') {
+      //  up, and nothing you press about it
+      p.y += (H.y0 + 3.4 - p.y) * Math.min(1, dt * 3.4);
+      if (H.t > 0.85) { H.ph = 'drag'; H.t = 0; }
+    } else if (H.ph === 'drag') {
+      //  in, slowly, so there is time to understand what is happening
+      const tx = vec.x + Math.sin(vec.hd) * 6.5, tz = vec.z + Math.cos(vec.hd) * 6.5;
+      const k = Math.min(1, dt * 1.5);
+      p.x += (tx - p.x) * k; p.z += (tz - p.z) * k;
+      p.y += ((vec.y + 4.2) - p.y) * Math.min(1, dt * 2.0);
+      if (!H.hurt && H.t > 0.9) { H.hurt = 1; applyDamage(V_GRAB_DMG, null); }
+      if (H.t > 1.7) { H.ph = 'throw'; H.t = 0; }
+    } else {
+      //  and away. The throw is a real velocity — you land where physics puts you
+      const a = vec.hd + Math.PI + (Math.random() - 0.5) * 0.8;
+      psyRelease(9.5);
+      p.x += Math.sin(a) * 1.2; p.z += Math.cos(a) * 1.2;
+      camShake = Math.max(camShake, 1.1);
+      playVecHurl();
+      return;
+    }
+    if (p.y < gy) p.y = gy;
+    if (vec.dead || !vec.live || Math.hypot(vec.x - p.x, vec.z - p.z) > V_GRAB_R * 1.6) psyRelease(0);
+  }
+
+  // ---- the mental attack ---------------------------------------------
+  //  §16/§18. Everything here is generated by things that happened in this
+  //  session — where you have been standing, what has been hunting you — and
+  //  nothing about it reaches outside the game. §19 is a hard line, not a
+  //  preference: there is no model of the player here, only a record of the map.
+  let psyLevel = 0, psyLevelWant = 0, psyEchoT = 0;
+  const psyEl = { root: null };
+  function psyOnset(level, ms) {
+    psyLevelWant = Math.max(psyLevelWant, level);
+    psyEchoT = Math.max(psyEchoT, ms / 1000);
+  }
+  function updatePsyFx(dt) {
+    if (psyEchoT > 0) { psyEchoT -= dt; if (psyEchoT <= 0) psyLevelWant = 0; }
+    psyLevel += (psyLevelWant - psyLevel) * Math.min(1, dt * 1.6);
+    if (psyLevel < 0.002 && psyLevelWant === 0) psyLevel = 0;
+    if (!psyEl.root) psyEl.root = $('psy');
+    if (psyEl.root) {
+      psyEl.root.style.opacity = psyLevel.toFixed(3);
+      psyEl.root.classList.toggle('on', psyLevel > 0.02);
+    }
+    //  §52 audio muffle — the room goes quiet, which is worse than a noise
+    if (musicGain && audioReady()) {
+      try {
+        const want = (sfxOn ? bgmVol : 0) * (1 - psyLevel * 0.72);
+        musicGain.gain.setTargetAtTime(Math.max(0.0001, want), actx.currentTime, 0.35);
+      } catch (e) {}
+    }
+    //  §16 false footsteps: something walking that is not there, from a bearing
+    //  nothing is standing on
+    if (psyLevel > 0.25 && Math.random() < dt * 1.5) {
+      const pan = Math.random() * 2 - 1;
+      playMfStep(70 + Math.random() * 60, pan);
+    }
+  }
+
+  // ---- perception ----------------------------------------------------
+  //  §35: no wallhack. He sees what is in front of him and otherwise relies on
+  //  the hive, which is the whole design — his eyes are everyone else's.
+  const _vEye = new THREE.Vector3(), _vDir = new THREE.Vector3();
+  function vecSee() {
+    if (dead || wState !== WS.BACK) return 0;
+    const dx = p.x - vec.x, dz = p.z - vec.z, dist = Math.hypot(dx, dz);
+    vec.tdist = dist;
+    if (dist > V_SIGHT) return 0;
+    const rel = Math.atan2(dx, dz) - vec.hd;
+    let a = rel; while (a > Math.PI) a -= 6.2832; while (a < -Math.PI) a += 6.2832;
+    if (Math.abs(a) > 1.5 && dist > 14) return 0;
+    _vEye.set(vec.x, vec.y + V_HEIGHT - 0.6, vec.z);
+    _vDir.set(p.x - _vEye.x, (p.y - 0.5) - _vEye.y, p.z - _vEye.z);
+    const len = _vDir.length(); _vDir.normalize();
+    if (Math.min(rayCity(_vEye, _vDir), rayWrecks(_vEye, _vDir)) < len - 0.6) return 0;
+    return 1;
+  }
+
+  // ---- the decision --------------------------------------------------
+  //  §65 is the spine of this function. He does not hurry, he does not shout,
+  //  and he does not empty a spawn table at you — every state below has a
+  //  reason to exist that is about composure rather than about pressure.
+  const V_ST = ['dormant', 'observe', 'manipulate', 'command', 'hunt', 'combat', 'channel', 'stagger', 'dead'];
+  function vecPhaseOf(hp) {
+    const f = hp / V_HP;
+    let ph = 0;
+    for (let i = 0; i < V_PHASE.length; i++) if (f <= V_PHASE[i]) ph = i + 1;
+    return ph;
+  }
+  function vecThink(dt) {
+    vec.stT += dt;
+    vec.atkCd = Math.max(0, vec.atkCd - dt);
+    vec.stagger = Math.max(0, vec.stagger - dt * 1.5);
+    vec.vuln = Math.max(0, vec.vuln - dt);
+    vec.mentalT -= dt;
+    vec.voiceT -= dt;
+    if (vec.dead) { vec.deadT += dt; vec.sp = 0; return; }
+
+    vecCommand(dt);
+    const see = vecSee();
+    if (see > 0) { vec.see = see; vec.seeT = cityT; vec.hasT = true; vec.tx = p.x; vec.tz = p.z; }
+    else { vec.see = 0; vec.tdist = Math.hypot(p.x - vec.x, p.z - vec.z); }
+    const known = vec.hasT && cityT - vec.seeT < 26;
+    const dist = vec.tdist;
+    const fx = dist > 0.01 ? (vec.tx - vec.x) / dist : 0, fz = dist > 0.01 ? (vec.tz - vec.z) / dist : 1;
+    let lookX = vec.tx, lookZ = vec.tz;
+
+    //  §34: he may lean where you have been going. From position and velocity
+    //  only — this is a running average of your own movement, and there is
+    //  nothing in it he could not have watched.
+    { const vxp = (p.x - vec.lastPX) / Math.max(1e-3, dt), vzp = (p.z - vec.lastPZ) / Math.max(1e-3, dt);
+      vec.dodgeX += (vxp - vec.dodgeX) * Math.min(1, dt * 1.4);
+      vec.dodgeZ += (vzp - vec.dodgeZ) * Math.min(1, dt * 1.4);
+      vec.lastPX = p.x; vec.lastPZ = p.z; }
+
+    //  §36 phase transitions. Announced by the body, and by a moment of quiet
+    //  in which nothing is thrown at you.
+    const ph = vecPhaseOf(vec.hp);
+    if (ph !== vec.phase) {
+      vec.phase = ph;
+      vec.st = 'channel'; vec.stT = 0; vec.chan = 'phase';
+      vec.atkCd = Math.max(vec.atkCd, 1.4);
+      playVecPhase();
+      notify(ph >= 4 ? '空気が捻れている' : '何かが変わった', 2600);
+      psyOnset(ph >= 3 ? 0.7 : 0.42, 4200);
+    }
+    //  §16/§18: the psychological echo, on its own long clock
+    if (vec.mentalT <= 0 && known && dist < 180) {
+      vec.mentalT = 26 + Math.random() * 22 - vec.phase * 3;
+      psyOnset(0.30 + vec.phase * 0.10, 5200 + vec.phase * 900);
+      playVecWhisper();
+    }
+    if (vec.atk) { vecRunAtk(dt); return; }
+
+    switch (vec.st) {
+      case 'dormant': {
+        //  §27: he is not looking for you. He is here, and he is not in a hurry
+        //  about it, and if you walk past far enough away nothing happens at all.
+        vec.sp = 0;
+        vec.hoverWant = 0.25; vec.flareWant = 0.10; vec.mawWant = 0;
+        vec.armUpWant[0] = 0; vec.armUpWant[1] = 0;
+        lookX = vec.x + Math.sin(vec.hd + Math.sin(cityT * 0.11) * 0.5) * 30;
+        lookZ = vec.z + Math.cos(vec.hd + Math.sin(cityT * 0.11) * 0.5) * 30;
+        if (known && dist < 150) { vec.st = 'observe'; vec.stT = 0; vec.awake = true; }
+        break;
+      }
+      case 'observe': {
+        //  §28: he watches. Long enough that it is uncomfortable, and the first
+        //  thing that happens is not an attack — it is the street being tidied
+        //  up around you.
+        vec.sp = 0;
+        vec.hoverWant = 0.35; vec.flareWant = 0.28; vec.mawWant = 0;
+        if (vec.voiceT <= 0) { vec.voiceT = 14 + Math.random() * 12; playVecVoice(0); }
+        if (!known) { if (vec.stT > 8) { vec.st = 'dormant'; vec.stT = 0; vec.awake = false; } break; }
+        if (vec.stT > (vec.phase === 0 ? 5.5 : 2.2)) { vec.st = 'manipulate'; vec.stT = 0; }
+        break;
+      }
+      case 'manipulate': {
+        //  §29/§37: PHASE 1 is played entirely from here. He lifts the street,
+        //  he sends what is already out there, and he does not close the
+        //  distance himself — the fight arrives before he does.
+        vec.sp = 0;
+        vec.hoverWant = 0.55; vec.flareWant = 0.55;
+        vec.armUpWant[0] = 0.85; vec.armUpWant[1] = vec.phase >= 2 ? 0.85 : 0.2;
+        vec.spreadWant = 1; vec.gripWant = 0;
+        if (vec.stT > 1.0 && !vec.lifted) {
+          vec.lifted = 1;
+          vecLift(vec.phase >= 3 ? 4 : vec.phase >= 1 ? 3 : 2);
+        }
+        if (vec.stT > 2.6) {
+          vec.lifted = 0;
+          vec.st = vec.phase === 0 ? 'command' : 'hunt'; vec.stT = 0;
+        }
+        break;
+      }
+      case 'command': {
+        //  §39: the commander phase made visible — arms out, crown wide, and
+        //  everything within reach turns toward you at once.
+        vec.sp = 0;
+        vec.hoverWant = 0.8; vec.flareWant = 1; vec.archWant = 0.5;
+        vec.armUpWant[0] = 1; vec.armUpWant[1] = 1; vec.spreadWant = 1;
+        if (vec.stT > 0.8 && !vec.cmdDone) {
+          vec.cmdDone = 1; vec.cmdT = 0; vecCommand(0);
+          playVecCommand();
+          const n = vecHiveCount();
+          if (n > 0) notify('何かに命令している', 2400);
+        }
+        if (vec.stT > 2.4) { vec.cmdDone = 0; vec.archWant = 0; vec.st = 'hunt'; vec.stT = 0; }
+        break;
+      }
+      case 'hunt': {
+        //  §30/§31: he walks. He never runs, at any phase — the speed comes from
+        //  the reach of what he does, not from his legs.
+        if (!known) { vec.st = 'observe'; vec.stT = 0; break; }
+        const standoff = vec.phase >= 4 ? 10 : 20 - vec.phase * 2;
+        vec.hoverWant = vec.phase >= 3 ? 0.5 : 0.12;
+        vec.flareWant = 0.4 + vec.phase * 0.1;
+        vec.armUpWant[0] = vec.orbit.length ? 0.8 : 0.12;
+        vec.armUpWant[1] = 0.10; vec.spreadWant = vec.orbit.length ? 1 : 0.2;
+        vecStep(vec.tx - fx * standoff, vec.tz - fz * standoff, 1.55 + vec.phase * 0.22, dt);
+        if (vec.atkCd <= 0 && (vec.see > 0 || dist < 40)) vecChooseAtk(dist);
+        //  keeps the orbit topped up while he walks, which is §12's whole point:
+        //  the things around him are a wall as much as they are ammunition
+        if (vec.phase >= 2 && vec.orbit.length < 2 && Math.random() < dt * 0.35) vecLift(2);
+        break;
+      }
+      case 'combat': vec.st = 'hunt'; vec.stT = 0; break;
+      case 'channel': {
+        //  §40: the phase turn. He is not attacking and cannot be hurried, and
+        //  the arena is loud enough that you know to back away from it.
+        vec.sp = 0;
+        vec.hoverWant = 1; vec.flareWant = 1; vec.archWant = 1;
+        vec.armUpWant[0] = 1; vec.armUpWant[1] = 1; vec.spreadWant = 1; vec.mawWant = 0.8;
+        if (vec.stT > 1.2 && !vec.chanDone) {
+          vec.chanDone = 1;
+          vecLift(Math.min(V_ORBIT_MAX, 2 + vec.phase));
+          vec.cmdT = 0; vecCommand(0);
+        }
+        if (vec.stT > 3.0) {
+          vec.chanDone = 0; vec.archWant = 0; vec.mawWant = 0;
+          vec.st = 'hunt'; vec.stT = 0;
+          //  §58: the window. He has just done something enormous and for a
+          //  moment there is nothing behind it.
+          vec.vuln = 2.2;
+        }
+        break;
+      }
+      default: vec.st = 'dormant'; vec.stT = 0;
+    }
+    if (vec.st !== 'command' && vec.st !== 'channel') vec.archWant = 0;
+
+    { const rel = Math.atan2(lookX - vec.x, lookZ - vec.z) - vec.hd;
+      let a = rel; while (a > Math.PI) a -= 6.2832; while (a < -Math.PI) a += 6.2832;
+      vec.headYawWant = Math.max(-1.1, Math.min(1.1, a));
+      const dz2 = Math.hypot(lookX - vec.x, lookZ - vec.z);
+      vec.headPitchWant = Math.max(-0.8, Math.min(0.7, Math.atan2(1.6 - V_HEIGHT, Math.max(4, dz2)) * 1.4));
+      vec.aimYaw = vec.headYawWant * 0.5;
+      vec.aimPitch = vec.headPitchWant * 0.4;
+    }
+  }
+
+  // ---- attacks -------------------------------------------------------
+  //  §58: every one of these ends in a window. The wind-up is long, the
+  //  recovery is longer, and the recovery is when he can be hurt properly —
+  //  which is §57's answer to "do not make him a health bar".
+  const V_ATK = {
+    wave:  { wind: 1.15, act: 0.28, rec: 0.95, cd: 6.5, vuln: 1.5 },
+    limb:  { wind: 0.62, act: 0.34, rec: 0.70, cd: 4.2, vuln: 0.9 },
+    hurl:  { wind: 0.55, act: 0.22, rec: 0.50, cd: 2.6, vuln: 0.5 },
+    grab:  { wind: 1.05, act: 0.30, rec: 1.10, cd: 12.0, vuln: 1.8 },
+  };
+  function vecChooseAtk(dist) {
+    //  §33: distance picks, and the combination emerges from it rather than
+    //  from a scripted chain — close he strikes, mid he throws, far he pulls.
+    const opts = [];
+    if (dist < V_LIMB_R) opts.push('limb', 'limb');
+    if (dist < V_WAVE_R && vec.phase >= 1) opts.push('wave');
+    if (vec.orbit.length) opts.push('hurl', 'hurl');
+    if (dist > 12 && dist < V_GRAB_R && vec.phase >= 2 && !psyHold) opts.push('grab');
+    if (!opts.length) { vec.atkCd = 1.5; return; }
+    vecStartAtk(opts[(Math.random() * opts.length) | 0]);
+  }
+  function vecStartAtk(kind) {
+    const side = Math.random() < 0.5 ? 0 : 1;
+    vec.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0 };
+    vec.st = 'combat'; vec.stT = 0;
+    if (kind === 'wave') playVecCharge();
+    else if (kind === 'grab') playVecCharge();
+  }
+  function vecRunAtk(dt) {
+    const a = vec.atk, A = V_ATK[a.kind];
+    a.t += dt;
+    const dist = Math.hypot(p.x - vec.x, p.z - vec.z);
+    vec.tdist = dist;
+    if (vec.see > 0 || dist < 30) { vec.tx = p.x; vec.tz = p.z; }
+    //  he always faces what he is about to do
+    { const want = Math.atan2(vec.tx - vec.x, vec.tz - vec.z);
+      easeHeading(vec, want, dt, 2.4, 1.5); }
+    vec.sp = 0;
+    const wind = A.wind, act = wind + A.act, done = act + A.rec;
+
+    if (a.kind === 'wave') {
+      //  §8: charge, pressure, release. Both arms come in and then open — the
+      //  crown folds forward on the wind-up and snaps back on the beat, which
+      //  is the read the player has to learn.
+      if (a.t < wind) {
+        const u = a.t / wind;
+        vec.hoverWant = 0.9; vec.flareWant = 1 - u * 0.8;
+        vec.armUpWant[0] = 0.55 + u * 0.35; vec.armUpWant[1] = 0.55 + u * 0.35;
+        vec.spreadWant = 0.1; vec.gripWant = u * 0.6;
+        vec.armExtWant[0] = 0; vec.armExtWant[1] = 0;
+        if (!a.sfx && a.t > wind * 0.5) { a.sfx = 1; psyOnset(0.34, 900); }
+      } else if (a.t < act) {
+        vec.flareWant = 1; vec.spreadWant = 1; vec.gripWant = 0;
+        vec.armUpWant[0] = 0.75; vec.armUpWant[1] = 0.75;
+        if (!a.hit) {
+          a.hit = 1;
+          playVecWave();
+          camShake = Math.max(camShake, 1.15);
+          psyOnset(0.5, 1400);
+          if (dist < V_WAVE_R && !dead && wState === WS.BACK) {
+            //  §8: damage falls off, knockback does not disappear, and it is a
+            //  physics impulse rather than a teleport — you are thrown, and you
+            //  land where the ground is
+            const f = 1 - dist / V_WAVE_R;
+            applyDamage(Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), null);
+            const ax = (p.x - vec.x) / Math.max(1, dist), az = (p.z - vec.z) / Math.max(1, dist);
+            if (psyHold) psyRelease(6);
+            p.x += ax * 5.5 * f; p.z += az * 5.5 * f;
+            vy = Math.max(vy, 6.5 * f + 2.2);
+            grounded = false;
+          }
+          //  §43: the arena moves too. Anything he is holding is flung outward.
+          for (const o of vec.orbit) o.r = Math.min(14, o.r + 4);
+        }
+      } else {
+        const u = (a.t - act) / A.rec;
+        vec.armUpWant[0] = 0.75 * (1 - u); vec.armUpWant[1] = 0.75 * (1 - u);
+        vec.flareWant = 1 - u * 0.5;
+      }
+    } else if (a.kind === 'limb') {
+      //  §13/§14: Normal → Stretch → Extended → Strike → Retract, and the arm
+      //  is genuinely longer while it happens.
+      const i = a.side;
+      if (a.t < wind) {
+        const u = a.t / wind;
+        vec.armUpWant[i] = 0.55; vec.armExtWant[i] = u * 0.25;
+        vec.gripWant = 0.15; vec.spreadWant = 1 - u;
+        vec.hoverWant = 0.25;
+      } else if (a.t < act) {
+        const u = (a.t - act + A.act) / A.act;
+        vec.armUpWant[i] = 0.62;
+        vec.armExtWant[i] = 0.25 + u * 0.75;               // out
+        vec.gripWant = 0.2 + u * 0.7;
+        if (!a.sfx) { a.sfx = 1; playVecLimb(); }
+        if (!a.hit && u > 0.35 && dist < V_LIMB_R * (0.5 + ext01(vec.armExt[i])) && !dead && wState === WS.BACK) {
+          a.hit = 1;
+          applyDamage(V_LIMB_DMG, null);
+          camShake = Math.max(camShake, 0.7);
+          const ax = (p.x - vec.x) / Math.max(1, dist), az = (p.z - vec.z) / Math.max(1, dist);
+          p.x += ax * 2.6; p.z += az * 2.6;
+          vy = Math.max(vy, 4.2);
+          grounded = false;
+        }
+      } else {
+        const u = (a.t - act) / A.rec;
+        vec.armExtWant[i] = 1 - u;                          // retract
+        vec.armUpWant[i] = 0.62 * (1 - u);
+        vec.gripWant = 0.9 * (1 - u);
+      }
+    } else if (a.kind === 'hurl') {
+      const i = a.side;
+      if (a.t < wind) {
+        vec.armUpWant[i] = 0.9; vec.spreadWant = 0.2; vec.gripWant = 0.8;
+        vec.hoverWant = Math.max(vec.hoverWant, 0.4);
+      } else if (a.t < act) {
+        if (!a.hit) { a.hit = 1; vec.armUpWant[i] = 0.4; vec.gripWant = 0; vec.spreadWant = 1; vecHurl(); }
+      } else {
+        const u = (a.t - act) / A.rec;
+        vec.armUpWant[i] = 0.4 * (1 - u); vec.spreadWant = 1 - u;
+      }
+    } else if (a.kind === 'grab') {
+      const i = a.side;
+      if (a.t < wind) {
+        const u = a.t / wind;
+        vec.armUpWant[i] = 0.9 + u * 0.1; vec.spreadWant = 1;
+        vec.armExtWant[i] = u * 0.30; vec.hoverWant = 0.7; vec.flareWant = 0.8;
+        if (!a.sfx && a.t > wind * 0.55) { a.sfx = 1; psyOnset(0.4, 1200); }
+      } else if (a.t < act) {
+        if (!a.hit) {
+          a.hit = 1;
+          vec.gripWant = 1; vec.spreadWant = 0;
+          if (dist < V_GRAB_R && !dead && wState === WS.BACK && vecSee()) psyGrab();
+          else playVecLimb();
+        }
+      } else {
+        const u = (a.t - act) / A.rec;
+        vec.armUpWant[i] = 1 - u; vec.armExtWant[i] = 0.30 * (1 - u); vec.gripWant = 1 - u;
+      }
+    }
+
+    if (a.t >= done) {
+      vec.atk = null;
+      vec.atkCd = A.cd * (vec.phase >= 3 ? 0.72 : 1);
+      vec.vuln = A.vuln;                                  // §58
+      vec.armExtWant[0] = 0; vec.armExtWant[1] = 0;
+      vec.gripWant = 0; vec.spreadWant = 0;
+      vec.st = 'hunt'; vec.stT = 0;
+    }
+  }
+  const ext01 = (e) => 1 + e * V_EXT * 0.55;
+
+  // ---- movement ------------------------------------------------------
+  function vecStep(tx, tz, speed, dt) {
+    const dx = tx - vec.x, dz = tz - vec.z, dd = Math.hypot(dx, dz);
+    if (dd < 2.2) { vec.sp = 0; return dd; }
+    const ux = dx / dd, uz = dz / dd;
+    //  §65: a slow turn and a slower walk. He arrives when he arrives.
+    easeHeading(vec, Math.atan2(ux, uz), dt, 1.5, 0.85);
+    const bx = vec.x, bz = vec.z;
+    vec.x += Math.sin(vec.hd) * speed * dt; vec.z += Math.cos(vec.hd) * speed * dt;
+    vec.x = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, vec.x));
+    vec.z = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, vec.z));
+    _vT.set(vec.x, vec.y, vec.z);
+    cityCollide(_vT, vec.y, vec.y + 2.4, 1.0);
+    vec.x = _vT.x; vec.z = _vT.z;
+    vec.sp = dt > 1e-5 ? Math.hypot(vec.x - bx, vec.z - bz) / dt : 0;
+    vec.y += (supportHeight(vec.x, vec.z, vec.y + 1) - vec.y) * Math.min(1, dt * 4);
+    return dd;
+  }
+
+  // ---- damage --------------------------------------------------------
+  function hurtVecna(dmg, fromX, fromZ) {
+    if (!vec.live || vec.dead) return;
+    //  §58: the window is the weapon. Catch him in the recovery of something
+    //  big and the same bullet is worth two and a half.
+    const mult = vec.vuln > 0 ? 2.5 : 1;
+    vec.hp -= dmg * mult;
+    vec.awake = true;
+    vec.hasT = true; vec.tx = fromX; vec.tz = fromZ; vec.seeT = cityT;
+    //  §65: he is very hard to interrupt, and only while he is already exposed
+    if (vec.vuln > 0 && dmg * mult > 60) vec.stagger = 1;
+    else vec.stagger = Math.max(vec.stagger, 0.12);
+    if (vec.hp <= 0) { killVecna(); return; }
+    playVecHurt();
+    if (vec.st === 'dormant' || vec.st === 'observe') { vec.st = 'manipulate'; vec.stT = 0; }
+    //  §53: hurting him drives everything of his
+    vec.cmdT = 0;
+  }
+  function killVecna() {
+    //  §59: not a body falling over. The network goes first — everything he was
+    //  holding drops out of the air — then the world, then him.
+    vec.dead = true; vec.deadT = 0; vec.hp = 0; vec.sp = 0; vec.atk = null;
+    vec.hoverWant = 0; vec.flareWant = 0; vec.archWant = 0;
+    psyRelease(0);
+    vecDropOrbit();
+    playVecDeath();
+    camShake = Math.max(camShake, 1.6);
+    psyOnset(0.85, 4200);
+    for (const m of flayers) if (m.live && !m.dead && Math.hypot(m.x - vec.x, m.z - vec.z) <= V_LINK) { m.panicked = true; m.st = 'flee'; m.stT = 0; m.fleeT = 30; }
+    for (const d of dogs) if (d.live && !d.dead && Math.hypot(d.x - vec.x, d.z - vec.z) <= V_LINK) { d.st = 'flee'; d.stT = 0; }
+    _vT.set(vec.x, vec.y + 2.6, vec.z); spawnImpact(_vT);
+    notify('王が倒れた', 4200);
+  }
+
+  // ---- audio ---------------------------------------------------------
+  //  §50: quiet, low, spatial, wrong. Nothing here roars — the loudest thing he
+  //  owns is the wave, and even that is a pressure drop rather than a shout.
+  function vecPan() {
+    camera.getWorldDirection(_rd);
+    const rx = _rd.z, rz = -_rd.x;
+    const dx = vec.x - p.x, dz = vec.z - p.z, l = Math.hypot(dx, dz) || 1;
+    return Math.max(-1, Math.min(1, (dx / l * rx + dz / l * rz) * 1.1));
+  }
+  function vecBus(reach, vol) {
+    if (!audioReady()) return null;
+    const v = Math.max(0, 1 - vec.tdist / reach) * vol;
+    if (v <= 0.002) return null;
+    const g = actx.createGain(); g.gain.value = v;
+    const pan = actx.createStereoPanner ? actx.createStereoPanner() : null;
+    if (pan) { pan.pan.value = vecPan(); g.connect(pan); pan.connect(master); }
+    else g.connect(master);
+    return g;
+  }
+  function vecTone(dest, f0, f1, t, dur, type, vol, atk) {
+    const o = actx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + (atk || 0.02));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function playVecStep() {
+    const g = vecBus(150, 0.5); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 60, 32, t, 0.34, 'sine', 0.5, 0.006);
+  }
+  function playVecLift() {
+    const g = vecBus(220, 0.55); if (!g) return;
+    const t = actx.currentTime;
+    //  §9: space being compressed, not a spell being cast — a rising sweep with
+    //  its own shadow a tritone below, so it never resolves into a note
+    vecTone(g, 40, 150, t, 1.5, 'sawtooth', 0.10, 0.5);
+    vecTone(g, 56.6, 212, t, 1.5, 'sine', 0.06, 0.6);
+  }
+  function playVecHurl() {
+    const g = vecBus(220, 0.6); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 220, 46, t, 0.42, 'sawtooth', 0.16, 0.006);
+  }
+  function playVecCharge() {
+    const g = vecBus(230, 0.6); if (!g) return;
+    const t = actx.currentTime;
+    //  the intake. Everything nearby is being drawn toward one point.
+    vecTone(g, 34, 96, t, 1.1, 'sine', 0.16, 0.7);
+    vecTone(g, 51, 143, t, 1.1, 'triangle', 0.07, 0.8);
+  }
+  function playVecWave() {
+    const g = vecBus(260, 0.85); if (!g) return;
+    const t = actx.currentTime;
+    const n = actx.createBufferSource(), len = Math.floor(actx.sampleRate * 1.1);
+    const b = actx.createBuffer(1, len, actx.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.6);
+    n.buffer = b;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2400, t); lp.frequency.exponentialRampToValueAtTime(90, t + 0.9);
+    const ng = actx.createGain(); ng.gain.value = 0.5;
+    n.connect(lp); lp.connect(ng); ng.connect(g);
+    n.start(t); n.stop(t + 1.1);
+    vecTone(g, 90, 24, t, 0.9, 'sine', 0.34, 0.004);
+  }
+  function playVecLimb() {
+    const g = vecBus(160, 0.55); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 300, 70, t, 0.30, 'sawtooth', 0.12, 0.006);
+  }
+  function playVecGrab() {
+    const g = vecBus(200, 0.75); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 150, 400, t, 0.55, 'sine', 0.16, 0.02);
+    vecTone(g, 212, 566, t, 0.55, 'sine', 0.07, 0.03);      // the tritone again
+  }
+  function playVecCommand() {
+    const g = vecBus(280, 0.6); if (!g) return;
+    const t = actx.currentTime;
+    //  not a shout — a single low note the whole district can feel
+    vecTone(g, 27.5, 27.5, t, 2.2, 'sine', 0.30, 0.25);
+    vecTone(g, 41.2, 41.2, t, 2.2, 'sine', 0.12, 0.35);
+  }
+  function playVecPhase() {
+    const g = vecBus(300, 0.8); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 120, 20, t, 2.6, 'sawtooth', 0.14, 0.03);
+    vecTone(g, 27.5, 27.5, t, 2.6, 'sine', 0.28, 0.6);
+  }
+  //  §51: he speaks rarely and briefly. Formants, not words — two vowel peaks
+  //  moving over a low voiced tone, which the ear reads as speech without ever
+  //  becoming a language.
+  function playVecVoice(kind) {
+    const g = vecBus(120, 0.55); if (!g) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(72, t);
+    o.frequency.linearRampToValueAtTime(kind ? 58 : 66, t + 0.9);
+    const f1 = actx.createBiquadFilter(); f1.type = 'peaking'; f1.Q.value = 7; f1.gain.value = 22;
+    f1.frequency.setValueAtTime(520, t); f1.frequency.linearRampToValueAtTime(360, t + 0.9);
+    const f2 = actx.createBiquadFilter(); f2.type = 'peaking'; f2.Q.value = 9; f2.gain.value = 18;
+    f2.frequency.setValueAtTime(1180, t); f2.frequency.linearRampToValueAtTime(880, t + 0.9);
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
+    const vg = actx.createGain();
+    vg.gain.setValueAtTime(0.0001, t);
+    vg.gain.exponentialRampToValueAtTime(0.10, t + 0.10);
+    vg.gain.setValueAtTime(0.10, t + 0.55);
+    vg.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
+    o.connect(f1); f1.connect(f2); f2.connect(lp); lp.connect(vg); vg.connect(g);
+    o.start(t); o.stop(t + 1.0);
+  }
+  function playVecWhisper() {
+    const g = vecBus(140, 0.6); if (!g) return;
+    const t = actx.currentTime;
+    const n = actx.createBufferSource(), len = Math.floor(actx.sampleRate * 1.8);
+    const b = actx.createBuffer(1, len, actx.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1);
+    n.buffer = b;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 5;
+    bp.frequency.setValueAtTime(900, t); bp.frequency.linearRampToValueAtTime(1900, t + 1.6);
+    const ng = actx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.055, t + 0.5);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
+    n.connect(bp); bp.connect(ng); ng.connect(g);
+    n.start(t); n.stop(t + 1.85);
+  }
+  function playVecHurt() {
+    const g = vecBus(150, 0.5); if (!g) return;
+    const t = actx.currentTime;
+    vecTone(g, 160, 60, t, 0.26, 'triangle', 0.13, 0.005);
+  }
+  function playVecDeath() {
+    const g = vecBus(400, 1.0); if (!g) return;
+    const t = actx.currentTime;
+    //  §59: the network, then the world, then the body. Three sweeps, each one
+    //  lower and longer than the last.
+    vecTone(g, 900, 120, t, 1.4, 'sawtooth', 0.14, 0.02);
+    vecTone(g, 220, 34, t + 0.9, 2.4, 'sine', 0.26, 0.05);
+    vecTone(g, 60, 14, t + 2.4, 3.4, 'sine', 0.34, 0.2);
+  }
+  //  the drone that is always on while he is anywhere near — §52's "felt
+  //  before seen", and it is doing most of the work
+  let vecBed = null;
+  function vecBedOn() {
+    if (vecBed || !audioReady()) return;
+    try {
+      const out = actx.createGain(); out.gain.value = 0.0001; out.connect(master);
+      const a = actx.createOscillator(); a.type = 'sine'; a.frequency.value = 18.5;
+      const b = actx.createOscillator(); b.type = 'sine'; b.frequency.value = 19.1;   // a slow beat between them
+      const c = actx.createOscillator(); c.type = 'triangle'; c.frequency.value = 55.5;
+      const cg = actx.createGain(); cg.gain.value = 0.10;
+      a.connect(out); b.connect(out); c.connect(cg); cg.connect(out);
+      a.start(); b.start(); c.start();
+      vecBed = { out, a, b, c };
+    } catch (e) { vecBed = null; }
+  }
+  function vecBedOff() {
+    if (!vecBed) return;
+    try { vecBed.out.gain.setTargetAtTime(0.0001, actx.currentTime, 0.6);
+      const B = vecBed;
+      setTimeout(() => { try { B.a.stop(); B.b.stop(); B.c.stop(); } catch (e) {} }, 1400);
+    } catch (e) {}
+    vecBed = null;
+  }
+
+  // ---- the frame -----------------------------------------------------
+  function updateVecna(dt) {
+    if (wState !== WS.BACK) {
+      if (vecOn) {
+        vecOn = false; clearVecna(); vecBedOff();
+        vecThrown.length = 0;
+        psyLevelWant = 0; psyEchoT = 0;
+        for (const q of vecParts) { q.visible = false; q.instanceMatrix.needsUpdate = true; }
+      }
+      updatePsyFx(dt);
+      vecReleaseBar();
+      return;
+    }
+    if (!vecOn) { vecOn = true; for (const q of vecParts) q.visible = true; }
+    const mine = mobSim();
+    updateVecThrown(dt);
+    updatePsyFx(dt);
+
+    if (mine && !vec.live && !vecHoldSpawn) {
+      //  §61: one, and he takes his time about turning up
+      vecSpawnCd -= dt;
+      if (vecSpawnCd <= 0) { vecSpawnCd = 260 + Math.random() * 180; spawnVecna(); }
+    }
+    if (!vec.live) { if (vecDrawn) vecHide(); vecBedOff(); vecReleaseBar(); return; }
+    if (vec.dead && vec.deadT > 26) { clearVecna(); vecBedOff(); vecReleaseBar(); return; }
+
+    vecFrame++;
+    const dx = vec.x - p.x, dz = vec.z - p.z, d2 = dx * dx + dz * dz;
+    vec.lod = d2 < 22500 ? 0 : d2 < 90000 ? 1 : 2;          // 150 m / 300 m
+    if (vec.pinned) {
+      //  debug hold: pose exactly what was set and get out before the easing,
+      //  which would otherwise pull every value back to rest between the pin and
+      //  the screenshot
+      poseVecna(vec, dt, true); writeVecna();
+      for (const q of vecParts) q.instanceMatrix.needsUpdate = true;
+      vecDrawn = true;
+      return;
+    }
+    if (mine) {
+      //  §61: combat runs every frame, the rest does not
+      const every = (vec.atk || vec.st === 'hunt' || vec.st === 'combat') ? 1 : vec.lod === 0 ? 1 : vec.lod === 1 ? 3 : 8;
+      if (vecFrame % every === 0) vecThink(dt * every);
+      vec.rx = vec.x; vec.rz = vec.z;
+      updateVecOrbit(dt);
+    } else {
+      easePose(vec, vec.netX, vec.netZ, vec.netH, dt, 7, 20, 5, 3);
+      vec.x = vec.rx; vec.z = vec.rz;
+      vec.y += (supportHeight(vec.x, vec.z, vec.y + 1) - vec.y) * Math.min(1, dt * 4);
+      vec.sp = vec.rspd; vec.tdist = Math.hypot(dx, dz);
+      vec.stagger = Math.max(0, vec.stagger - dt * 1.5);
+      if (vec.dead) vec.deadT += dt;
+      //  followers infer the posture from the state word, which is all the
+      //  snapshot carries — cheap, and it never disagrees about where he is
+      const busy = vec.st === 'channel' || vec.st === 'command';
+      vec.hoverWant = busy ? 1 : vec.st === 'dormant' ? 0.25 : 0.4;
+      vec.flareWant = busy ? 1 : 0.4;
+      vec.archWant = busy ? 0.8 : 0;
+      vec.armUpWant[0] = busy ? 1 : 0.1; vec.armUpWant[1] = busy ? 1 : 0.1;
+      vec.spreadWant = busy ? 1 : 0.2;
+      vec.headYawWant = 0; vec.headPitchWant = 0;
+    }
+
+    //  everything the animator reads is eased, never snapped — this is most of
+    //  why he reads as composed rather than as a state machine wearing a body
+    const ez = Math.min(1, dt * 3.2);
+    vec.headYaw += ((vec.headYawWant || 0) - vec.headYaw) * ez;
+    vec.headPitch += ((vec.headPitchWant || 0) - vec.headPitch) * ez;
+    vec.hover += ((vec.hoverWant || 0) - vec.hover) * Math.min(1, dt * 1.6);
+    vec.flare += ((vec.flareWant || 0) - vec.flare) * Math.min(1, dt * 2.0);
+    vec.arch += ((vec.archWant || 0) - vec.arch) * Math.min(1, dt * 2.2);
+    vec.grip += ((vec.gripWant || 0) - vec.grip) * Math.min(1, dt * 7);
+    vec.spread += ((vec.spreadWant || 0) - vec.spread) * Math.min(1, dt * 5);
+    vec.maw += ((vec.mawWant || 0) - vec.maw) * Math.min(1, dt * 3.5);
+    for (let i = 0; i < 2; i++) {
+      vec.armUp[i] += ((vec.armUpWant[i] || 0) - vec.armUp[i]) * Math.min(1, dt * 4.5);
+      vec.armExt[i] += ((vec.armExtWant[i] || 0) - vec.armExt[i]) * Math.min(1, dt * 9);
+    }
+    vec.lean += ((vec.sp > 0.3 ? 0.06 : 0) - vec.lean) * Math.min(1, dt * 3);
+
+    if (!vec.dead) {
+      vec.gaitPh = (vec.gaitPh + dt * Math.max(vec.sp < 0.2 ? 0 : 0.16, vec.sp / 2.6) * 0.62) % 1;
+      if (vec.sp > 0.35 && vec.hover < 0.4) {
+        const beat = Math.floor(vec.gaitPh * 2);
+        if (beat !== vec.stepBeat) {
+          vec.stepBeat = beat;
+          playVecStep();
+          if (vec.tdist < 30) camShake = Math.max(camShake, 0.14 * (1 - vec.tdist / 30));
+        }
+      }
+    }
+
+    //  §49: the ember comes up with the effort — holding the street in the air
+    //  is what lights him, and at rest there is nothing to see
+    const eff = Math.min(1, vec.orbit.length * 0.22 + vec.arch * 0.7 + (vec.atk ? 0.45 : 0) + vec.flare * 0.18);
+    const bolt = boltFlash * boltFlash;
+    for (const mt of [vecSkinMat, vecVineMat, vecBoneMat]) {
+      mt.uniforms.uBolt.value = bolt;
+      mt.uniforms.uAmb.value = 0.26 * BACK_LIT + bolt * 0.6;
+      mt.uniforms.uFogCol.value.copy(scene.fog.color);
+      mt.uniforms.uFogDens.value = FOG_DENSITY * 2.1;
+      mt.uniforms.uTime.value = cityT;
+      mt.uniforms.uGlow.value = eff * 0.85;
+    }
+
+    if (vec.lod >= 2 && !vec.dead) { if (vecDrawn) vecHide(); }
+    else {
+      poseVecna(vec, dt, vec.lod === 0);
+      writeVecna();
+      for (const q of vecParts) q.instanceMatrix.needsUpdate = true;
+      vecDrawn = true;
+    }
+
+    //  §52 presence, and the bar
+    if (vecPresent()) {
+      vecBedOn();
+      if (vecBed) { try { vecBed.out.gain.value = Math.max(0, 1 - vec.tdist / 250) * 0.6 * sfxVol; } catch (e) {} }
+    } else vecBedOff();
+    if (!vecEl.name) vecEl.name = $('boss-name');
+    const show = vec.live && !vec.dead && vec.awake && vec.tdist < 170 && (vec.hasT && cityT - vec.seeT < 26);
+    if (show && bossEl) {
+      bossEl.classList.add('on', 'king');
+      bossEl.classList.remove('rage');
+      if (vecEl.name) vecEl.name.textContent = 'VECNA';
+      if (bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, vec.hp / V_HP).toFixed(3) + ')';
+      vecBarOwns = true;
+    } else vecReleaseBar();
+  }
+  //  hand the bar back to the commander, whose own update runs before this one
+  //  and will put it up again next frame if it still wants it
+  function vecReleaseBar() {
+    if (!vecBarOwns) return;
+    vecBarOwns = false;
+    if (bossEl) bossEl.classList.remove('on', 'king');
+    if (!vecEl.name) vecEl.name = $('boss-name');
+    if (vecEl.name) vecEl.name.textContent = 'MIND FLAYER';
+  }
+
+  // ---- network -------------------------------------------------------
+  //  §60: the owner decides everything that matters and the rest is presentation.
+  //  Eight integers, once per snapshot, in the same message as everything else.
+  function vecSnapshot() {
+    if (!vec.live) return null;
+    const h = (((vec.hd || 0) % 6.2832) + 6.2832) % 6.2832;
+    return [Math.round(vec.x * 10), Math.round(vec.z * 10), Math.round(h * HDQ),
+            Math.max(0, Math.round(vec.hp)), V_ST.indexOf(vec.st) + 1,
+            (vec.dead ? 1 : 0) | (vec.awake ? 2 : 0), vec.phase, vec.orbit.length];
+  }
+  function applyVecSnapshot(k) {
+    if (!k) { if (vec.live) clearVecna(); return; }
+    if (!vec.live) {
+      spawnVecna({ x: k[0] / 10, z: k[1] / 10 });
+      vec.rx = vec.x = k[0] / 10; vec.rz = vec.z = k[1] / 10;
+    }
+    vec.netX = k[0] / 10; vec.netZ = k[1] / 10; vec.netH = k[2] / HDQ;
+    //  same bargain as the others: a follower that just shot him keeps its own
+    //  lower number for a moment, so the bar does not blink back up before the
+    //  owner's snapshot has caught up with the damage
+    vec.hp = (vec.hpHold && performance.now() < vec.hpHold) ? Math.min(vec.hp, k[3]) : k[3];
+    const st = V_ST[k[4] - 1];
+    if (st && st !== vec.st) {
+      if (st === 'command') playVecCommand();
+      if (st === 'channel') playVecPhase();
+      vec.st = st; vec.stT = 0;
+    }
+    if ((k[5] & 1) && !vec.dead) { vec.dead = true; vec.deadT = 0; vecDropOrbit(); playVecDeath(); }
+    vec.awake = !!(k[5] & 2);
+    vec.phase = k[6] || 0;
+  }
+  function sendVecHit(dmg) {
+    if (!MP.connected || !MP.client || mobPub()) return;
+    vec.hpHold = performance.now() + 1200;
+    try { MP.client.publish(mtopic('vhit'), JSON.stringify({ d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
+  }
+  function onVecHit(msg) {
+    if (!vec.live || vec.dead) return;
+    hurtVecna(msg.d || 0, msg.x, msg.z);
+  }
+  function vecDebug() {
+    return { live: !!vec.live, st: vec.st || '-', phase: vec.phase | 0,
+             hp: Math.round(vec.hp || 0), awake: !!vec.awake, hover: +(vec.hover || 0).toFixed(2),
+             orbit: vec.orbit ? vec.orbit.length : 0, flying: vecThrown.length,
+             hive: vec.live ? vecHiveCount() : 0, vuln: +(vec.vuln || 0).toFixed(2),
+             held: !!psyHold, psy: +psyLevel.toFixed(2), d: Math.round(vec.tdist || 0) };
   }
 
   // ── red lightning ─────────────────────────────────────────────────
@@ -8199,6 +9726,7 @@
     updateDogs(dt);                          // and it clears them out when you leave
     updateGorgons(dt);
     updateFlayers(dt);
+    updateVecna(dt);                         // and the king outranks all of it
     if (wState === WS.BACK) {
       updateSpores(dt);
       // a bolt throws the whole city into relief for a few frames
@@ -8440,7 +9968,8 @@
     if (fdot < -0.12) strideDir = -1; else if (fdot > 0.12) strideDir = 1;
 
     const mag = Math.min(mv.length(), 1);
-    const moving = mag > 0.06 && !dead;
+    const held = !!psyHold;                      // §15: off your feet, and the stick does nothing
+    const moving = mag > 0.06 && !dead && !held;
     const running = kbRun || mag > 0.85;
     if (moving) {
       const speed = running ? RUN : WALK;
@@ -8459,11 +9988,17 @@
     if (wState === WS.BACK) wreckCollide(p, PRAD);   // and the dead traffic is solid
 
     // --- gravity + ground (street, floor slabs, or stairs) ---
-    vy -= GRAV * dt;
-    p.y += vy * dt;
-    const floor = supportHeight(p.x, p.z, p.y - EYE) + EYE;
-    if (p.y <= floor) { p.y = floor; vy = 0; grounded = true; }
-    else grounded = false;
+    //  While he has hold of you there is no gravity to speak of: the grab drives
+    //  the position outright and hands you back with the velocity it let go at,
+    //  so the fall afterwards is a real fall and not a teleport.
+    if (held) { updatePsyHold(dt); }
+    else {
+      vy -= GRAV * dt;
+      p.y += vy * dt;
+      const floor = supportHeight(p.x, p.z, p.y - EYE) + EYE;
+      if (p.y <= floor) { p.y = floor; vy = 0; grounded = true; }
+      else grounded = false;
+    }
 
     // landing squash + walk-cycle phase
     if (!prevGrounded && grounded) landTimer = 0.16;
