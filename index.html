@@ -468,6 +468,28 @@
   }
   #gate-prompt.on { display: flex; }
   #rage span { color: #fff; font-variant-numeric: tabular-nums; }
+  /* the commander's health — present, but not a numeric readout stuck over the world */
+  #boss {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    top: calc(60px + env(safe-area-inset-top)); width: min(52vw, 420px);
+    display: none; pointer-events: none; text-align: center;
+  }
+  #boss.on { display: block; }
+  #boss b {
+    display: block; font-size: 10px; letter-spacing: .34em; font-weight: 600;
+    color: #e6b9ae; text-shadow: 0 0 10px rgba(180,40,26,.7); margin-bottom: 5px;
+  }
+  #boss i {
+    display: block; height: 5px; border-radius: 3px; overflow: hidden;
+    background: rgba(24,8,6,.72); box-shadow: 0 0 14px rgba(190,40,24,.35) inset;
+    border: 1px solid rgba(190,70,50,.42);
+  }
+  #boss i u {
+    display: block; height: 100%; width: 100%; transform-origin: left center;
+    background: linear-gradient(90deg, #7a1410, #d8321e 60%, #ff6a3c);
+    transition: transform .18s linear;
+  }
+  #boss.rage i u { background: linear-gradient(90deg, #a01008, #ff3a18 55%, #ffb066); }
   @keyframes ragepulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
 
   /* ---- scope button + ADS overlay ---- */
@@ -522,6 +544,7 @@
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
   <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
+  <div id="boss"><b>MIND FLAYER</b><i><u id="boss-hp"></u></i></div>
   <div id="reveal"><b>🧭 敵の位置</b><span id="reveal-t">30</span></div>
   <div id="gate-prompt"><b>触れる</b><span>E</span></div>
   <div id="compass"><i></i><div id="compass-strip"></div></div>
@@ -2724,6 +2747,7 @@
       if (k.length) msg.k = k;
     }
     if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
+    if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
     if (rift.present) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10), Math.round(rift.ry * 1000), rift.seed];
     const payload = JSON.stringify(msg);
     MP.txBytes += payload.length;
@@ -2781,6 +2805,7 @@
     }
     applyDogSnapshot(msg.k);
     applyGorSnapshot(msg.q);
+    applyMfSnapshot(msg.f);
   }
   function onMqttMessage(t, buf) {
     MP.rxBytes += buf.length;
@@ -2793,6 +2818,7 @@
     if (t.slice(-7) === '/mobhit') { if (mobPub()) onMobHit(msg); return; }
     if (t.slice(-5) === '/dhit') { if (mobPub()) onDogHit(msg); return; }
     if (t.slice(-5) === '/ghit') { if (mobPub()) onGorHit(msg); return; }
+    if (t.slice(-6) === '/mfhit') { if (mobPub()) onMfHit(msg); return; }
     if (t.slice(-7) === '/corpse') { onCorpseMsg(msg); return; }
     if (t.slice(-7) === '/mdeath') { onDeathMsg(msg); return; }
     if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
@@ -2960,6 +2986,7 @@
       client.subscribe(mtopic('mobhit'));
       client.subscribe(mtopic('dhit'));
       client.subscribe(mtopic('ghit'));
+      client.subscribe(mtopic('mfhit'));
       client.subscribe(mtopic('corpse'));
       client.subscribe(mtopic('mdeath'));
       client.subscribe(mtopic('gate'));
@@ -3548,6 +3575,24 @@
         if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = gg; }
       }
     }
+    //  the commander: an enormous body eleven metres up, plus the legs that
+    //  hold it there, so a shot at anything of it connects
+    let hitMf = null;
+    if (wState === WS.BACK) for (const mm of flayers) {
+      if (!mm.live || mm.dead) continue;
+      for (let q = 0; q < 3; q++) {
+        const off = [-1.7, 1.1, 4.4][q], rr = [3.0, 2.6, 1.9][q];
+        _cc.set(mm.x + Math.sin(mm.hd) * off, mm.y + M_BODY_Y + (q === 2 ? 0.4 : 0), mm.z + Math.cos(mm.hd) * off);
+        const t = raySphere(_ro, _rd, _cc, rr);
+        if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = mm; }
+      }
+      for (let q = 0; q < 6; q++) {                       // the legs count too
+        const a = mm.hd + [0.52, 1.57, 2.62, -0.52, -1.57, -2.62][q];
+        _cc.set(mm.x + Math.sin(a) * 8.5, mm.y + M_BODY_Y * 0.55, mm.z + Math.cos(a) * 8.5);
+        const t = raySphere(_ro, _rd, _cc, 1.5);
+        if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = mm; }
+      }
+    }
     // and so are the people on the street: one round drops them
     let hitWalker = null;
     if (wState === WS.NORMAL) for (let i = 0; i < peds.length; i++) {
@@ -3557,12 +3602,12 @@
       if (dx * dx + dz * dz > 32400) continue;     // beyond 180 m, skip the sphere test
       _cc.set(e.wx, 1.15, e.wz);                   // chest height, tall enough for a level crosshair
       const t = raySphere(_ro, _rd, _cc, 0.62);
-      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitWalker = e; }
+      if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = null; hitMonkey = null; hitDog = null; hitGor = null; hitMf = null; hitWalker = e; }
     }
-    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker || hitDog || hitGor) ? hitDist : blockDist);
+    _end.copy(_ro).addScaledVector(_rd, (hitId || hitMonkey || hitWalker || hitDog || hitGor || hitMf) ? hitDist : blockDist);
     spawnTracer(_mz, _end);
     flashMuzzle(_mz);
-    if (!hitId && !hitMonkey && !hitWalker && !hitDog && !hitGor) spawnImpact(_end);   // sparks + dust where the round lands
+    if (!hitId && !hitMonkey && !hitWalker && !hitDog && !hitGor && !hitMf) spawnImpact(_end);   // sparks + dust where the round lands
     dogNoise(p.x, p.z, 1.0, 'shot');                 // and every dog in the district hears it
     muzzle.visible = true; muzzle.material.opacity = 0.5; muzzle.scale.setScalar(0.13 + Math.random() * 0.06); muzzleTimer = 0.04; recoil = 0.04;
     ammo--; updateAmmoUI();
@@ -3592,6 +3637,11 @@
       showHit(hitGor.hp - DMG <= 0);
       hurtGorgon(hitGor, DMG, p.x, p.z);               // and this one does not decide anything
       sendGorHit(hitGor, DMG);
+    }
+    if (hitMf) {
+      showHit(hitMf.hp - DMG <= 0);
+      hurtFlayer(hitMf, DMG, p.x, p.z);
+      sendMfHit(hitMf, DMG);
     }
   }
 
@@ -3811,7 +3861,11 @@
         return 'DOGS  ' + g.live + '  packs ' + g.packs + '  chase ' + g.chase + ' bite ' + g.atk +
                '  back ' + (g.ret + g.hide) + ' call ' + g.call + ' flee ' + g.flee + '\n' +
                'GORG  ' + q.live + '  chase ' + q.chase + ' atk ' + q.atk +
-               '  enraged ' + q.rage + ' face ' + q.face + '\n'; })() : '') +
+               '  enraged ' + q.rage + ' face ' + q.face + '\n' +
+               (() => { const f = mfDebug(); return !f.live ? '' :
+                 'FLAY  hp ' + f.hp + '  linked ' + f.dogs + 'd/' + f.gors + 'g' +
+                 '  share ' + f.share + '/s  summon in ' + f.summon + 's' +
+                 (f.panic ? '  PANIC' : '') + (f.thrown ? '  THROWN' : '') + '\n'; })(); })() : '') +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2);
   }
@@ -5184,6 +5238,7 @@
   let dogHitCd = 0;
   function hurtDog(d, dmg, fromX, fromZ) {
     if (!d.live || d.dead) return;
+    mfShareDamage(d.x, d.z, dmg);       // a linked minion bleeds upward
     d.hp -= dmg; d.stagger = 1; d.hurtRecent = 2.5;
     d.hasT = true; d.tx = fromX; d.tz = fromZ; d.seeT = cityT;
     const pk = dogPacks[d.pack];
@@ -6078,6 +6133,7 @@
   //  further into you.
   function hurtGorgon(g, dmg, fromX, fromZ) {
     if (!g.live || g.dead) return;
+    mfShareDamage(g.x, g.z, dmg);       // a linked minion bleeds upward
     g.hp -= dmg;
     g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
     if (g.hp <= 0) { killGorgon(g); return; }
@@ -6457,6 +6513,1028 @@
       if (g.enraged) rage++;
     }
     return { live, chase, atk, rage, face };
+  }
+
+  // ── MIND FLAYER ───────────────────────────────────────────────────
+  //  The thing the other two answer to. It is not a bigger demogorgon: what
+  //  makes it a commander is that it is wired into everything around it. Any
+  //  dog or gorgon standing inside its reach is *linked* — the flayer sees what
+  //  they see, hears what they hear, hands them a shared target, and takes a
+  //  share of every wound they take. So the fight has two ways through it. You
+  //  can climb the body, or you can cut the escort out from under it and watch
+  //  the damage arrive anyway; ignore the escort entirely and it simply calls
+  //  more and you get surrounded.
+  //
+  //  It is the only enemy here that will decide the day has gone badly. Below
+  //  a third of its health it calls everything it is allowed to call, and then
+  //  it walks away — on its legs, through the streets, no vanishing.
+  const NMF = 2, MF_DRAW = 2;
+  const MF_HP = GOR_HP * 10;            // 4200 — ten gorgons
+  const MF_VIS = 90, MF_VIS_COS = Math.cos(1.5), MF_HEAR = 150;
+  const MF_LINK = 74;                   // how far its command reaches
+  const MF_SHARE = 0.28;                // of a minion's wound that reaches it
+  const MF_SHARE_S = 55;                // …but never more than this per second
+  const MF_SUMMON = 120, MF_PANIC_CD = 95;
+  const MF_ESC_GOR = 2, MF_ESC_DOG = 3;
+  const MF_SWIPE_R = 15.5, MF_SWIPE_DMG = 30;
+  const MF_THROW_MIN = 17, MF_THROW_MAX = 62, MF_THROW_DMG = 34;
+  const MF_PANIC = 0.30;
+
+  // ---- the body -----------------------------------------------------
+  //  A mass slung eleven metres up on six legs that arch above it, so the thing
+  //  stands over the street rather than in it and you look up through its legs
+  //  at the sky. Same flesh shader as the other two, taken further toward
+  //  mineral: this one has set, and there is more shell than hide on it.
+  const mfSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const mfShellMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const mfMawMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  mfSkinMat.uniforms.uSkin.value.setHex(0x463a34); mfSkinMat.uniforms.uDeep.value.setHex(0x0f0a09);
+  mfSkinMat.uniforms.uWet.value = 0.75;
+  mfShellMat.uniforms.uSkin.value.setHex(0x332d2a); mfShellMat.uniforms.uDeep.value.setHex(0x090707);
+  mfShellMat.uniforms.uWet.value = 0.55;
+  mfMawMat.uniforms.uSkin.value.setHex(0x8e2118); mfMawMat.uniforms.uDeep.value.setHex(0x120202);
+  mfMawMat.uniforms.uShell.value.setHex(0x3a3330);
+  mfMawMat.uniforms.uRidge.value = 1; mfMawMat.side = THREE.DoubleSide;
+
+  //  10 ovoids (abdomen, thorax, back, skull, snout, brow, four leg mounts),
+  //  19 bones (throat + six legs of three), 18 knuckles, 16 plates, 5 petals
+  const M_OVOID = 10, M_BONE = 19, M_KNUC = 18, M_SPIKE = 16, M_PETAL = 5;
+  const mfOvoidI = dIM(dogOvoidGeo, mfSkinMat, MF_DRAW * M_OVOID);
+  const mfBoneI = dIM(dogBoneGeo, mfShellMat, MF_DRAW * M_BONE);
+  const mfKnucI = dIM(dogKnucGeo, mfShellMat, MF_DRAW * M_KNUC);
+  const mfSpikeI = dIM(dogPetalGeo, mfShellMat, MF_DRAW * M_SPIKE);
+  const mfPetalI = dIM(dogPetalGeo, mfMawMat, MF_DRAW * M_PETAL);
+  const mfParts = [mfOvoidI, mfBoneI, mfKnucI, mfSpikeI, mfPetalI];
+
+  const ML1 = 11.4, ML2 = 10.9;         // femur, tibia — the arch is in these
+  const M_BODY_Y = 13.4, M_FOOT_R = 13.6;
+  const mOvoids = [], mBones = [], mKnucs = [], mSpikes = [], mPetals = [];
+  const MK = {};
+  {
+    const root = new THREE.Object3D(); MK.root = root;
+    const body = dnode(root, 0, M_BODY_Y, 0); MK.body = body;   // the ride height, re-set every frame
+    const core = dnode(body, 0, 0, 0); MK.core = core;                 // pulses, breathes
+    const neck = dnode(core, 0, 0.70, 3.4); MK.neck = neck;
+    const head = dnode(neck, 0, 0, 3.3); MK.head = head;
+    const maw = dnode(head, 0, -0.40, 2.10); MK.maw = maw;
+
+    dvis(core, mOvoids, 3.55, 2.75, 4.40, 0, -0.25, -2.2);              // abdomen
+    dvis(core, mOvoids, 3.10, 2.90, 3.45, 0, 0.15, 1.5);                // thorax
+    dvis(core, mOvoids, 2.05, 1.80, 2.10, 0, 1.15, 0.1);                // the raised back
+    dvis(head, mOvoids, 1.62, 1.55, 2.30, 0, 0, -0.45);                 // skull
+    dvis(head, mOvoids, 1.10, 0.95, 1.82, 0, -0.45, 1.40);              // snout
+    dvis(head, mOvoids, 1.42, 0.54, 0.74, 0, 0.84, 0.14);               // brow
+    for (const sd of [-1, 1]) {
+      dvis(core, mOvoids, 1.30, 1.15, 1.55, 2.45 * sd, 0.35, 0.60);     // leg mounts
+      dvis(core, mOvoids, 1.15, 1.05, 1.40, 2.25 * sd, 0.12, -2.05);
+    }
+    dvis(neck, mBones, 1.15, 3.3, 1.15, 0, 0, 0, -Math.PI / 2);         // the throat
+    //  A ridge of plates down the spine and a crown of horns on the skull —
+    //  the hard half of the surface, and what reads first at a distance.
+    for (let i = 0; i < 9; i++) {
+      const t = i / 8;
+      const n = dnode(core, 0, 1.40 - t * 0.32, 2.1 - t * 5.6);
+      n.rotation.x = -0.30 + t * 0.55;
+      dvis(n, mSpikes, 0.46 - t * 0.16, 2.10 - t * 1.0, 0.22);
+    }
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 6 - 0.5) * 2.3;
+      const n = dnode(head, Math.sin(a) * 1.28, 0.74, 0.20 + Math.cos(a) * 0.34);
+      n.rotation.set(-0.85, a * 0.7, a * 0.5, 'YXZ');
+      dvis(n, mSpikes, 0.27, 1.55 - Math.abs(a) * 0.38, 0.18);
+    }
+    MK.petals = [];
+    for (let i = 0; i < M_PETAL; i++) {
+      const spin = dnode(maw, 0, 0, 0); spin.rotation.z = (i / M_PETAL) * 6.2832;
+      const hinge = dnode(spin, 0, 0, 0);
+      dvis(hinge, mPetals, 0.84, 2.10, 0.22);
+      MK.petals.push(hinge);
+    }
+    //  Six legs, evenly around the body. The femur is driven *up* and out — the
+    //  knee ends above the back — and the tibia comes down outside it, which is
+    //  the whole silhouette: a roof of legs you stand underneath.
+    MK.legs = [];
+    const AZ = [0.52, 1.57, 2.62, -0.52, -1.57, -2.62];
+    for (let i = 0; i < 6; i++) {
+      const az = AZ[i];
+      const hub = dnode(body, Math.sin(az) * 2.35, 0.35, Math.cos(az) * 2.35);
+      const hip = dnode(hub, 0, 0, 0); hip.rotation.order = 'YXZ';
+      const knee = dnode(hip, 0, -ML1, 0);
+      const ankle = dnode(knee, 0, -ML2, 0);
+      dvis(hip, mBones, 1.15, ML1, 1.15);                               // limbs with mass in them
+      dvis(knee, mBones, 0.78, ML2, 0.78);
+      dvis(ankle, mBones, 0.46, 2.1, 0.46, 0, 0, 0, 0.35);              // the tapered claw-foot
+      dvis(hip, mKnucs, 1.45, 1.30, 1.45, 0, 0.08, 0);
+      dvis(knee, mKnucs, 1.02, 0.92, 1.10, 0, 0.06, 0);
+      dvis(ankle, mKnucs, 0.58, 0.52, 0.62);
+      MK.legs.push({ hub, hip, knee, ankle, az, L1: ML1, L2: ML2, tip: new THREE.Vector3() });
+    }
+    root.updateMatrixWorld(true);
+    const got = [mOvoids.length, mBones.length, mKnucs.length, mSpikes.length, mPetals.length];
+    const want = [M_OVOID, M_BONE, M_KNUC, M_SPIKE, M_PETAL];
+    for (let i = 0; i < want.length; i++) {
+      if (got[i] !== want[i]) console.error('mind flayer rig: part ' + i + ' built ' + got[i] + ', reserved ' + want[i]);
+    }
+  }
+
+  // ---- gait ---------------------------------------------------------
+  //  Six legs on an alternating tripod — 0,2,4 swing while 1,3,5 carry, then
+  //  they trade. It is what real hexapods do and it is the reason the thing
+  //  reads as an animal rather than a walking building: there are always three
+  //  feet on the ground and the body never stops moving over them.
+  //
+  //  Each foot is placed in world terms and the leg is aimed at it, so a foot
+  //  put down stays exactly where it was put while the body travels past. The
+  //  hip yaws to face its own target, which is what makes the legs reorganise
+  //  around the body when it turns instead of swinging like a metronome.
+  const MF_TRIPOD = [0, 1, 0, 1, 0, 1];
+  const _mfT = new THREE.Vector3(), _mfH = new THREE.Vector3();
+  function poseFlayer(s, dt, footIK) {
+    const mv = Math.min(1, s.sp / 4.6);
+    const ph = s.gaitPh;
+    MK.root.position.set(s.x, s.y, s.z);
+    MK.root.rotation.set(0, s.hd, s.lean * 0.4, 'YXZ');
+
+    //  the mass rides and rolls; the pulse is the body itself, always working
+    const puls = Math.sin(cityT * 1.15) * 0.5 + Math.sin(cityT * 0.43 + 1.1) * 0.5;
+    const bob = Math.sin(ph * 12.566) * 0.42 * mv;
+    MK.body.position.set(0, M_BODY_Y + bob - s.crouch * 2.6 - (s.dead ? Math.min(8.4, s.deadT * 5.5) : 0), 0);
+    MK.body.rotation.set(-0.04 - s.rear * 0.30 + s.stagger * 0.10, 0,
+                         Math.sin(ph * 6.2832) * 0.055 * mv + s.stagger * Math.sin(cityT * 12) * 0.07, 'YXZ');
+    const sw = 1 + puls * 0.022 + s.swell * 0.10;
+    MK.core.scale.set(sw, sw - s.swell * 0.03, sw);
+    MK.core.rotation.set(s.rear * 0.22, Math.sin(ph * 6.2832) * 0.04 * mv, 0, 'YXZ');
+    //  the head hangs forward off the mass and aims on its own
+    MK.neck.rotation.set(0.34 - s.headPitch * 0.40 - s.rear * 0.25, s.headYaw * 0.45, 0, 'YXZ');
+    MK.head.rotation.set(-0.22 - s.headPitch * 0.45 + s.lunge * 0.30, s.headYaw * 0.55, s.headYaw * 0.12, 'YXZ');
+    const flare = s.maw;
+    for (let i = 0; i < M_PETAL; i++) {
+      MK.petals[i].rotation.x = Math.PI / 2 - flare * 1.00 - Math.sin(cityT * 2.4 + i * 1.6) * 0.06 * flare - 0.06;
+    }
+
+    for (let i = 0; i < 6; i++) {
+      const L = MK.legs[i];
+      if (s.dead) {                                   // folded under the collapse
+        L.hip.rotation.set(-2.25, 0, 0, 'YXZ'); L.knee.rotation.x = 2.5; L.ankle.rotation.x = 0.4;
+        continue;
+      }
+      //  where this foot wants to be, in the body's frame
+      let f = (ph + MF_TRIPOD[i] * 0.5) % 1; if (f < 0) f += 1;
+      const stride = 6.8 * mv;
+      let fz = 0, lift = 0;
+      if (f < 0.5) { const u = f / 0.5; fz = stride * 0.5 - stride * u; }        // planted, travelling back
+      else {
+        const v = (f - 0.5) / 0.5, e = v * v * (3 - 2 * v);
+        fz = -stride * 0.5 + stride * e;
+        lift = Math.sin(Math.PI * v) * 4.2 * mv;
+      }
+      const R = M_FOOT_R + (i === 1 || i === 4 ? 1.3 : 0);       // the middle pair reaches wider
+      const tx = Math.sin(L.az) * R, tz = Math.cos(L.az) * R + fz;
+      // the hub is a fixed point on the body; solve from there
+      _mfH.set(L.hub.position.x, 0, L.hub.position.z);
+      const dx = tx - _mfH.x, dz = tz - _mfH.z;
+      const horiz = Math.hypot(dx, dz);
+      let ty = -(M_BODY_Y + L.hub.position.y) + lift;
+      if (footIK) {
+        const wx = s.x + Math.sin(s.hd) * tz + Math.cos(s.hd) * tx;
+        const wz = s.z + Math.cos(s.hd) * tz - Math.sin(s.hd) * tx;
+        const gy = supportHeight(wx, wz, s.y + 2);
+        ty = (gy - s.y) - (M_BODY_Y + L.hub.position.y) + lift;      // steps up onto a roof if it must
+      }
+      L.hip.rotation.y = Math.atan2(dx, dz);                        // aim the whole leg at its foot
+      const d = Math.max(1e-3, Math.hypot(ty, horiz));
+      const reach = Math.min(d, L.L1 + L.L2 - 0.01);
+      const phi = Math.atan2(-horiz, -ty);
+      const c1 = (L.L1 * L.L1 + reach * reach - L.L2 * L.L2) / (2 * L.L1 * reach);
+      const c2 = (L.L1 * L.L1 + L.L2 * L.L2 - reach * reach) / (2 * L.L1 * L.L2);
+      const a1 = Math.acos(Math.max(-1, Math.min(1, c1)));
+      const a2 = Math.acos(Math.max(-1, Math.min(1, c2)));
+      //  knee sign +1 throws the joint up and outward — the arch over the body
+      L.hip.rotation.x = phi - a1;
+      L.knee.rotation.x = Math.PI - a2;
+      L.ankle.rotation.x = -(L.hip.rotation.x + L.knee.rotation.x) * 0.5 + 0.35;
+      //  the swiping foreleg leaves the gait entirely
+      if (s.atk && s.atk.leg === i) {
+        const k = s.atk.phase;
+        L.hip.rotation.y = Math.atan2(dx, dz) + (k < 0 ? -1.0 * -k : 1.5 * k) * s.atk.side;
+        L.hip.rotation.x = (k < 0 ? -2.5 + 0.9 * (1 + k) : -1.6 + 1.2 * k);
+        L.knee.rotation.x = (k < 0 ? 2.4 : 1.1 + 0.6 * k);
+      }
+    }
+    MK.root.updateMatrixWorld(true);
+  }
+  function writeFlayer(slot) {
+    let k = slot * M_OVOID; for (let i = 0; i < M_OVOID; i++) mfOvoidI.setMatrixAt(k + i, mOvoids[i].matrixWorld);
+    k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, mBones[i].matrixWorld);
+    k = slot * M_KNUC; for (let i = 0; i < M_KNUC; i++) mfKnucI.setMatrixAt(k + i, mKnucs[i].matrixWorld);
+    k = slot * M_SPIKE; for (let i = 0; i < M_SPIKE; i++) mfSpikeI.setMatrixAt(k + i, mSpikes[i].matrixWorld);
+    k = slot * M_PETAL; for (let i = 0; i < M_PETAL; i++) mfPetalI.setMatrixAt(k + i, mPetals[i].matrixWorld);
+  }
+
+  // ---- the population -----------------------------------------------
+  const flayers = [];
+  let mfOn = false, mfSpawnCd = 70, mfFrame = 0, mfHigh = 0, mfHoldSpawn = false;
+  let mfShareAcc = 0, mfShareT = 0;
+  const bossEl = $('boss'), bossHpEl = $('boss-hp');
+  function mfSpawnSpot() {
+    //  Somewhere with room: a wide place far from you, because a thing this big
+    //  arriving inside your field of view would be absurd and it needs a street
+    //  it can actually stand across.
+    let best = null, bestS = -1;
+    for (let i = 0; i < 70; i++) {
+      const x = (Math.random() * 2 - 1) * WORLD * 0.40, z = (Math.random() * 2 - 1) * WORLD * 0.40;
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (d < 120 || d > 300) continue;
+      let room = true;                            // its feet need clear ground all round
+      for (let a = 0; a < 6 && room; a++) {
+        const t = (a / 6) * 6.2832;
+        if (!clearAt(x + Math.sin(t) * M_FOOT_R, z + Math.cos(t) * M_FOOT_R, 1.5)) room = false;
+      }
+      if (!room || !clearAt(x, z, 2.5)) continue;
+      let s = d * 0.02 + Math.random() * 3;
+      const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+      if (Math.abs(x - bi * PITCH) < RW && Math.abs(z - bj * PITCH) < RW) s += 8;   // an intersection
+      if (s > bestS) { bestS = s; best = { x, z }; }
+    }
+    return best;
+  }
+  function spawnFlayer(at) {
+    let m = flayers.find((o) => !o.live);
+    if (!m && flayers.length >= NMF) return null;
+    const spot = at || mfSpawnSpot(); if (!spot) return null;
+    if (!m) { m = { slot: flayers.length, live: false }; flayers.push(m); }
+    Object.assign(m, {
+      live: true, x: spot.x, z: spot.z, y: supportHeight(spot.x, spot.z, 1), hd: Math.random() * 6.2832,
+      sp: 0, hp: MF_HP, st: 'wander', stT: 0, gaitPh: Math.random(), lean: 0,
+      maw: 0, mawWant: 0, headYaw: 0, headPitch: 0, crouch: 0, rear: 0, lunge: 0, swell: 0,
+      stagger: 0, atk: null, atkCd: 4, panicked: false, dead: false, deadT: 0,
+      see: 0, seeT: -99, tx: spot.x, tz: spot.z, tdist: 999, hasT: false,
+      wx: spot.x, wz: spot.z, wanderT: 0, summonT: MF_SUMMON * 0.35, panicCd: 0,
+      stepBeat: -1, pulse: Math.random() * 5, fleeT: 0,
+      netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
+      spawnD: Math.hypot(spot.x - p.x, spot.z - p.z), escorted: false,
+    });
+    return m;
+  }
+  function despawnFlayer(m) { m.live = false; m.dead = false; m.atk = null; mfHideSlot(m.slot); }
+  function mfHideSlot(slot) {
+    let k = slot * M_OVOID; for (let i = 0; i < M_OVOID; i++) mfOvoidI.setMatrixAt(k + i, _dHideM);
+    k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, _dHideM);
+    k = slot * M_KNUC; for (let i = 0; i < M_KNUC; i++) mfKnucI.setMatrixAt(k + i, _dHideM);
+    k = slot * M_SPIKE; for (let i = 0; i < M_SPIKE; i++) mfSpikeI.setMatrixAt(k + i, _dHideM);
+    k = slot * M_PETAL; for (let i = 0; i < M_PETAL; i++) mfPetalI.setMatrixAt(k + i, _dHideM);
+  }
+  function clearFlayers() { for (const m of flayers) if (m.live) despawnFlayer(m); if (bossEl) bossEl.classList.remove('on'); }
+
+  // ---- the command network -------------------------------------------
+  //  Anything of its kind standing inside MF_LINK is linked. No bookkeeping, no
+  //  ownership lists that can go stale — proximity *is* the link, so it breaks
+  //  the moment a minion wanders out of reach or the flayer walks away, and the
+  //  damage share stops with it exactly as the specification requires.
+  function mfLinkedTo(x, z) {
+    for (const m of flayers) {
+      if (!m.live || m.dead) continue;
+      if (Math.hypot(m.x - x, m.z - z) <= MF_LINK) return m;
+    }
+    return null;
+  }
+  function mfCounts(m) {
+    let dogs_ = 0, gors = 0;
+    for (const d of dogs) if (d.live && !d.dead && Math.hypot(d.x - m.x, d.z - m.z) <= MF_LINK) dogs_++;
+    for (const g of gorgons) if (g.live && !g.dead && Math.hypot(g.x - m.x, g.z - m.z) <= MF_LINK) gors++;
+    return { dogs: dogs_, gors };
+  }
+  //  Two-way, and deliberately blunt: it hands down a target and an alert, and
+  //  it takes up sightings and wounds. No formations, no roles — the escort
+  //  keeps its own behaviour, it is just told what to look at.
+  function mfCommand(m, dt) {
+    const known = m.hasT && cityT - m.seeT < 22;
+    for (const d of dogs) {
+      if (!d.live || d.dead) continue;
+      if (Math.hypot(d.x - m.x, d.z - m.z) > MF_LINK) continue;
+      if (d.hasT && cityT - d.seeT < 4 && d.tdist < 40) {          // §23: it learns through them
+        m.hasT = true; m.tx = d.tx; m.tz = d.tz; m.seeT = Math.max(m.seeT, d.seeT);
+        m.senseT = cityT;
+      }
+      if (known && (!d.hasT || cityT - d.seeT > 3)) {              // §25: and hands the target back
+        d.hasT = true; d.tx = m.tx; d.tz = m.tz; d.seeT = cityT - 1.5;
+        if (d.st === 'wander' || d.st === 'idle') { d.st = 'alert'; d.stT = 0; }
+      }
+    }
+    for (const g of gorgons) {
+      if (!g.live || g.dead) continue;
+      if (Math.hypot(g.x - m.x, g.z - m.z) > MF_LINK) continue;
+      if (g.hasT && cityT - g.seeT < 4 && g.tdist < 55) {
+        m.hasT = true; m.tx = g.tx; m.tz = g.tz; m.seeT = Math.max(m.seeT, g.seeT);
+        m.senseT = cityT;
+      }
+      if (known && (!g.hasT || cityT - g.seeT > 3)) {
+        g.hasT = true; g.tx = m.tx; g.tz = m.tz; g.seeT = cityT - 1.5;
+        if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+      }
+    }
+    void dt;
+  }
+  //  §12/§52/§53: a share of a minion's wound, rate-limited so that mowing down
+  //  an escort is a real second route into the body without being the only one.
+  function mfShareDamage(x, z, dmg) {
+    const m = mfLinkedTo(x, z);
+    if (!m || m.dead) return;
+    if (cityT - mfShareT > 1) { mfShareT = cityT; mfShareAcc = 0; }
+    const room = Math.max(0, MF_SHARE_S - mfShareAcc);
+    const share = Math.min(dmg * MF_SHARE, room);
+    if (share <= 0) return;
+    mfShareAcc += share;
+    m.hp -= share;
+    m.swell = Math.min(1, m.swell + 0.35);          // §26: it registers it, quietly
+    m.senseT = cityT;
+    if (m.hp <= 0) killFlayer(m);
+  }
+  //  §7/§29: capped, and never a faucet.
+  function mfSummon(m, dogWant, gorWant) {
+    //  The head count is taken again before every single body, not once at the
+    //  top. Sampling it once and adding an index to it looks equivalent and is
+    //  not: anything that changes the count mid-loop — a second summon in the
+    //  same tick, one of the new arrivals landing inside the radius — drifts the
+    //  arithmetic and the cap quietly leaks. Recounting is a handful of distance
+    //  checks on at most a few dozen creatures, which costs nothing next to
+    //  being wrong about the one rule the specification is emphatic about.
+    let made = 0;
+    for (let i = 0; i < gorWant; i++) {
+      if (mfCounts(m).gors >= MF_ESC_GOR) break;
+      const spot = mfRing(m, 26 + Math.random() * 16); if (!spot) break;
+      const g = spawnGorgon(spot); if (!g) break;
+      g.hasT = m.hasT; g.tx = m.tx; g.tz = m.tz; g.seeT = m.seeT; made++;
+    }
+    for (let i = 0; i < dogWant; i++) {
+      if (mfCounts(m).dogs >= MF_ESC_DOG) break;
+      const spot = mfRing(m, 20 + Math.random() * 18); if (!spot) break;
+      const d = spawnDog(); if (!d) break;
+      d.x = d.rx = spot.x; d.z = d.rz = spot.z; d.y = supportHeight(spot.x, spot.z, 1);
+      d.hasT = m.hasT; d.tx = m.tx; d.tz = m.tz; d.seeT = m.seeT;
+      if (m.hasT) { d.st = 'chase'; d.stT = 0; }
+      made++;
+    }
+    if (made) { m.mawWant = 1; m.summonFx = 0.9; playMfSummon(m.tdist, mfPan(m)); }
+    return made;
+  }
+  function mfRing(m, r) {
+    for (let i = 0; i < 20; i++) {
+      const a = Math.random() * 6.2832;
+      const x = m.x + Math.sin(a) * r, z = m.z + Math.cos(a) * r;
+      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+      if (clearAt(x, z, 1.3)) return { x, z };
+    }
+    return null;
+  }
+
+  // ---- throwing -------------------------------------------------------
+  //  It picks up one of the dead cars and throws it. The wreck is the real
+  //  one — its instance is flown along the arc and its collision box goes with
+  //  it — so the street is genuinely rearranged by the fight and the thing it
+  //  threw at you is still lying there afterwards.
+  let mfThrown = null;
+  const _mfW = new THREE.Matrix4(), _mfQ = new THREE.Quaternion(), _mfE = new THREE.Euler(), _mfS = new THREE.Vector3(1, 1, 1);
+  function mfPickWreck(m) {
+    let best = -1, bestD = 1e9;
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k];
+      if (!w || w.thrown) continue;
+      const d = Math.hypot(w.x - m.x, w.z - m.z);
+      if (d > 34) continue;
+      const toPlayer = Math.hypot(w.x - m.tx, w.z - m.tz);
+      if (toPlayer < 14) continue;                       // not one already at their feet
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  }
+  function mfLaunch(m) {
+    const k = m.holdW;
+    if (k < 0 || !wrecks[k]) return;
+    const w = wrecks[k];
+    const dx = m.tx - w.x, dz = m.tz - w.z, d = Math.max(4, Math.hypot(dx, dz));
+    const t = Math.max(0.9, d / 26);                     // flight time, then solve the arc for it
+    mfThrown = { k, x: w.x, y: w.y + 9, z: w.z, ty: supportHeight(m.tx, m.tz, 2),
+                 vx: dx / t, vz: dz / t, vy: (0 - (w.y + 9 - supportHeight(m.tx, m.tz, 2)) + 0.5 * 26 * t * t) / t,
+                 spin: (Math.random() - 0.5) * 5, roll: 0, t: 0, hit: 0 };
+    w.thrown = true;
+    playMfThrow(m.tdist, mfPan(m));
+    m.holdW = -1;
+  }
+  function updateThrown(dt) {
+    if (!mfThrown) return;
+    const T = mfThrown;
+    T.t += dt;
+    T.vy -= 26 * dt;
+    T.x += T.vx * dt; T.y += T.vy * dt; T.z += T.vz * dt;
+    T.roll += T.spin * dt;
+    const w = wrecks[T.k];
+    if (!T.hit && Math.hypot(T.x - p.x, T.z - p.z) < 4.2 && Math.abs(T.y - p.y) < 4 && !dead && wState === WS.BACK) {
+      T.hit = 1;
+      applyDamage(MF_THROW_DMG, null);
+      camShake = Math.max(camShake, 0.9);
+    }
+    const gy = supportHeight(T.x, T.z, T.y + 1);
+    if (T.y <= gy + 0.4 || T.t > 6) {                    // it lands, and stays landed
+      w.x = T.x; w.z = T.z; w.y = gy; w.rot += T.roll * 0.4; w.tilt = (Math.random() - 0.5) * 0.5;
+      w.thrown = false;
+      poseWrecks();
+      _mfT.set(T.x, gy + 0.6, T.z);
+      spawnImpact(_mfT);
+      playMfCrash(Math.hypot(T.x - p.x, T.z - p.z), 0);
+      const near = Math.hypot(T.x - p.x, T.z - p.z);
+      if (near < 22) camShake = Math.max(camShake, 0.5 * (1 - near / 22));
+      mfThrown = null;
+      return;
+    }
+    //  fly the actual instance along the arc
+    _mfE.set(T.roll, w.rot, T.roll * 0.6, 'YXZ');
+    _mfQ.setFromEuler(_mfE);
+    _mfT.set(T.x, T.y, T.z);
+    _mfW.compose(_mfT, _mfQ, _mfS);
+    carBodyI.setMatrixAt(T.k, _mfW);
+    carCabI.setMatrixAt(T.k, _mfW);
+    carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = true;
+  }
+
+  // ---- perception ------------------------------------------------------
+  function mfSee(m) {
+    if (dead || wState !== WS.BACK) return 0;
+    const dx = p.x - m.x, dz = p.z - m.z, dist = Math.hypot(dx, dz);
+    m.tdist = dist;
+    if (dist > MF_VIS) return 0;
+    const fx = Math.sin(m.hd), fz = Math.cos(m.hd);
+    const dotf = dist > 0.01 ? (dx / dist) * fx + (dz / dist) * fz : 1;
+    if (dotf < MF_VIS_COS && dist > 22) return 0;
+    //  eleven metres up, so it looks over most of what would hide you from a dog
+    _mfT.set(m.x, m.y + M_BODY_Y + 2, m.z);
+    _mfH.set(p.x - _mfT.x, (p.y - 0.6) - _mfT.y, p.z - _mfT.z);
+    const len = _mfH.length(); _mfH.multiplyScalar(1 / len);
+    if (Math.min(rayCity(_mfT, _mfH), rayWrecks(_mfT, _mfH)) < len - 1.2) return 0;
+    return (cloak > 0 ? 0.5 : 1);
+  }
+
+  // ---- the decision -----------------------------------------------------
+  function mfThink(m, dt) {
+    m.stT += dt;
+    m.atkCd = Math.max(0, m.atkCd - dt);
+    m.panicCd = Math.max(0, m.panicCd - dt);
+    m.summonT -= dt;
+    m.stagger = Math.max(0, m.stagger - dt * 1.4);
+    m.swell = Math.max(0, m.swell - dt * 0.7);
+    if (m.dead) { m.deadT += dt; m.sp = 0; m.mawWant = 0; return; }
+
+    mfCommand(m, dt);
+    const see = mfSee(m);
+    if (see > 0) { m.see = see; m.seeT = cityT; m.hasT = true; m.tx = p.x; m.tz = p.z; }
+    else { m.see = 0; m.tdist = Math.hypot(p.x - m.x, p.z - m.z); }
+    const known = m.hasT && cityT - m.seeT < 22;
+    const dist = m.tdist;
+    const fx = dist > 0.01 ? (m.tx - m.x) / dist : 0, fz = dist > 0.01 ? (m.tz - m.z) / dist : 1;
+    let lookX = m.tx, lookZ = m.tz;
+
+    //  §8: the standing summon, on its own clock, capped by what is already here
+    if (m.summonT <= 0) {
+      m.summonT = MF_SUMMON;
+      if (m.st !== 'flee') { m.st = 'summon'; m.stT = 0; m.pendSummon = [2, 1]; }
+    }
+    //  §28: it decides the day has gone badly — calls everything, then leaves
+    if (!m.panicked && m.hp <= MF_HP * MF_PANIC && m.panicCd <= 0) {
+      m.panicked = true; m.panicCd = MF_PANIC_CD;
+      m.st = 'summon'; m.stT = 0; m.pendSummon = [5, 2]; m.thenFlee = true;
+      notify('地面が震えている', 3000);
+    }
+    if (m.atk) { mfRunAtk(m, dt); return; }
+
+    switch (m.st) {
+      case 'wander': {
+        m.wanderT -= dt;
+        if (m.wanderT <= 0 || Math.hypot(m.wx - m.x, m.wz - m.z) < 8) {
+          for (let i = 0; i < 14; i++) {
+            const a = m.hd + (Math.random() - 0.5) * 1.8, r = 40 + Math.random() * 70;
+            const nx = m.x + Math.sin(a) * r, nz = m.z + Math.cos(a) * r;
+            if (Math.abs(nx) > WORLD * 0.42 || Math.abs(nz) > WORLD * 0.42) continue;
+            if (clearAt(nx, nz, 2.5)) { m.wx = nx; m.wz = nz; break; }
+          }
+          m.wanderT = 14 + Math.random() * 14;
+        }
+        mfStep(m, m.wx, m.wz, 2.4, dt);
+        lookX = m.x + Math.sin(m.hd + Math.sin(cityT * 0.24) * 0.8) * 30;
+        lookZ = m.z + Math.cos(m.hd + Math.sin(cityT * 0.24) * 0.8) * 30;
+        m.mawWant = 0;
+        if (known) { m.st = 'alert'; m.stT = 0; }
+        break;
+      }
+      case 'alert':                       // §44: it turns, it swells, it answers
+        mfStep(m, m.x, m.z, 0, dt); m.sp = 0;
+        m.mawWant = 0.4; m.rear = Math.min(1, m.rear + dt * 1.6);
+        if (m.stT > 0.2 && !m.roared) { m.roared = 1; playMfRoar(m.tdist, mfPan(m)); }
+        if (m.stT > 1.6) { m.roared = 0; m.st = known ? 'track' : 'wander'; m.stT = 0; }
+        break;
+      case 'track': {
+        if (!known) { m.st = 'wander'; m.stT = 0; break; }
+        //  §21: distance decides. Close, it swings. Middle, it throws. Far, it
+        //  lets the escort do the work and simply keeps coming.
+        mfStep(m, m.tx - fx * 9, m.tz - fz * 9, m.panicked ? 5.4 : 4.3, dt);
+        m.mawWant = 0.2;
+        if (m.atkCd <= 0 && m.see > 0) {
+          if (dist < MF_SWIPE_R) mfStartAtk(m, 'swipe');
+          else if (dist > MF_THROW_MIN && dist < MF_THROW_MAX) {
+            const k = mfPickWreck(m);
+            if (k >= 0) { m.holdW = k; mfStartAtk(m, 'throw'); }
+            else m.atkCd = 2.4;
+          }
+        }
+        break;
+      }
+      case 'summon': {
+        mfStep(m, m.x, m.z, 0, dt); m.sp = 0;
+        m.mawWant = 1; m.rear = Math.min(1, m.rear + dt * 2.2);
+        if (m.stT > 1.1 && m.pendSummon) {
+          mfSummon(m, m.pendSummon[0], m.pendSummon[1]);
+          m.pendSummon = null;
+        }
+        if (m.stT > 2.4) {
+          m.rear = 0;
+          if (m.thenFlee) { m.thenFlee = false; m.st = 'flee'; m.fleeT = 34; }
+          else m.st = known ? 'track' : 'wander';
+          m.stT = 0;
+        }
+        break;
+      }
+      case 'flee': {
+        //  §30/§31: it walks out. No vanishing, no shortcut through the world —
+        //  it picks somewhere far and puts one foot in front of another until
+        //  it is out of the district, and the escort it just called covers it.
+        m.fleeT -= dt;
+        if (!m.fleeX || Math.hypot(m.fleeX - m.x, m.fleeZ - m.z) < 14) {
+          let bx = m.x - fx * 140, bz = m.z - fz * 140;
+          bx = Math.max(-WORLD * 0.42, Math.min(WORLD * 0.42, bx));
+          bz = Math.max(-WORLD * 0.42, Math.min(WORLD * 0.42, bz));
+          m.fleeX = bx; m.fleeZ = bz;
+        }
+        mfStep(m, m.fleeX, m.fleeZ, 6.2, dt);
+        m.mawWant = 0.1;
+        lookX = m.x + (m.x - m.tx); lookZ = m.z + (m.z - m.tz);
+        if (m.fleeT <= 0 || m.tdist > 260) { m.hasT = false; m.st = 'wander'; m.stT = 0; m.fleeX = 0; }
+        break;
+      }
+      default: m.st = 'wander'; m.stT = 0;
+    }
+    if (m.st !== 'alert' && m.st !== 'summon') m.rear = Math.max(0, m.rear - dt * 1.4);
+
+    { const rel = Math.atan2(lookX - m.x, lookZ - m.z) - m.hd;
+      let a = rel; while (a > Math.PI) a -= 6.2832; while (a < -Math.PI) a += 6.2832;
+      m.headYawWant = Math.max(-1.0, Math.min(1.0, a));
+      const dz2 = Math.hypot(lookX - m.x, lookZ - m.z);
+      m.headPitchWant = Math.max(-0.9, Math.min(0.5, Math.atan2(1.5 - M_BODY_Y, Math.max(6, dz2))));
+    }
+  }
+
+  // ---- attacks ---------------------------------------------------------
+  const MF_ATK = {
+    swipe: { wind: 0.72, swing: 0.42, rec: 0.60, cd: 3.4 },
+    throw: { wind: 1.25, swing: 0.30, rec: 0.75, cd: 6.0 },
+  };
+  function mfStartAtk(m, kind) {
+    const legs = [0, 3];                                   // the two forelegs do the hitting
+    const leg = legs[Math.random() < 0.5 ? 0 : 1];
+    m.atk = { kind, t: 0, leg, side: leg === 0 ? 1 : -1, phase: -1, hit: 0, sfx: 0 };
+    m.st = 'attack'; m.stT = 0;
+    playMfWind(m.tdist, mfPan(m), kind);
+  }
+  function mfRunAtk(m, dt) {
+    const a = m.atk, A = MF_ATK[a.kind];
+    a.t += dt;
+    m.tdist = Math.hypot(p.x - m.x, p.z - m.z);
+    if (mfSee(m) > 0) { m.tx = p.x; m.tz = p.z; m.seeT = cityT; }
+    const total = A.wind + A.swing + A.rec;
+    if (a.t < A.wind) {
+      a.phase = -(1 - a.t / A.wind);
+      m.rear = Math.min(1, m.rear + dt * 1.8);
+      if (a.kind === 'throw' && m.holdW >= 0) {            // §20: grab, lift, hold, release
+        const w = wrecks[m.holdW];
+        if (w) {
+          const lift = Math.min(1, a.t / (A.wind * 0.8));
+          const hx = m.x + Math.sin(m.hd) * 9, hz = m.z + Math.cos(m.hd) * 9;
+          w.thrown = true;
+          _mfE.set(lift * 1.2, w.rot, 0, 'YXZ'); _mfQ.setFromEuler(_mfE);
+          _mfT.set(w.x + (hx - w.x) * lift, w.y + lift * 11, w.z + (hz - w.z) * lift);
+          _mfW.compose(_mfT, _mfQ, _mfS);
+          carBodyI.setMatrixAt(m.holdW, _mfW); carCabI.setMatrixAt(m.holdW, _mfW);
+          carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = true;
+          if (a.t > A.wind * 0.8) { w.x = _mfT.x; w.z = _mfT.z; w.y = _mfT.y - 11 * lift; }
+        }
+      }
+    } else if (a.t < A.wind + A.swing) {
+      const k = (a.t - A.wind) / A.swing;
+      a.phase = k;
+      m.rear = Math.max(0, m.rear - dt * 3);
+      if (!a.sfx && k > 0.3) { a.sfx = 1; playMfSwing(m.tdist, mfPan(m)); if (a.kind === 'throw') mfLaunch(m); }
+      if (a.kind === 'swipe' && !a.hit && k > 0.3 && !dead && m.tdist < MF_SWIPE_R && wState === WS.BACK) {
+        a.hit = 1;
+        applyDamage(MF_SWIPE_DMG, null);
+        camShake = Math.max(camShake, 1.0);                // §18: it knocks you about
+        const kb = 7.5, ux = (p.x - m.x) / Math.max(1, m.tdist), uz = (p.z - m.z) / Math.max(1, m.tdist);
+        _mfT.set(p.x + ux * kb, p.y, p.z + uz * kb);
+        cityCollide(_mfT, p.y - EYE, p.y, PRAD); wreckCollide(_mfT, PRAD);
+        p.x = _mfT.x; p.z = _mfT.z;
+      }
+    } else {
+      a.phase = 1;
+    }
+    if (a.t >= total) {
+      m.atkCd = A.cd * (m.panicked ? 0.7 : 1);
+      m.atk = null; m.st = 'track'; m.stT = 0;
+    }
+  }
+
+  // ---- movement --------------------------------------------------------
+  function mfStep(m, tx, tz, speed, dt) {
+    const dx = tx - m.x, dz = tz - m.z, dd = Math.hypot(dx, dz);
+    const ux = dd > 0.01 ? dx / dd : Math.sin(m.hd), uz = dd > 0.01 ? dz / dd : Math.cos(m.hd);
+    const want = Math.atan2(ux, uz);
+    //  §5: a slow turn. When it does come round, you have watched it happen.
+    const turn = easeHeading(m, want, dt, 1.6, 0.62);
+    m.lean += (-turn * 0.10 - m.lean) * Math.min(1, dt * 5);
+    const bx = m.x, bz = m.z;
+    m.x += Math.sin(m.hd) * speed * dt; m.z += Math.cos(m.hd) * speed * dt;
+    //  It steps over the city rather than through it: only the world edge and
+    //  the tallest structures stop it, so its legs straddle the traffic.
+    m.x = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.x));
+    m.z = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.z));
+    m.sp = dt > 1e-5 ? Math.hypot(m.x - bx, m.z - bz) / dt : 0;
+    m.y += (supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
+    return dd;
+  }
+
+  // ---- damage ----------------------------------------------------------
+  function hurtFlayer(m, dmg, fromX, fromZ) {
+    if (!m.live || m.dead) return;
+    m.hp -= dmg;
+    m.hasT = true; m.tx = fromX; m.tz = fromZ; m.seeT = cityT;
+    m.swell = Math.min(1, m.swell + 0.5);
+    if (dmg > 60) m.stagger = 1; else m.stagger = Math.max(m.stagger, 0.2);
+    if (m.hp <= 0) { killFlayer(m); return; }
+    playMfHurt(m.tdist, mfPan(m));
+    //  §27: hurting the body drives the escort harder
+    for (const d of dogs) {
+      if (!d.live || d.dead || Math.hypot(d.x - m.x, d.z - m.z) > MF_LINK) continue;
+      d.hasT = true; d.tx = fromX; d.tz = fromZ; d.seeT = cityT;
+      if (d.st === 'wander' || d.st === 'idle') { d.st = 'alert'; d.stT = 0; }
+    }
+    for (const g of gorgons) {
+      if (!g.live || g.dead || Math.hypot(g.x - m.x, g.z - m.z) > MF_LINK) continue;
+      g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
+      if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+    }
+    if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
+  }
+  function killFlayer(m) {
+    m.dead = true; m.deadT = 0; m.hp = 0; m.sp = 0; m.atk = null; m.maw = 0.7;
+    playMfDeath(m.tdist, mfPan(m));
+    camShake = Math.max(camShake, 1.2);
+    _mfT.set(m.x, m.y + 6, m.z); spawnImpact(_mfT);
+    notify('倒れた', 3200);
+  }
+
+  // ---- audio -----------------------------------------------------------
+  //  §42: heavier and lower than either of the others, and built to arrive as
+  //  pressure rather than as a noise you can point at.
+  function mfPan(m) {
+    camera.getWorldDirection(_rd);
+    const rx = _rd.z, rz = -_rd.x;
+    const dx = m.x - p.x, dz = m.z - p.z, l = Math.hypot(dx, dz) || 1;
+    return Math.max(-1, Math.min(1, (dx / l * rx + dz / l * rz) * 1.1));
+  }
+  function mfBus(dist, reach, vol) {
+    if (!audioReady()) return null;
+    const v = Math.max(0, 1 - dist / reach) * vol;
+    if (v <= 0.01) return null;
+    const gn = actx.createGain(); gn.gain.value = v;
+    if (actx.createStereoPanner) { const s = actx.createStereoPanner(); s.pan.value = 0; gn.connect(s); s.connect(master); }
+    else gn.connect(master);
+    return gn;
+  }
+  //  Footfalls that carry the width of the district — this is how you learn
+  //  there is one out there before you ever see it (§34).
+  function playMfStep(dist, pan) {
+    const out = mfBus(dist, 240, 0.95); if (!out) return;
+    const t = actx.currentTime;
+    for (const [f0, f1, v, d] of [[52, 15, 1.0, 0.55], [88, 26, 0.45, 0.30]]) {
+      const o = actx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + d);
+      const g = actx.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.1);
+      o.connect(g); g.connect(out); o.start(t); o.stop(t + d + 0.15);
+    }
+    if (noiseBuf) {
+      const s = actx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.45;
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+      s.connect(lp); lp.connect(g); g.connect(out); s.start(t); s.stop(t + 0.36);
+    }
+  }
+  function playMfRoar(dist, pan) {
+    const out = mfBus(dist, 200, 0.9); if (!out) return;
+    const t = actx.currentTime;
+    const ring = actx.createGain(); ring.gain.value = 0;
+    const rmod = actx.createOscillator(); rmod.type = 'sine'; rmod.frequency.value = 17;
+    const rg = actx.createGain(); rg.gain.value = 0.92; rmod.connect(rg); rg.connect(ring.gain);
+    rmod.start(t); rmod.stop(t + 2.6); ring.connect(out);
+    for (const [f, v] of [[26, 0.85], [39, 0.42], [61.5, 0.18], [93, 0.08]]) {
+      const o = actx.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f * 1.35, t);
+      o.frequency.exponentialRampToValueAtTime(f, t + 0.5);
+      o.frequency.exponentialRampToValueAtTime(f * 0.62, t + 2.3);
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(140, t + 2.2);
+      const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(v, t + 0.14); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.5);
+      o.connect(lp); lp.connect(g); g.connect(ring); o.start(t); o.stop(t + 2.6);
+    }
+  }
+  function playMfSummon(dist, pan) {
+    const out = mfBus(dist, 180, 0.85); if (!out) return;
+    const t = actx.currentTime;
+    //  the air bending: a rising sweep that folds back on itself
+    for (let i = 0; i < 3; i++) {
+      const o = actx.createOscillator(); o.type = 'sawtooth';
+      const b = 34 + i * 23;
+      o.frequency.setValueAtTime(b, t + i * 0.10);
+      o.frequency.exponentialRampToValueAtTime(b * 3.4, t + 0.75 + i * 0.10);
+      o.frequency.exponentialRampToValueAtTime(b * 0.7, t + 1.5 + i * 0.10);
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 200 + i * 130; bp.Q.value = 3.5;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t + i * 0.10);
+      g.gain.exponentialRampToValueAtTime(0.4 - i * 0.09, t + 0.4 + i * 0.10);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.7 + i * 0.10);
+      o.connect(bp); bp.connect(g); g.connect(out); o.start(t + i * 0.10); o.stop(t + 1.8 + i * 0.10);
+    }
+  }
+  function playMfWind(dist, pan, kind) {
+    const out = mfBus(dist, 90, 0.7); if (!out || !noiseBuf) return;
+    const t = actx.currentTime;
+    const s = actx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.5;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(140, t); bp.frequency.exponentialRampToValueAtTime(700, t + (kind === 'throw' ? 1.1 : 0.6));
+    bp.Q.value = 1.2;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.8, t + (kind === 'throw' ? 0.9 : 0.5));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + (kind === 'throw' ? 1.3 : 0.75));
+    s.connect(bp); bp.connect(g); g.connect(out); s.start(t); s.stop(t + 1.4);
+  }
+  function playMfSwing(dist, pan) {
+    const out = mfBus(dist, 110, 0.8); if (!out || !noiseBuf) return;
+    const t = actx.currentTime;
+    const s = actx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.8;
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(900, t); bp.frequency.exponentialRampToValueAtTime(90, t + 0.4); bp.Q.value = 1.1;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.95, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    s.connect(bp); bp.connect(g); g.connect(out); s.start(t); s.stop(t + 0.5);
+  }
+  function playMfThrow(dist, pan) { playMfSwing(dist, pan); }
+  function playMfCrash(dist, pan) {
+    const out = mfBus(dist, 200, 0.95); if (!out) return;
+    const t = actx.currentTime;
+    if (noiseBuf) {
+      const s = actx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 1.3;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 0.6;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.85, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      s.connect(bp); bp.connect(g); g.connect(out); s.start(t); s.stop(t + 0.55);
+      const s2 = actx.createBufferSource(); s2.buffer = noiseBuf; s2.playbackRate.value = 0.4;
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+      const g2 = actx.createGain(); g2.gain.setValueAtTime(0.9, t); g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+      s2.connect(lp); lp.connect(g2); g2.connect(out); s2.start(t); s2.stop(t + 0.75);
+    }
+    const o = actx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(24, t + 0.4);
+    const g3 = actx.createGain(); g3.gain.setValueAtTime(0.8, t); g3.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    o.connect(g3); g3.connect(out); o.start(t); o.stop(t + 0.55);
+  }
+  function playMfHurt(dist, pan) {
+    const out = mfBus(dist, 120, 0.5); if (!out) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(74, t); o.frequency.exponentialRampToValueAtTime(31, t + 0.4);
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 340;
+    const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.6, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o.connect(lp); lp.connect(g); g.connect(out); o.start(t); o.stop(t + 0.5);
+  }
+  function playMfDeath(dist, pan) {
+    const out = mfBus(dist, 260, 1.0); if (!out) return;
+    const t = actx.currentTime;
+    for (const [f, v, d] of [[62, 0.8, 3.0], [41, 0.6, 3.4], [27, 0.45, 3.8]]) {
+      const o = actx.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(12, t + d);
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(1200, t); lp.frequency.exponentialRampToValueAtTime(70, t + d);
+      const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(v, t + 0.06); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.3);
+      o.connect(lp); lp.connect(g); g.connect(out); o.start(t); o.stop(t + d + 0.4);
+    }
+    if (noiseBuf) {
+      const s = actx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.35;
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 180;
+      const g = actx.createGain(); g.gain.setValueAtTime(0.0001, t + 0.8);
+      g.gain.exponentialRampToValueAtTime(1.0, t + 1.1); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.4);
+      s.connect(lp); lp.connect(g); g.connect(out); s.start(t + 0.8); s.stop(t + 2.5);
+    }
+  }
+  //  §34/§42: the pressure. A standing low bed that only exists while one is in
+  //  the district, rising as it closes — you feel it before you find it.
+  let mfBed = null;
+  function mfBedOn() {
+    if (mfBed || !audioReady()) return;
+    const t = actx.currentTime;
+    const out = actx.createGain(); out.gain.value = 0; out.connect(master);
+    const o1 = actx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 23;
+    const o2 = actx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 23.7;   // beats against it
+    const g = actx.createGain(); g.gain.value = 0.55;
+    o1.connect(g); o2.connect(g); g.connect(out);
+    const lfo = actx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.11;
+    const lg = actx.createGain(); lg.gain.value = 0.30; lfo.connect(lg); lg.connect(g.gain);
+    o1.start(t); o2.start(t); lfo.start(t);
+    mfBed = { out, nodes: [o1, o2, lfo] };
+  }
+  function mfBedOff() {
+    if (!mfBed) return;
+    const b = mfBed; mfBed = null;
+    try {
+      const t = actx.currentTime;
+      b.out.gain.cancelScheduledValues(t); b.out.gain.setTargetAtTime(0, t, 0.5);
+      for (const n of b.nodes) n.stop(t + 2.4);
+      setTimeout(() => { try { b.out.disconnect(); } catch (e) {} }, 2800);
+    } catch (e) {}
+  }
+
+  // ---- the frame -------------------------------------------------------
+  function updateFlayers(dt) {
+    if (wState !== WS.BACK) {
+      if (mfOn) { clearFlayers(); mfOn = false; mfBedOff(); mfThrown = null;
+        for (const q of mfParts) { q.visible = false; q.instanceMatrix.needsUpdate = true; } }
+      return;
+    }
+    if (!mfOn) { mfOn = true; for (const q of mfParts) q.visible = true; }
+    mfHigh = 0;
+    const mine = mobSim();
+    updateThrown(dt);
+
+    if (mine) {
+      mfSpawnCd -= dt;
+      let live = 0;
+      for (const m of flayers) {
+        if (!m.live) continue;
+        if (m.dead) { if (m.deadT > 22) despawnFlayer(m); continue; }
+        live++;
+      }
+      if (mfSpawnCd <= 0 && live < 1 && !mfHoldSpawn) {
+        mfSpawnCd = 150 + Math.random() * 120;
+        const m = spawnFlayer();
+        //  §6: it never arrives alone
+        if (m && !m.escorted) { m.escorted = true; mfSummon(m, MF_ESC_DOG, MF_ESC_GOR); }
+      }
+    }
+
+    mfFrame++;
+    let nearest = null;
+    for (const m of flayers) {
+      if (!m.live) continue;
+      const dx = m.x - p.x, dz = m.z - p.z, d2 = dx * dx + dz * dz;
+      m.lod = d2 < 14400 ? 0 : d2 < 62500 ? 1 : 2;        // 120 m / 250 m
+      if (!nearest || d2 < nearest.d2) nearest = { m, d2 };
+      if (m.pinned) {
+        if (mfHigh < MF_DRAW) { poseFlayer(m, dt, true); writeFlayer(mfHigh++); }
+        continue;
+      }
+      if (mine) {
+        const every = (m.atk || m.st === 'track' || m.st === 'attack') ? 1 : m.lod === 0 ? 1 : m.lod === 1 ? 3 : 8;
+        if ((mfFrame + m.slot) % every === 0) mfThink(m, dt * every);
+        m.rx = m.x; m.rz = m.z;
+      } else {
+        easePose(m, m.netX, m.netZ, m.netH, dt, 9, 22, 5, 3);
+        m.x = m.rx; m.z = m.rz;
+        m.y += (supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
+        m.sp = m.rspd; m.tdist = Math.hypot(dx, dz);
+        m.stagger = Math.max(0, m.stagger - dt * 1.4);
+        m.swell = Math.max(0, m.swell - dt * 0.7);
+        if (m.dead) m.deadT += dt;
+        m.mawWant = m.st === 'summon' || m.st === 'alert' ? 1 : 0.15;
+        m.headYawWant = 0; m.headPitchWant = 0;
+      }
+
+      const ez = Math.min(1, dt * 4);
+      m.headYaw += ((m.headYawWant || 0) - m.headYaw) * ez;
+      m.headPitch += ((m.headPitchWant || 0) - m.headPitch) * ez;
+      m.maw += ((m.mawWant || 0) - m.maw) * Math.min(1, dt * 3.5);
+      m.lunge += (0 - m.lunge) * Math.min(1, dt * 4);
+
+      if (!m.dead) {
+        m.gaitPh = (m.gaitPh + dt * Math.max(m.sp < 0.2 ? 0 : 0.22, m.sp / 5.6) * 0.9) % 1;
+        //  three feet land per half cycle, so six thuds a stride — and each one
+        //  shakes the camera if you are standing anywhere near it
+        if (m.sp > 0.4) {
+          const beat = Math.floor(m.gaitPh * 2);
+          if (beat !== m.stepBeat) {
+            m.stepBeat = beat;
+            playMfStep(m.tdist, mfPan(m));
+            if (m.tdist < 55) camShake = Math.max(camShake, 0.30 * (1 - m.tdist / 55));
+          }
+        }
+        m.pulse -= dt;
+        if (m.pulse <= 0) { m.pulse = 4.5 + Math.random() * 4; if (m.lod === 0 && m.tdist < 90) playMfRoar(m.tdist + 60, mfPan(m)); }
+      }
+
+      if (m.lod >= 2 && !m.dead) continue;
+      if (mfHigh >= MF_DRAW) continue;
+      poseFlayer(m, dt, m.lod === 0);
+      writeFlayer(mfHigh++);
+    }
+    mfOvoidI.count = mfHigh * M_OVOID; mfBoneI.count = mfHigh * M_BONE;
+    mfKnucI.count = mfHigh * M_KNUC; mfSpikeI.count = mfHigh * M_SPIKE;
+    mfPetalI.count = mfHigh * M_PETAL;
+    for (const q of mfParts) q.instanceMatrix.needsUpdate = true;
+    const bolt = boltFlash * boltFlash;
+    for (const mt of [mfSkinMat, mfShellMat, mfMawMat]) {
+      mt.uniforms.uBolt.value = bolt;
+      mt.uniforms.uAmb.value = 0.30 * BACK_LIT + bolt * 0.6;
+      mt.uniforms.uFogCol.value.copy(scene.fog.color);
+      mt.uniforms.uFogDens.value = FOG_DENSITY * 2.1;
+      mt.uniforms.uTime.value = cityT;
+    }
+    //  the bed, and the boss bar
+    if (nearest && !nearest.m.dead) {
+      mfBedOn();
+      if (mfBed) { const d = Math.sqrt(nearest.d2);
+        try { mfBed.out.gain.value = Math.max(0, 1 - d / 300) * 0.55 * sfxVol; } catch (e) {} }
+      const m = nearest.m;
+      const show = m.tdist < 130 && (m.hasT && cityT - m.seeT < 24);
+      if (bossEl) {
+        bossEl.classList.toggle('on', show);
+        bossEl.classList.toggle('rage', !!m.panicked);
+        if (show && bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, m.hp / MF_HP).toFixed(3) + ')';
+      }
+    } else {
+      mfBedOff();
+      if (bossEl) bossEl.classList.remove('on');
+    }
+  }
+
+  // ---- network ---------------------------------------------------------
+  const MF_ST = ['idle', 'wander', 'alert', 'track', 'attack', 'summon', 'flee'];
+  function mfSnapshot() {
+    const k = [];
+    for (const m of flayers) {
+      if (!m.live) continue;
+      const h = (((m.hd || 0) % 6.2832) + 6.2832) % 6.2832;
+      k.push(m.slot, Math.round(m.x * 10), Math.round(m.z * 10), Math.round(h * HDQ),
+             Math.max(0, Math.round(m.hp)), MF_ST.indexOf(m.st) + 1,
+             (m.dead ? 1 : 0) | (m.panicked ? 2 : 0));
+    }
+    return k;
+  }
+  function applyMfSnapshot(k) {
+    if (!k) { if (flayers.some((o) => o.live)) clearFlayers(); return; }
+    for (const o of flayers) o.netSeen = false;
+    for (let i = 0; i + 6 < k.length; i += 7) {
+      let m = flayers[k[i]];
+      if (!m) { while (flayers.length <= k[i]) flayers.push({ slot: flayers.length, live: false }); m = flayers[k[i]]; }
+      if (!m.live) { spawnFlayer({ x: k[i + 1] / 10, z: k[i + 2] / 10 }); m = flayers[k[i]] || m; }
+      m.netSeen = true;
+      m.netX = k[i + 1] / 10; m.netZ = k[i + 2] / 10; m.netH = k[i + 3] / HDQ;
+      const nh = k[i + 4];
+      m.hp = (m.hpHold && performance.now() < m.hpHold) ? Math.min(m.hp, nh) : nh;
+      const st = MF_ST[k[i + 5] - 1];
+      const fl = k[i + 6];
+      if (st && st !== m.st) {
+        if (st === 'alert') playMfRoar(m.tdist, mfPan(m));
+        if (st === 'summon') playMfSummon(m.tdist, mfPan(m));
+        m.st = st; m.stT = 0;
+      }
+      if ((fl & 2) && !m.panicked) m.panicked = true;
+      if ((fl & 1) && !m.dead) { m.dead = true; m.deadT = 0; playMfDeath(m.tdist, mfPan(m)); }
+    }
+    for (const o of flayers) if (o.live && !o.netSeen) despawnFlayer(o);
+  }
+  function sendMfHit(m, dmg) {
+    if (!MP.connected || !MP.client || mobPub()) return;
+    m.hpHold = performance.now() + 1200;
+    try { MP.client.publish(mtopic('mfhit'), JSON.stringify({ i: m.slot, d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
+  }
+  function onMfHit(msg) {
+    const m = flayers[msg.i];
+    if (!m || !m.live || m.dead) return;
+    hurtFlayer(m, msg.d || 0, msg.x, msg.z);
+  }
+  function mfDebug() {
+    let live = 0, linkedD = 0, linkedG = 0, panic = 0, hp = 0, summ = 0;
+    for (const m of flayers) {
+      if (!m.live || m.dead) continue;
+      live++; hp = Math.round(m.hp); summ = Math.round(m.summonT);
+      if (m.panicked) panic++;
+      const c = mfCounts(m); linkedD += c.dogs; linkedG += c.gors;
+    }
+    return { live, hp, dogs: linkedD, gors: linkedG, panic, summon: summ,
+             share: +mfShareAcc.toFixed(1), thrown: !!mfThrown };
   }
 
   // ── red lightning ─────────────────────────────────────────────────
@@ -6909,6 +7987,7 @@
     updateLightning(dt);
     updateDogs(dt);                          // and it clears them out when you leave
     updateGorgons(dt);
+    updateFlayers(dt);
     if (wState === WS.BACK) {
       updateSpores(dt);
       // a bolt throws the whole city into relief for a few frames
