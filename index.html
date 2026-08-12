@@ -6667,7 +6667,7 @@
   //  mineral: this one has set, and there is more shell than hide on it.
   const mfSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
   const mfShellMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
-  const mfMawMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
+  const mfFangMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
   //  Darker than either of the others, and deliberately so: the light on this
   //  one is supposed to be coming out of it, and a body has to be dark before
   //  anything can be seen to leak from inside it. What catches the sky instead
@@ -6679,11 +6679,15 @@
   mfShellMat.uniforms.uSkin.value.setHex(0x1e1b1a); mfShellMat.uniforms.uDeep.value.setHex(0x050404);
   mfShellMat.uniforms.uWet.value = 0.40; mfShellMat.uniforms.uGloss.value = 1.00;
   mfShellMat.uniforms.uAmbCol.value.setHex(0x7c90ad);
-  mfMawMat.uniforms.uSkin.value.setHex(0x6e1912); mfMawMat.uniforms.uDeep.value.setHex(0x0d0201);
-  mfMawMat.uniforms.uShell.value.setHex(0x241f1d);
-  mfMawMat.uniforms.uWet.value = 0.62; mfMawMat.uniforms.uGloss.value = 0.85;
-  mfMawMat.uniforms.uAmbCol.value.setHex(0x8a8296);
-  mfMawMat.uniforms.uRidge.value = 1; mfMawMat.side = THREE.DoubleSide;
+  //  The other two spend their petal geometry on a maw that opens like a
+  //  flower, so it is painted throat-red. This one spends the same geometry on
+  //  teeth, and teeth are the one part of the animal that is not dark: bone,
+  //  hard and wet, which is what makes the mouths legible against the mass.
+  //  No radial gills either — a fang has no inside.
+  mfFangMat.uniforms.uSkin.value.setHex(0xbdb3a4); mfFangMat.uniforms.uDeep.value.setHex(0x50473c);
+  mfFangMat.uniforms.uWet.value = 0.85; mfFangMat.uniforms.uGloss.value = 1.20;
+  mfFangMat.uniforms.uAmbCol.value.setHex(0x9aa6b4);
+  mfFangMat.side = THREE.DoubleSide;
 
   //  10 ovoids (abdomen, thorax, back, skull, snout, brow, four leg mounts),
   //  19 bones (throat + six legs of three), 18 knuckles, 16 plates, 5 petals
@@ -6695,21 +6699,21 @@
   //  63 bones (throat, 6 legs of 3, 22 fused bodies of 2)
   //  40 knuckles (18 joints, 22 fused hands and skulls)
   //  16 plates and horns, 36 fangs
-  const M_OVOID = 20, M_BONE = 63, M_KNUC = 40, M_SPIKE = 16, M_PETAL = 36;
+  const M_OVOID = 20, M_BONE = 63, M_KNUC = 40, M_SPIKE = 16, M_FANG = 36;
   const mfOvoidI = dIM(dogOvoidGeo, mfSkinMat, MF_DRAW * M_OVOID);
   const mfBoneI = dIM(dogBoneGeo, mfShellMat, MF_DRAW * M_BONE);
   const mfKnucI = dIM(dogKnucGeo, mfShellMat, MF_DRAW * M_KNUC);
   const mfSpikeI = dIM(dogPetalGeo, mfShellMat, MF_DRAW * M_SPIKE);
-  const mfPetalI = dIM(dogPetalGeo, mfMawMat, MF_DRAW * M_PETAL);
-  const mfParts = [mfOvoidI, mfBoneI, mfKnucI, mfSpikeI, mfPetalI];
+  const mfFangI = dIM(dogPetalGeo, mfFangMat, MF_DRAW * M_FANG);
+  const mfParts = [mfOvoidI, mfBoneI, mfKnucI, mfSpikeI, mfFangI];
   //  the light that comes out of it
   mfSkinMat.uniforms.uGlow.value = 1.0; mfShellMat.uniforms.uGlow.value = 0.8;
   mfSkinMat.uniforms.uGlowCol.value.setHex(0x7a3cff); mfShellMat.uniforms.uGlowCol.value.setHex(0x5a4cff);
-  mfMawMat.uniforms.uGlow.value = 0.35; mfMawMat.uniforms.uGlowCol.value.setHex(0x9a30d0);
+  mfFangMat.uniforms.uGlow.value = 0.10; mfFangMat.uniforms.uGlowCol.value.setHex(0x9a70d0);
 
   const ML1 = 11.4, ML2 = 10.9;         // femur, tibia — the arch is in these
   const M_BODY_Y = 13.4, M_FOOT_R = 13.6;
-  const mOvoids = [], mBones = [], mKnucs = [], mSpikes = [], mPetals = [];
+  const mOvoids = [], mBones = [], mKnucs = [], mSpikes = [], mFangs = [];
   const mfRnd = mulberry(0x5e1f);        // one fixed shuffle, so the mass is the same every load
   const MK = {};
   {
@@ -6753,24 +6757,26 @@
     const buildMouth = (par, sc, px, py, pz, ry) => {
       const root = dnode(par, px, py, pz); root.rotation.y = ry;
       const up = dnode(root, 0, 0, 0), lo = dnode(root, 0, 0, 0);
-      dvis(up, mOvoids, 0.62 * sc, 0.30 * sc, 0.92 * sc, 0, 0.20 * sc, 0.55 * sc);
-      dvis(lo, mOvoids, 0.56 * sc, 0.26 * sc, 0.86 * sc, 0, -0.18 * sc, 0.52 * sc);
-      //  fangs: irregular, uneven, and pointing wherever the tissue set them
-      const n = sc > 0.7 ? 8 : 5;
+      dvis(up, mOvoids, 0.86 * sc, 0.40 * sc, 1.24 * sc, 0, 0.24 * sc, 0.66 * sc);
+      dvis(lo, mOvoids, 0.78 * sc, 0.35 * sc, 1.16 * sc, 0, -0.22 * sc, 0.62 * sc);
+      //  fangs: irregular, uneven, and pointing wherever the tissue set them.
+      //  Long, because a fang read at 30 m is a silhouette and a short one has
+      //  none — and the jaws are cut big against the skull for the same reason.
+      const n = sc > 1.0 ? 8 : 5;      // 8 + 5 + 5 positions, two jaws each = M_FANG
       for (let i = 0; i < n; i++) {
         const t = (i / (n - 1) - 0.5) * 2;
         for (const jaw of [up, lo]) {
           const dn = jaw === lo ? 1 : -1;
-          const f = dnode(jaw, t * 0.46 * sc, dn * -0.16 * sc, (0.35 + mfRnd() * 0.7) * sc);
+          const f = dnode(jaw, t * 0.62 * sc, dn * -0.20 * sc, (0.40 + mfRnd() * 0.80) * sc);
           f.rotation.set(dn * (1.35 + mfRnd() * 0.5), t * 0.5, (mfRnd() - 0.5) * 0.7, 'YXZ');
-          dvis(f, mPetals, (0.10 + mfRnd() * 0.05) * sc, (0.42 + mfRnd() * 0.42) * sc, (0.10 + mfRnd() * 0.05) * sc);
+          dvis(f, mFangs, (0.13 + mfRnd() * 0.06) * sc, (0.62 + mfRnd() * 0.62) * sc, (0.13 + mfRnd() * 0.06) * sc);
         }
       }
       MK.mouths.push({ up, lo, sc });
     };
-    buildMouth(maw, 1.0, 0, 0, 0, 0);                       // the main one
-    buildMouth(head, 0.52, -0.86, -0.30, 1.05, -0.62);      // and two set into the skull
-    buildMouth(head, 0.52, 0.86, -0.30, 1.05, 0.62);
+    buildMouth(maw, 1.30, 0, 0, 0, 0);                      // the main one
+    buildMouth(head, 0.74, -0.94, -0.34, 0.95, -0.66);      // and two set into the skull
+    buildMouth(head, 0.74, 0.94, -0.34, 0.95, 0.66);
     //  Six legs, evenly around the body. The femur is driven *up* and out — the
     //  knee ends above the back — and the tibia comes down outside it, which is
     //  the whole silhouette: a roof of legs you stand underneath.
@@ -6830,8 +6836,8 @@
       dvis(n, mOvoids, 0.52, 0.90, 0.42);
     }
     root.updateMatrixWorld(true);
-    const got = [mOvoids.length, mBones.length, mKnucs.length, mSpikes.length, mPetals.length];
-    const want = [M_OVOID, M_BONE, M_KNUC, M_SPIKE, M_PETAL];
+    const got = [mOvoids.length, mBones.length, mKnucs.length, mSpikes.length, mFangs.length];
+    const want = [M_OVOID, M_BONE, M_KNUC, M_SPIKE, M_FANG];
     for (let i = 0; i < want.length; i++) {
       if (got[i] !== want[i]) console.error('mind flayer rig: part ' + i + ' built ' + got[i] + ', reserved ' + want[i]);
     }
@@ -6933,7 +6939,7 @@
     k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, mBones[i].matrixWorld);
     k = slot * M_KNUC; for (let i = 0; i < M_KNUC; i++) mfKnucI.setMatrixAt(k + i, mKnucs[i].matrixWorld);
     k = slot * M_SPIKE; for (let i = 0; i < M_SPIKE; i++) mfSpikeI.setMatrixAt(k + i, mSpikes[i].matrixWorld);
-    k = slot * M_PETAL; for (let i = 0; i < M_PETAL; i++) mfPetalI.setMatrixAt(k + i, mPetals[i].matrixWorld);
+    k = slot * M_FANG; for (let i = 0; i < M_FANG; i++) mfFangI.setMatrixAt(k + i, mFangs[i].matrixWorld);
   }
 
   // ---- the population -----------------------------------------------
@@ -6987,7 +6993,7 @@
     k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, _dHideM);
     k = slot * M_KNUC; for (let i = 0; i < M_KNUC; i++) mfKnucI.setMatrixAt(k + i, _dHideM);
     k = slot * M_SPIKE; for (let i = 0; i < M_SPIKE; i++) mfSpikeI.setMatrixAt(k + i, _dHideM);
-    k = slot * M_PETAL; for (let i = 0; i < M_PETAL; i++) mfPetalI.setMatrixAt(k + i, _dHideM);
+    k = slot * M_FANG; for (let i = 0; i < M_FANG; i++) mfFangI.setMatrixAt(k + i, _dHideM);
   }
   function clearFlayers() { for (const m of flayers) if (m.live) despawnFlayer(m); if (bossEl) bossEl.classList.remove('on'); }
 
@@ -7656,10 +7662,10 @@
     }
     mfOvoidI.count = mfHigh * M_OVOID; mfBoneI.count = mfHigh * M_BONE;
     mfKnucI.count = mfHigh * M_KNUC; mfSpikeI.count = mfHigh * M_SPIKE;
-    mfPetalI.count = mfHigh * M_PETAL;
+    mfFangI.count = mfHigh * M_FANG;
     for (const q of mfParts) q.instanceMatrix.needsUpdate = true;
     const bolt = boltFlash * boltFlash;
-    for (const mt of [mfSkinMat, mfShellMat, mfMawMat]) {
+    for (const mt of [mfSkinMat, mfShellMat, mfFangMat]) {
       mt.uniforms.uBolt.value = bolt;
       mt.uniforms.uAmb.value = 0.19 * BACK_LIT + bolt * 0.6;
       mt.uniforms.uFogCol.value.copy(scene.fog.color);
