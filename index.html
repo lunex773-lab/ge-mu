@@ -1949,21 +1949,81 @@
     g.position.set(cx, by, cz); scene.add(g);
     bananas.push({ mesh: g, x: cx, z: cz, y: by, active: true, respawn: 0, ph: Math.random() * 6 });
   }
-  function updateBananas(dt) {
-    for (const b of bananas) {
-      if (!b.active) { b.respawn -= dt; if (b.respawn <= 0) { b.active = true; b.mesh.visible = true; } continue; }
+  // ---- rotten bananas: the same pickup, on the other side ----
+  //  Identical effect to the fresh ones — same heal, same ammo, same respawn —
+  //  because over there they are the only pickup there is and going hungry in
+  //  a district full of demodogs is not an interesting difficulty knob. Only
+  //  the look changes: blackened, sagging, and lit from inside like everything
+  //  else that grows over there. Placed from the world seed so every client
+  //  finds them in the same places.
+  const NUM_ROT = 12;
+  const rotMat = new THREE.MeshStandardMaterial({ color: 0x4a4a22, emissive: 0x121a06, roughness: 0.95, metalness: 0, flatShading: true });
+  const rotSpotMat = new THREE.MeshStandardMaterial({ color: 0x1b1a10, roughness: 1, metalness: 0, flatShading: true });
+  function makeRotBanana() {
+    const g = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.10, 6, 12, Math.PI * 1.1), rotMat);
+    m.rotation.x = Math.PI * 0.5; m.scale.set(1, 1, 0.78); g.add(m);          // gone soft and flat
+    for (let i = 0; i < 3; i++) {                                             // patches of rot
+      const s = new THREE.Mesh(new THREE.SphereGeometry(0.075 + i * 0.018, 6, 5), rotSpotMat);
+      const a = i * 2.1 + 0.4;
+      s.position.set(Math.cos(a) * 0.30, Math.sin(a) * 0.10, Math.sin(a) * 0.30);
+      g.add(s);
+    }
+    return g;
+  }
+  const rotBananas = [];
+  for (let n = 0; n < NUM_ROT; n++) {
+    const g = makeRotBanana();
+    g.visible = false; scene.add(g);
+    rotBananas.push({ mesh: g, x: 0, z: 0, y: 0.7, active: true, respawn: 0, ph: 0 });
+  }
+  let rotPlaced = false;
+  function placeRotBananas() {
+    if (rotPlaced) return;
+    rotPlaced = true;
+    const rnd = mulberry(WORLD_SEED ^ 0xba7a);       // same layout on every client
+    for (const b of rotBananas) {
+      for (let t = 0; t < 80; t++) {
+        const x = (rnd() * 2 - 1) * WORLD * 0.42, z = (rnd() * 2 - 1) * WORLD * 0.42;
+        if (!clearAt(x, z, 1.2)) continue;
+        b.x = x; b.z = z; break;
+      }
+      b.y = height(b.x, b.z) + 0.7;
+      b.ph = rnd() * 6;
+      b.mesh.position.set(b.x, b.y, b.z);
+    }
+  }
+  //  One picker for both, because they are the same pickup: whichever side you
+  //  are on, the list for that side is the live one and the other is hidden.
+  function eatBanana(b, arr, rotten) {
+    hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
+    reserve = Math.min(RESERVE_MAX, reserve + 60); updateAmmoUI();
+    notify((rotten ? '腐ったバナナ' : 'バナナ') + '  +40 HP  +60 AMMO', 1600);
+    b.active = false; b.mesh.visible = false; b.respawn = BANANA_RESPAWN;
+    void arr;
+  }
+  function updateBananaList(arr, dt, live, rotten) {
+    for (const b of arr) {
+      if (!b.active) {
+        b.respawn -= dt;
+        if (b.respawn <= 0) { b.active = true; b.mesh.visible = live; }
+        continue;
+      }
+      if (b.mesh.visible !== live) b.mesh.visible = live;
+      if (!live) continue;
       b.ph += dt;
-      b.mesh.position.y = b.y + Math.sin(b.ph * 2) * 0.12;
-      b.mesh.rotation.y += dt * 1.6;
-      if (!dead && wState === WS.NORMAL && (hp < HP_MAX || reserve < RESERVE_MAX)) {
+      b.mesh.position.y = b.y + Math.sin(b.ph * 2) * (rotten ? 0.07 : 0.12);   // the rotten ones hang heavier
+      b.mesh.rotation.y += dt * (rotten ? 0.7 : 1.6);
+      if (!dead && (hp < HP_MAX || reserve < RESERVE_MAX)) {
         const dx = p.x - b.x, dz = p.z - b.z;
-        if (dx * dx + dz * dz < 3.24) {                 // within ~1.8 m
-          hp = Math.min(HP_MAX, hp + BANANA_HEAL); updateHpUI(); playHeal(); publishState(true);
-          reserve = Math.min(RESERVE_MAX, reserve + 60); updateAmmoUI(); notify('バナナ  +40 HP  +60 AMMO', 1600);
-          b.active = false; b.mesh.visible = false; b.respawn = BANANA_RESPAWN;
-        }
+        if (dx * dx + dz * dz < 3.24) eatBanana(b, arr, rotten);              // within ~1.8 m
       }
     }
+  }
+  function updateBananas(dt) {
+    const back = wState === WS.BACK;
+    updateBananaList(bananas, dt, !back, false);
+    updateBananaList(rotBananas, dt, back, true);
   }
 
   // ---- compasses: five of them, scattered wide. Pick one up and every other
@@ -3593,6 +3653,26 @@
     publishState(true);
   }
   function respawn() {
+    //  Killed on the other side you come back at the tear, not at a street
+    //  corner in the middle of it. Anything else drops you into a district full
+    //  of things that hunt, several hundred metres from your only way out, with
+    //  no idea which way that is. Stepping out beside the gate means the first
+    //  decision after dying is yours: go back through, or go back in.
+    if (wState === WS.BACK && rift.present) {
+      const bx = Math.sin(rift.ry), bz = Math.cos(rift.ry);
+      for (const r of [3.4, 5.0, 7.0, 9.5]) {                 // just clear of it, and clear of a wall
+        for (const side of [0, 1, -1]) {
+          const x = rift.x + bx * r + bz * side * 2.2, z = rift.z + bz * r - bx * side * 2.2;
+          if (!clearAt(x, z, 0.9)) continue;
+          p.set(x, supportHeight(x, z, rift.y + 1) + EYE, z);
+          gateCool = 2.5;                                     // do not fall straight back through
+          return;
+        }
+      }
+      p.set(rift.x + bx * 3.4, rift.y + EYE, rift.z + bz * 3.4);
+      gateCool = 2.5;
+      return;
+    }
     const s = pickSpawn(); p.set(s.x, EYE, s.z);
   }
   function doContinue() {
@@ -4327,8 +4407,14 @@
   //  you closes to a distance it likes, waits for a second, bites once and
   //  leaves. Hurt it and it will usually break off and put a wreck between the
   //  two of you. Corner it and it screams, and then there are more of them.
-  const NDOG = 14;                       // hard ceiling on bodies in the world
-  const DOG_HP = 46;
+  //  The district is stocked, not spawned-around-you: NDOG bodies live across
+  //  the whole map at once and simply exist where they are, whether or not you
+  //  are near. DOG_DRAW caps how many may be *drawn* in one frame — the rig
+  //  writes into packed render slots, so the population and the draw cost are
+  //  independent numbers and forty-eight dogs cost the same five draw calls as
+  //  six did.
+  const NDOG = 48, DOG_DRAW = 18;
+  const DOG_HP = 92;
   const D_VIS = 30, D_VIS_COS = Math.cos(1.15), D_PERIPH = 7.5;   // sight: 30 m, ±66°, plus a close bubble
   const D_HEAR = 46;                     // and ears that reach further than the eyes
   const D_CALL_R = 50, D_CALL_MAX = 4, D_CALL_CD = 14;
@@ -4433,11 +4519,11 @@
   const D_OVOID = 10, D_BONE = 12, D_KNUC = 12, D_PAW = 4, D_PETAL = 5;
   const dIM = (g, m, n) => { const o = new THREE.InstancedMesh(g, m, n); o.frustumCulled = false;
     o.instanceMatrix.setUsage(THREE.DynamicDrawUsage); o.visible = false; scene.add(o); return o; };
-  const dogOvoidI = dIM(dogOvoidGeo, dogSkinMat, NDOG * D_OVOID);
-  const dogBoneI = dIM(dogBoneGeo, dogSkinMat, NDOG * D_BONE);
-  const dogKnucI = dIM(dogKnucGeo, dogSkinMat, NDOG * D_KNUC);
-  const dogPawI = dIM(dogPawGeo, dogSkinMat, NDOG * D_PAW);
-  const dogPetalI = dIM(dogPetalGeo, dogMawMat, NDOG * D_PETAL);
+  const dogOvoidI = dIM(dogOvoidGeo, dogSkinMat, DOG_DRAW * D_OVOID);
+  const dogBoneI = dIM(dogBoneGeo, dogSkinMat, DOG_DRAW * D_BONE);
+  const dogKnucI = dIM(dogKnucGeo, dogSkinMat, DOG_DRAW * D_KNUC);
+  const dogPawI = dIM(dogPawGeo, dogSkinMat, DOG_DRAW * D_PAW);
+  const dogPetalI = dIM(dogPetalGeo, dogMawMat, DOG_DRAW * D_PETAL);
   const dogParts = [dogOvoidI, dogBoneI, dogKnucI, dogPawI, dogPetalI];
 
   // ---- one shared skeleton, posed once per dog ----------------------
@@ -4666,19 +4752,25 @@
   function dogPackOf(d) { return dogPacks[d.pack]; }
 
   // ---- spawning -----------------------------------------------------
-  //  Never in front of you, never in the open next to you, and weighted toward
-  //  the places the document asks for: alleys, the lee of a wreck, indoors.
+  //  Anywhere in the district. They are not spawned around the player and
+  //  deleted behind them — the whole map is stocked, and one two hundred metres
+  //  away is as real as the one in front of you: it walks its own streets, and
+  //  it will come if it hears something. The only rule about the player is
+  //  negative: never within D_KEEP of them, so nothing ever appears in your lap.
+  const D_KEEP = 34;
   function dogSpawnSpot() {
     let best = null, bestS = -1;
-    for (let i = 0; i < 46; i++) {
-      const a = Math.random() * 6.2832, r = 34 + Math.random() * 62;
-      const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
-      if (Math.abs(x) > WORLD * 0.46 || Math.abs(z) > WORLD * 0.46) continue;
+    for (let i = 0; i < 60; i++) {
+      const x = (Math.random() * 2 - 1) * WORLD * 0.44, z = (Math.random() * 2 - 1) * WORLD * 0.44;
       if (!clearAt(x, z, 1.1)) continue;
       const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1;
-      camera.getWorldDirection(_rd);
-      const facing = (dx / d) * _rd.x + (dz / d) * _rd.z;
-      let s = 10 - facing * 9;                                  // strongly prefer behind you
+      if (d < D_KEEP) continue;
+      let s = 6;
+      if (d < 120) {                       // close enough to see arrive: keep it out of shot
+        camera.getWorldDirection(_rd);
+        const facing = (dx / d) * _rd.x + (dz / d) * _rd.z;
+        if (facing > 0) s -= facing * 14;  // a penalty only — never a bonus for being near
+      }
       const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
       const offRoad = Math.min(Math.abs(x - bi * PITCH), Math.abs(z - bj * PITCH));
       if (offRoad > RW + SWW) s += 7;                           // off the carriageway: an alley or a yard
@@ -4686,7 +4778,7 @@
         const wr = wrecks[w]; if (!wr) continue;
         if (Math.abs(wr.x - x) < 9 && Math.abs(wr.z - z) < 9) { s += 5; break; }
       }
-      s += Math.random() * 3;
+      s += Math.random() * 4;
       if (s > bestS) { bestS = s; best = { x, z }; }
     }
     return best;
@@ -5262,23 +5354,21 @@
 
     if (mine) {
       // keep the streets stocked, but never in a hurry and never in your face
-      //  Stock the district quickly when you first arrive and slowly once it is
-      //  populated, so walking through the tear does not drop you into an empty
-      //  city for half a minute, and a settled street is not a conveyor belt.
-      dogSpawnCd -= dt;
+      //  Stock the district. On arrival the map is filled in a few seconds —
+      //  several at a time, since they are going in all over a 600 m square and
+      //  you will not see them arrive — and after that it only tops up what has
+      //  been killed. Nothing is ever deleted for being far away: a demodog two
+      //  hundred metres off is still walking around out there.
       const live = dogs.reduce((a, o) => a + (o.live && !o.dead ? 1 : 0), 0);
       const want = NDOG - 2;
+      dogSpawnCd -= dt;
       if (dogSpawnCd <= 0 && live < want && !dogHoldSpawn) {
-        const deficit = (want - live) / want;
-        dogSpawnCd = (0.25 + (1 - deficit) * 2.6) * (0.7 + Math.random() * 0.6);
-        spawnDog();
+        const deficit = want - live;
+        const burst = deficit > 8 ? 4 : 1;                     // filling an empty map vs replacing a loss
+        for (let i = 0; i < burst; i++) spawnDog();
+        dogSpawnCd = deficit > 8 ? 0.12 : 3.5 + Math.random() * 4;
       }
-      for (const d of dogs) {                                 // and clear the far ones away
-        if (!d.live) continue;
-        const far = Math.hypot(d.x - p.x, d.z - p.z);
-        if (d.dead && d.deadT > 9) { despawnDog(d); continue; }
-        if (!d.dead && far > 150) despawnDog(d);
-      }
+      for (const d of dogs) if (d.live && d.dead && d.deadT > 9) despawnDog(d);
       dogPackTick(dt);
     }
 
@@ -5286,7 +5376,7 @@
     for (const d of dogs) {
       if (!d.live) continue;
       const dx = d.x - p.x, dz = d.z - p.z, d2 = dx * dx + dz * dz;
-      d.lod = d2 < 1600 ? 0 : d2 < 8100 ? 1 : 2;               // 40 m / 90 m
+      d.lod = d2 < 1600 ? 0 : d2 < 8100 ? 1 : d2 < 40000 ? 2 : 3;   // 40 / 90 / 200 m
       // held still by the debug harness: posed, drawn, and not thinking, so a
       // specific frame of a specific gait can be looked at without it walking off
       if (d.pinned) { poseDog(d, dt, true); writeDog(d.slot); continue; }
@@ -5294,7 +5384,7 @@
         //  AI LOD: everything close thinks every frame, the middle band every
         //  third, the far band every eighth — with the step scaled so their
         //  motion is identical, just coarser.
-        const every = d.lod === 0 ? 1 : d.lod === 1 ? 3 : 8;
+        const every = d.lod === 0 ? 1 : d.lod === 1 ? 3 : d.lod === 2 ? 8 : 24;
         if ((dogAiFrame + d.slot) % every === 0) dogTick(d, dt * every);
         d.rx = d.x; d.rz = d.z;
       } else {
@@ -5333,14 +5423,15 @@
         }
       }
 
-      if (d.slot >= dogHigh) dogHigh = d.slot + 1;
-      if (d.lod >= 2 && !d.dead) { hideDogSlot(d.slot); continue; }   // beyond 90 m: simulated, not drawn
+      //  Drawn ones go into packed render slots rather than their own index, so
+      //  the instance count follows what is actually on screen. Beyond 90 m they
+      //  keep thinking and stop being drawn entirely — no hidden matrices to
+      //  push through the vertex stage for the other forty.
+      if (d.lod >= 2 && !d.dead) continue;
+      if (dogHigh >= DOG_DRAW) continue;
       poseDog(d, dt, d.lod === 0);
-      writeDog(d.slot);
+      writeDog(dogHigh++);
     }
-    //  Only draw as far up the reserve as we have actually filled. Three dogs
-    //  in the world should not push fourteen dogs' worth of hidden instances
-    //  through the vertex stage every frame.
     dogOvoidI.count = dogHigh * D_OVOID; dogBoneI.count = dogHigh * D_BONE;
     dogKnucI.count = dogHigh * D_KNUC; dogPawI.count = dogHigh * D_PAW;
     dogPetalI.count = dogHigh * D_PETAL;
@@ -5435,8 +5526,8 @@
   //  no retreat state, no hide state, no flee state and no call — not tuned
   //  down, absent — so at ten percent health it is still walking at you. What
   //  makes it frightening is that it does not stop.
-  const NGOR = 3;                       // the whole world, not the screen
-  const GOR_HP = 210;                   // ~4.5 demodogs, ~11 rounds
+  const NGOR = 6, GOR_DRAW = 4;         // across the district, rarely two together
+  const GOR_HP = 420;                   // ~4.5 demodogs, ~21 rounds
   const G_VIS = 42, G_VIS_COS = Math.cos(1.34), G_PERIPH = 11;   // sharper eyes than the dogs
   const G_HEAR = 72;                    // and it hears the whole district
   const G_MEM = 16;                     // how long it keeps hunting a place you left
@@ -5468,11 +5559,11 @@
   //  9 ovoids, 13 bones (throat, two legs of three, two arms of three),
   //  12 knuckles, 8 talons (two toes, six fingers), 8 petals (4 outer, 4 inner)
   const G_OVOID = 9, G_BONE = 13, G_KNUC = 12, G_CLAW = 8, G_PETAL = 8;
-  const gorOvoidI = dIM(dogOvoidGeo, gorSkinMat, NGOR * G_OVOID);
-  const gorBoneI = dIM(dogBoneGeo, gorSkinMat, NGOR * G_BONE);
-  const gorKnucI = dIM(dogKnucGeo, gorSkinMat, NGOR * G_KNUC);
-  const gorClawI = dIM(dogPetalGeo, gorClawMat, NGOR * G_CLAW);
-  const gorPetalI = dIM(dogPetalGeo, gorMawMat, NGOR * G_PETAL);
+  const gorOvoidI = dIM(dogOvoidGeo, gorSkinMat, GOR_DRAW * G_OVOID);
+  const gorBoneI = dIM(dogBoneGeo, gorSkinMat, GOR_DRAW * G_BONE);
+  const gorKnucI = dIM(dogKnucGeo, gorSkinMat, GOR_DRAW * G_KNUC);
+  const gorClawI = dIM(dogPetalGeo, gorClawMat, GOR_DRAW * G_CLAW);
+  const gorPetalI = dIM(dogPetalGeo, gorMawMat, GOR_DRAW * G_PETAL);
   const gorParts = [gorOvoidI, gorBoneI, gorKnucI, gorClawI, gorPetalI];
 
   //  Standing about 2.7 m — a little under a floor, so it can walk indoors and
@@ -5705,7 +5796,7 @@
   let gorHitCd = 0;
   function gorStartAtk(g, kind) {
     const A = G_ATK[kind];
-    g.atk = { kind, t: 0, arm: A.arm === 0 ? (Math.random() < 0.5 ? 0 : 1) : A.arm, arm01: 1, phase: -1, hit: 0 };
+    g.atk = { kind, t: 0, arm: A.arm === 0 ? (Math.random() < 0.5 ? 0 : 1) : A.arm, arm01: 1, phase: -1, hit: 0, sfx: 0 };
     g.st = 'attack'; g.stT = 0;
     if (kind === 'pred') playGorFaceOpen(g.tdist, gorPan(g));
     else playGorWind(g.tdist, gorPan(g), kind === 'lunge');
@@ -5733,18 +5824,25 @@
         g.mawWant = 1; g.predLean = Math.min(1, g.predLean + dt * 4);
         gorStep(g, g.tx, g.tz, 8.5, dt);
       }
-      //  the damage window is a slice of the swing, not the whole attack
-      if (!a.hit && k > 0.35) {
-        a.hit = 1;
-        const reach = A.reach;
-        if (!dead && g.tdist < reach && gorHitCd <= 0 && wState === WS.BACK) {
-          const dmg = Math.round(A.dmg * (g.enraged ? 1.25 : 1));
-          applyDamage(dmg, null); gorHitCd = 0.5;
-          camShake = Math.max(camShake, a.kind === 'pred' ? 0.85 : 0.42);
-          if (a.kind === 'pred') { playGorPredation(0, gorPan(g)); gorBind = 0.55; }
-        }
+      //  The damage window is a slice of the swing rather than the whole
+      //  attack, and it stays open for the rest of it. Testing the range once,
+      //  on whichever frame happened to cross the threshold, meant a lunge
+      //  travelling at sixteen metres a second could pass clean through the
+      //  player between two frames and register as a miss — the attempt was
+      //  spent on a sample, not on the swing. Now any frame of the window in
+      //  which it is actually in reach connects, so the hit does not depend on
+      //  the frame rate.
+      if (!a.sfx && k > 0.35) {
+        a.sfx = 1;
         playGorSwing(g.tdist, gorPan(g), a.kind);
         if (a.kind === 'dclaw') a.arm = a.arm === 2 ? 2 : 1 - a.arm;
+      }
+      if (!a.hit && k > 0.35 && !dead && g.tdist < A.reach && gorHitCd <= 0 && wState === WS.BACK) {
+        a.hit = 1;
+        const dmg = Math.round(A.dmg * (g.enraged ? 1.25 : 1));
+        applyDamage(dmg, null); gorHitCd = 0.5;
+        camShake = Math.max(camShake, a.kind === 'pred' ? 0.85 : 0.42);
+        if (a.kind === 'pred') { playGorPredation(0, gorPan(g)); gorBind = 0.55; }
       }
     } else {
       a.phase = 1; a.arm01 = Math.max(0, 1 - (a.t - A.wind - A.swing) / A.rec);
@@ -5798,23 +5896,35 @@
 
   // ---- the population -----------------------------------------------
   const gorgons = [];
-  let gorsOn = false, gorSpawnCd = 10, gorFrame = 0, gorHigh = 0, gorHoldSpawn = false, gorBind = 0;
-  //  Few, and never where you are looking. The spec wants an encounter you
-  //  hear before you see, so it prefers to arrive far out and behind cover,
-  //  and its footsteps carry a long way.
+  let gorsOn = false, gorSpawnCd = 4, gorFrame = 0, gorHigh = 0, gorHoldSpawn = false, gorBind = 0;
+  //  Spread across the district, and kept apart from each other — the point of
+  //  a rare thing is that you do not turn a corner into two of them. Never
+  //  within G_KEEP of the player, and heavily biased out of your line of sight
+  //  when it does land nearby, because this is an encounter you should hear
+  //  coming before you ever see it.
+  const G_KEEP = 58, G_APART = 150;
   function gorSpawnSpot() {
     let best = null, bestS = -1;
-    for (let i = 0; i < 40; i++) {
-      const a = Math.random() * 6.2832, r = 58 + Math.random() * 54;
-      const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
-      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+    for (let i = 0; i < 60; i++) {
+      const x = (Math.random() * 2 - 1) * WORLD * 0.44, z = (Math.random() * 2 - 1) * WORLD * 0.44;
       if (!clearAt(x, z, 1.4)) continue;
       const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1;
-      camera.getWorldDirection(_rd);
-      let s = 8 - ((dx / d) * _rd.x + (dz / d) * _rd.z) * 10;      // out of sight by strong preference
+      if (d < G_KEEP) continue;
+      let apart = true;
+      for (const o of gorgons) {
+        if (!o.live || o.dead) continue;
+        if (Math.hypot(o.x - x, o.z - z) < G_APART) { apart = false; break; }
+      }
+      if (!apart) continue;
+      let s = 8;
+      if (d < 160) {
+        camera.getWorldDirection(_rd);
+        const facing = (dx / d) * _rd.x + (dz / d) * _rd.z;
+        if (facing > 0) s -= facing * 16;
+      }
       const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
       if (Math.min(Math.abs(x - bi * PITCH), Math.abs(z - bj * PITCH)) > RW + SWW) s += 6;
-      s += Math.random() * 3;
+      s += Math.random() * 4;
       if (s > bestS) { bestS = s; best = { x, z }; }
     }
     return best;
@@ -5971,13 +6081,15 @@
     g.hp -= dmg;
     g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
     if (g.hp <= 0) { killGorgon(g); return; }
-    //  §27: it does not flinch at small arms. A rifle round is roughly a tenth
-    //  of its health, and that has to sit firmly in the band that barely moves
-    //  it — otherwise a full magazine is a stunlock and none of the rest of
-    //  this design ever gets to happen.
-    const f = dmg / GOR_HP;
-    if (f > 0.25) { g.stagger = 1; if (g.atk) { g.atk = null; g.atkCd = 0.7; } }    // heavy: the swing is broken
-    else if (f > 0.12) g.stagger = Math.max(g.stagger, 0.55);                        // medium: a real rock back
+    //  §27: it does not flinch at small arms. These are absolute figures, not
+    //  fractions of its health, because what matters is the size of the hit
+    //  that landed rather than how much of the thing it happened to be. Written
+    //  as fractions they moved when the health did: doubling its HP quietly
+    //  pushed the player's only weapon out of every band that could interrupt
+    //  a swing, which is a balance change nobody asked for. A rifle round is
+    //  20 and sits well inside "barely noticed", as the document wants.
+    if (dmg > 70) { g.stagger = 1; if (g.atk) { g.atk = null; g.atkCd = 0.7; } }     // heavy: the swing is broken
+    else if (dmg > 30) g.stagger = Math.max(g.stagger, 0.55);                        // medium: a real rock back
     else g.stagger = Math.max(g.stagger, 0.16);                                      // light: barely noticed
     if (!g.enraged && g.hp <= GOR_HP * G_ENRAGE) {
       g.enraged = true; g.atk = null; g.st = 'enrage'; g.stT = 0; g.mawWant = 1;
@@ -6175,40 +6287,40 @@
     const mine = mobSim();
 
     if (mine) {
-      //  One near you, and it takes its time arriving. It does not vanish
-      //  because you walked away either: while it is hunting you it stays.
+      //  A handful across the whole district, kept apart, and never removed for
+      //  being far away — one you walked away from is still out there walking
+      //  its own streets. Only a body is ever cleared.
       gorSpawnCd -= dt;
-      let near = 0;
+      let live = 0, near = 0;
       for (const g of gorgons) {
         if (!g.live) continue;
-        const far = Math.hypot(g.x - p.x, g.z - p.z);
-        if (far < G_NEAR && !g.dead) near++;
-        if (g.dead && g.deadT > 14) { despawnGorgon(g); continue; }
-        const hunting = g.hasT && cityT - g.seeT < G_MEM;
-        if (!g.dead && far > 210 && !hunting) despawnGorgon(g);
+        if (g.dead) { if (g.deadT > 14) despawnGorgon(g); continue; }
+        live++;
+        if (Math.hypot(g.x - p.x, g.z - p.z) < G_NEAR) near++;
       }
-      if (gorSpawnCd <= 0 && near < 1 && !gorHoldSpawn) {
-        gorSpawnCd = 34 + Math.random() * 34;
+      if (gorSpawnCd <= 0 && live < NGOR && !gorHoldSpawn) {
+        //  stock the district on arrival, then top up slowly
+        gorSpawnCd = live < NGOR - 1 ? 2.5 + Math.random() * 2.5 : 22 + Math.random() * 26;
         spawnGorgon();
       }
+      void near;
     }
 
     gorFrame++;
     for (const g of gorgons) {
       if (!g.live) continue;
       const dx = g.x - p.x, dz = g.z - p.z, d2 = dx * dx + dz * dz;
-      g.lod = d2 < 2500 ? 0 : d2 < 12100 ? 1 : 2;      // 50 m / 110 m
+      g.lod = d2 < 2500 ? 0 : d2 < 12100 ? 1 : d2 < 48400 ? 2 : 3;   // 50 / 110 / 220 m
       const fighting = g.atk || g.st === 'chase' || g.st === 'attack' || g.st === 'reposition' || g.st === 'enrage';
       if (g.pinned) {
         //  held by the debug harness: posed exactly as handed over and left
         //  there, easing included, so a specific frame can be photographed
-        poseGorgon(g, dt, true); writeGor(g.slot);
-        if (g.slot >= gorHigh) gorHigh = g.slot + 1;
+        if (gorHigh < GOR_DRAW) { poseGorgon(g, dt, true); writeGor(gorHigh++); }
         continue;
       }
       if (mine) {
         //  AI LOD — but a fight always runs at full rate, as the spec requires
-        const every = (fighting || g.lod === 0) ? 1 : g.lod === 1 ? 3 : 8;
+        const every = (fighting || g.lod === 0) ? 1 : g.lod === 1 ? 3 : g.lod === 2 ? 8 : 24;
         if ((gorFrame + g.slot) % every === 0) gorThink(g, dt * every);
         g.rx = g.x; g.rz = g.z;
       } else {
@@ -6248,10 +6360,10 @@
         }
       }
 
-      if (g.slot >= gorHigh) gorHigh = g.slot + 1;
-      if (g.lod >= 2 && !g.dead && !g.pinned) { hideGorSlot(g.slot); continue; }
+      if (g.lod >= 2 && !g.dead && !g.pinned) continue;      // still thinking, not drawn
+      if (gorHigh >= GOR_DRAW) continue;
       poseGorgon(g, dt, g.lod === 0);
-      writeGor(g.slot);
+      writeGor(gorHigh++);
     }
     gorOvoidI.count = gorHigh * G_OVOID; gorBoneI.count = gorHigh * G_BONE;
     gorKnucI.count = gorHigh * G_KNUC; gorClawI.count = gorHigh * G_CLAW;
@@ -6723,7 +6835,7 @@
     wState = w;
     const back = w === WS.BACK;
     collectNormalOnly();
-    if (back) { growVines(); buildWrecks(); poseWrecks(); }
+    if (back) { growVines(); buildWrecks(); poseWrecks(); placeRotBananas(); }
     // the crowd, the traffic and the troop simply are not over here
     for (const o of NORMAL_ONLY) if (o) o.visible = !back;
     rotWorld(back);
@@ -6898,6 +7010,8 @@
     }
     ctx.fillStyle = '#F6D21C';                              // bananas
     if (wState === WS.NORMAL) for (const b of bananas) { if (!b.active) continue; const m = w2m(b.x, b.z, size); ctx.beginPath(); ctx.arc(m[0], m[1], full ? 7 : 3.2, 0, 6.3); ctx.fill(); }
+    ctx.fillStyle = '#8a9430';                              // the rotten ones, over there
+    if (wState === WS.BACK) for (const b of rotBananas) { if (!b.active) continue; const m = w2m(b.x, b.z, size); ctx.beginPath(); ctx.arc(m[0], m[1], full ? 7 : 3.2, 0, 6.3); ctx.fill(); }
     ctx.fillStyle = '#6eebff';                              // compasses
     if (wState === WS.NORMAL) for (const c of compassItems) {
       if (!c.active) continue;
