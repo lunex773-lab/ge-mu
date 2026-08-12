@@ -5008,6 +5008,19 @@
         const wr = wrecks[w]; if (!wr) continue;
         if (Math.abs(wr.x - x) < 9 && Math.abs(wr.z - z) < 9) { s += 5; break; }
       }
+      //  Elbow room, and it is what actually spreads them. Every other term here
+      //  is about the *kind* of place a demodog likes, and liking the same kinds
+      //  of place is exactly how forty-eight of them end up in the same third of
+      //  the map. This one asks a different question — is anything already out
+      //  there? — and it is worth more than all the flavour combined, so an
+      //  empty quarter of the district always outbids a good corner of a full one.
+      let nearest = 1e9;
+      for (const o of dogs) {
+        if (!o.live || o.dead) continue;
+        const q = Math.hypot(o.x - x, o.z - z);
+        if (q < nearest) { nearest = q; if (nearest < 12) break; }
+      }
+      if (nearest < 1e8) s += Math.min(nearest, 150) * 0.18;    // up to +27, dwarfing the rest
       s += Math.random() * 4;
       if (s > bestS) { bestS = s; best = { x, z }; }
     }
@@ -5126,6 +5139,17 @@
         if (!o.live || o.dead) continue;
         const ex = d.x - o.x, ez = d.z - o.z, e2 = ex * ex + ez * ez;
         if (e2 < 30 && e2 > 1e-4) { const e = Math.sqrt(e2), w = 1 - e / 5.5; sx += ex / e * w * 2.2; sz += ez / e * w * 2.2; }
+      }
+      //  and they get well out of the king's way. He does not fight alongside
+      //  vermin — he stands in a clear ring and lets the street come to him,
+      //  which is also the only reason the fight against him is legible: a
+      //  boss you cannot see past is not a boss, it is a crowd.
+      if (vec.live && !vec.dead) {
+        const ex = d.x - vec.x, ez = d.z - vec.z, e2 = ex * ex + ez * ez;
+        if (e2 < V_CLEAR * V_CLEAR && e2 > 1e-4) {
+          const e = Math.sqrt(e2), w = 1 - e / V_CLEAR;
+          sx += ex / e * w * 3.4; sz += ez / e * w * 3.4;
+        }
       }
       ux += sx * 2.6; uz += sz * 2.6;
       const un = Math.hypot(ux, uz) || 1; ux /= un; uz /= un;
@@ -5370,7 +5394,20 @@
     if (dogRepack <= 0) {
       dogRepack = 2.5;
       const live = dogs.filter((d) => d.live && !d.dead);
-      const carry = dogPacks.map((k) => ({ tx: k.tx, tz: k.tz, tT: k.tT, alert: k.alert }));
+      //  Each animal's own memory is what survives the reshuffle. It used to be
+      //  pooled from every old pack and handed to every new one, which meant a
+      //  single sighting anywhere became a district-wide alarm within one repack
+      //  — forty-eight animals all walking to the same street corner, and the
+      //  rest of the map empty. Knowledge now travels the way it should: through
+      //  the animal that actually has it.
+      //  Every animal inherits what *its own* pack knew — not a pool of what
+      //  every pack knew. That distinction is the whole fix: pooled, one
+      //  sighting became a district-wide alarm within one repack and forty-eight
+      //  animals walked to the same corner. Per-member, a scream still travels
+      //  (the animals it reached carry it into whatever pack they land in) and
+      //  it still stops at the edge of the group that actually heard it.
+      const inherit = new Map();
+      for (const k of dogPacks) for (const m of k.members) inherit.set(m, k);
       for (const d of live) d.pack = -1;
       dogPacks.length = 0;
       for (const d of live) {
@@ -5386,8 +5423,15 @@
             o.pack = pk.id; pk.members.push(o.slot); q.push(o);
           }
         }
-        // whatever the members last knew about you survives the reshuffle
-        for (const c of carry) if (c.tT > pk.tT) { pk.tx = c.tx; pk.tz = c.tz; pk.tT = c.tT; pk.alert = Math.max(pk.alert, c.alert); }
+        //  seeded from its own members only — the freshest thing any of them
+        //  personally knows, and the alarm level they personally carried over
+        for (const sl of pk.members) {
+          const o = dogs[sl]; if (!o) continue;
+          if (o.hasT && o.seeT > pk.tT) { pk.tx = o.tx; pk.tz = o.tz; pk.tT = o.seeT; }
+          const k = inherit.get(sl); if (!k) continue;
+          if (k.tT > pk.tT) { pk.tx = k.tx; pk.tz = k.tz; pk.tT = k.tT; }
+          pk.alert = Math.max(pk.alert, k.alert);
+        }
       }
       if (!dogPacks.length) newPack();
     }
@@ -5624,7 +5668,7 @@
         const deficit = want - live;
         const burst = deficit > 8 ? 4 : 1;                     // filling an empty map vs replacing a loss
         for (let i = 0; i < burst; i++) spawnDog();
-        dogSpawnCd = deficit > 8 ? 0.12 : 3.5 + Math.random() * 4;
+        dogSpawnCd = deficit > 8 ? 0.10 : 3.5 + Math.random() * 4;
       }
       for (const d of dogs) if (d.live && d.dead && d.deadT > 9) despawnDog(d);
       dogPackTick(dt);
@@ -6130,6 +6174,12 @@
     cityCollide(_gFootW, g.y, g.y + 2.3, 0.52);           // it is tall: check head height too
     wreckCollide(_gFootW, 0.52);
     if (Math.abs(_gFootW.x) < WORLD * 0.48 && Math.abs(_gFootW.z) < WORLD * 0.48) { g.x = _gFootW.x; g.z = _gFootW.z; }
+    //  the king's ground is his own — a predator that walks through him reads as
+    //  two monsters occupying one space, which is worse than either alone
+    if (vec.live && !vec.dead) {
+      const ex = g.x - vec.x, ez = g.z - vec.z, e = Math.hypot(ex, ez);
+      if (e < V_CLEAR && e > 1e-3) { g.x = vec.x + ex / e * V_CLEAR; g.z = vec.z + ez / e * V_CLEAR; }
+    }
     g.sp = dt > 1e-5 ? Math.hypot(g.x - bx, g.z - bz) / dt : 0;
     g.y += (supportHeight(g.x, g.z, g.y + 0.6) - g.y) * Math.min(1, dt * 8);
     return dd;
@@ -7845,6 +7895,8 @@
   //  OBSERVE come before anything violent, and he spends real time in them.
   const V_HP = MF_HP * 3;                  // 12600
   const V_SIGHT = 124, V_LINK = 190;       // he hears through the whole district
+  const V_CLEAR = 26;                      // and nothing of his stands inside this
+  const V_CMD_DOG = 5, V_CMD_GOR = 2;      // §22/§65: he orders a few, not everything
   const V_HEIGHT = 5.1, V_HIP = 2.72;
   const VL1 = 1.45, VL2 = 1.38;            // thigh / shin
   const VA1 = 1.15, VA2 = 1.10;            // upper arm / forearm at rest
@@ -8307,16 +8359,19 @@
       if (m.st === 'flee') { m.st = 'track'; m.stT = 0; }
       sent++;
     }
-    for (const g of gorgons) {
-      if (!g.live || g.dead) continue;
-      if (Math.hypot(g.x - vec.x, g.z - vec.z) > V_LINK) continue;
+    //  §22/§65: a few, and the nearest — not the whole district. He is not
+    //  worried, so he does not empty the map onto one street; and a fight you
+    //  cannot see through is not made better by adding forty more bodies to it.
+    const pick = (arr, n) => arr
+      .filter((o) => o.live && !o.dead && Math.hypot(o.x - vec.x, o.z - vec.z) <= V_LINK)
+      .sort((a, b) => Math.hypot(a.x - vec.x, a.z - vec.z) - Math.hypot(b.x - vec.x, b.z - vec.z))
+      .slice(0, n);
+    for (const g of pick(gorgons, V_CMD_GOR)) {
       g.hasT = true; g.tx = vec.tx; g.tz = vec.tz; g.seeT = cityT;
       if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
       sent++;
     }
-    for (const d of dogs) {
-      if (!d.live || d.dead) continue;
-      if (Math.hypot(d.x - vec.x, d.z - vec.z) > V_LINK) continue;
+    for (const d of pick(dogs, V_CMD_DOG)) {
       d.hasT = true; d.tx = vec.tx; d.tz = vec.tz; d.seeT = cityT;
       //  §53: they do not hide and they do not break off while he is watching
       if (d.st === 'wander' || d.st === 'idle' || d.st === 'hide' || d.st === 'flee') { d.st = 'chase'; d.stT = 0; }
