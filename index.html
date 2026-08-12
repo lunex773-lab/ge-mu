@@ -4556,8 +4556,8 @@
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform vec3 uSkin, uDeep, uFogCol, uSunDir, uAmbCol, uShell;
-      uniform float uFogDens, uAmb, uBolt, uRidge, uTime, uWet;
+      uniform vec3 uSkin, uDeep, uFogCol, uSunDir, uAmbCol, uShell, uGlowCol;
+      uniform float uFogDens, uAmb, uBolt, uRidge, uTime, uWet, uGlow, uGloss;
       varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog;
       float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       void main() {
@@ -4597,6 +4597,38 @@
         float ndl = max(dot(n, uSunDir), 0.0);
         col *= uAmb + 0.72 * ndl;
         col += uAmbCol * (0.10 + 0.42 * rim) * uWet;
+        // Not all of the hide is hide. Patches have gone hard and take a tight
+        // highlight the way wet bone does; the mottle picks which, so the sheen
+        // sits in irregular plates instead of lacquering the whole animal.
+        if (uGloss > 0.001) {
+          float plate = smoothstep(0.44, 0.86, mott);
+          float spec = pow(max(dot(reflect(-uSunDir, n), vd), 0.0), 46.0);
+          col += uAmbCol * spec * plate * uGloss * 2.4;
+        }
+        // Something is lit inside the mass and it comes out through the seams:
+        // thin ridged lines where the fused tissue never closed over. Three
+        // families of ridge crossing at an angle so it reads as a crack network
+        // rather than as stripes, breathing slowly and unevenly.
+        //  That fine network is only honest close up. A metre of it inside one
+        //  pixel averages to a flat wash, and a wash over the whole body turns a
+        //  dark mass pale — so it fades with distance and hands over to a coarse
+        //  one that survives being averaged: slow pools of light deep under the
+        //  flesh, which is what you should see of this thing from a street away.
+        if (uGlow > 0.001) {
+          float r1 = 1.0 - abs(sin(vL.y * 9.0 + vL.x * 5.0 + seed * 6.3));
+          float r2 = 1.0 - abs(sin(vL.z * 7.0 - vL.y * 4.0 + seed * 3.1));
+          float r3 = 1.0 - abs(sin(vL.x * 12.0 + vL.z * 8.0 + seed * 9.7));
+          float seam = pow(clamp(r1, 0.0, 1.0), 22.0)
+                     + pow(clamp(r2, 0.0, 1.0), 28.0) * 0.8
+                     + pow(clamp(r3, 0.0, 1.0), 36.0) * 0.5;
+          float pool = pow(clamp(1.0 - abs(sin(vL.y * 2.1 + vL.x * 1.3 + seed * 4.0)), 0.0, 1.0), 3.0);
+          float near = 1.0 - smoothstep(26.0, 95.0, vFog);
+          float breath = 0.62 + 0.38 * sin(uTime * 1.3 + seed * 6.0 + vL.y * 1.7);
+          col += uGlowCol * (seam * near + pool * (0.34 - 0.20 * near)) * uGlow * breath;
+          //  and a haze off the edges — kept low, because a limb is nearly all
+          //  grazing angle and a generous rim turns every leg into a neon tube
+          col += uGlowCol * rim * rim * uGlow * 0.09;
+        }
         col += vec3(0.60, 0.10, 0.07) * uBolt * (0.30 + 0.70 * rim);
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -4608,7 +4640,8 @@
     uSunDir: { value: SUN_DIR }, uAmbCol: { value: new THREE.Color(0x9fb3ac) },
     uAmb: { value: 0.52 }, uBolt: { value: 0 }, uRidge: { value: 0 },
     uShell: { value: new THREE.Color(0x9d8474) },
-    uTime: { value: 0 }, uWet: { value: 1 },
+    uGlowCol: { value: new THREE.Color(0x6a3cff) }, uGlow: { value: 0 },
+    uTime: { value: 0 }, uWet: { value: 1 }, uGloss: { value: 0 },
   });
   const dogSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
   const dogMawMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
@@ -6635,27 +6668,49 @@
   const mfSkinMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
   const mfShellMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
   const mfMawMat = new THREE.ShaderMaterial({ uniforms: dogMatU(), ...dogFleshShader });
-  mfSkinMat.uniforms.uSkin.value.setHex(0x463a34); mfSkinMat.uniforms.uDeep.value.setHex(0x0f0a09);
-  mfSkinMat.uniforms.uWet.value = 0.75;
-  mfShellMat.uniforms.uSkin.value.setHex(0x332d2a); mfShellMat.uniforms.uDeep.value.setHex(0x090707);
-  mfShellMat.uniforms.uWet.value = 0.55;
-  mfMawMat.uniforms.uSkin.value.setHex(0x8e2118); mfMawMat.uniforms.uDeep.value.setHex(0x120202);
-  mfMawMat.uniforms.uShell.value.setHex(0x3a3330);
+  //  Darker than either of the others, and deliberately so: the light on this
+  //  one is supposed to be coming out of it, and a body has to be dark before
+  //  anything can be seen to leak from inside it. What catches the sky instead
+  //  is the hardened plating — a cold blue-steel sheen in patches, which is the
+  //  bio-metallic half of the description.
+  mfSkinMat.uniforms.uSkin.value.setHex(0x2b2320); mfSkinMat.uniforms.uDeep.value.setHex(0x080605);
+  mfSkinMat.uniforms.uWet.value = 0.55; mfSkinMat.uniforms.uGloss.value = 0.60;
+  mfSkinMat.uniforms.uAmbCol.value.setHex(0x74869f);
+  mfShellMat.uniforms.uSkin.value.setHex(0x1e1b1a); mfShellMat.uniforms.uDeep.value.setHex(0x050404);
+  mfShellMat.uniforms.uWet.value = 0.40; mfShellMat.uniforms.uGloss.value = 1.00;
+  mfShellMat.uniforms.uAmbCol.value.setHex(0x7c90ad);
+  mfMawMat.uniforms.uSkin.value.setHex(0x6e1912); mfMawMat.uniforms.uDeep.value.setHex(0x0d0201);
+  mfMawMat.uniforms.uShell.value.setHex(0x241f1d);
+  mfMawMat.uniforms.uWet.value = 0.62; mfMawMat.uniforms.uGloss.value = 0.85;
+  mfMawMat.uniforms.uAmbCol.value.setHex(0x8a8296);
   mfMawMat.uniforms.uRidge.value = 1; mfMawMat.side = THREE.DoubleSide;
 
   //  10 ovoids (abdomen, thorax, back, skull, snout, brow, four leg mounts),
   //  19 bones (throat + six legs of three), 18 knuckles, 16 plates, 5 petals
-  const M_OVOID = 10, M_BONE = 19, M_KNUC = 18, M_SPIKE = 16, M_PETAL = 5;
+  //  The reference is a *coalesced* thing: bodies fused into a mass, not a
+  //  designed animal. So the same five instanced parts carry far more pieces —
+  //  the limbs and joints double as the arms, hands and skulls set into the
+  //  tissue, and the petal geometry does duty as fangs. Still five draw calls.
+  //  20 ovoids (10 body, 6 jaws across three mouths, 4 fused torsos)
+  //  63 bones (throat, 6 legs of 3, 22 fused bodies of 2)
+  //  40 knuckles (18 joints, 22 fused hands and skulls)
+  //  16 plates and horns, 36 fangs
+  const M_OVOID = 20, M_BONE = 63, M_KNUC = 40, M_SPIKE = 16, M_PETAL = 36;
   const mfOvoidI = dIM(dogOvoidGeo, mfSkinMat, MF_DRAW * M_OVOID);
   const mfBoneI = dIM(dogBoneGeo, mfShellMat, MF_DRAW * M_BONE);
   const mfKnucI = dIM(dogKnucGeo, mfShellMat, MF_DRAW * M_KNUC);
   const mfSpikeI = dIM(dogPetalGeo, mfShellMat, MF_DRAW * M_SPIKE);
   const mfPetalI = dIM(dogPetalGeo, mfMawMat, MF_DRAW * M_PETAL);
   const mfParts = [mfOvoidI, mfBoneI, mfKnucI, mfSpikeI, mfPetalI];
+  //  the light that comes out of it
+  mfSkinMat.uniforms.uGlow.value = 1.0; mfShellMat.uniforms.uGlow.value = 0.8;
+  mfSkinMat.uniforms.uGlowCol.value.setHex(0x7a3cff); mfShellMat.uniforms.uGlowCol.value.setHex(0x5a4cff);
+  mfMawMat.uniforms.uGlow.value = 0.35; mfMawMat.uniforms.uGlowCol.value.setHex(0x9a30d0);
 
   const ML1 = 11.4, ML2 = 10.9;         // femur, tibia — the arch is in these
   const M_BODY_Y = 13.4, M_FOOT_R = 13.6;
   const mOvoids = [], mBones = [], mKnucs = [], mSpikes = [], mPetals = [];
+  const mfRnd = mulberry(0x5e1f);        // one fixed shuffle, so the mass is the same every load
   const MK = {};
   {
     const root = new THREE.Object3D(); MK.root = root;
@@ -6690,13 +6745,32 @@
       n.rotation.set(-0.85, a * 0.7, a * 0.5, 'YXZ');
       dvis(n, mSpikes, 0.27, 1.55 - Math.abs(a) * 0.38, 0.18);
     }
-    MK.petals = [];
-    for (let i = 0; i < M_PETAL; i++) {
-      const spin = dnode(maw, 0, 0, 0); spin.rotation.z = (i / M_PETAL) * 6.2832;
-      const hinge = dnode(spin, 0, 0, 0);
-      dvis(hinge, mPetals, 0.84, 2.10, 0.22);
-      MK.petals.push(hinge);
-    }
+    //  No eyes anywhere on it. What is at the front is mouths — one large and
+    //  two smaller ones set into the sides of the skull, each a pair of jaws
+    //  crowded with fangs that do not line up with each other. The jaws are
+    //  real hinges, so opening them is a jaw opening rather than a flower.
+    MK.mouths = [];
+    const buildMouth = (par, sc, px, py, pz, ry) => {
+      const root = dnode(par, px, py, pz); root.rotation.y = ry;
+      const up = dnode(root, 0, 0, 0), lo = dnode(root, 0, 0, 0);
+      dvis(up, mOvoids, 0.62 * sc, 0.30 * sc, 0.92 * sc, 0, 0.20 * sc, 0.55 * sc);
+      dvis(lo, mOvoids, 0.56 * sc, 0.26 * sc, 0.86 * sc, 0, -0.18 * sc, 0.52 * sc);
+      //  fangs: irregular, uneven, and pointing wherever the tissue set them
+      const n = sc > 0.7 ? 8 : 5;
+      for (let i = 0; i < n; i++) {
+        const t = (i / (n - 1) - 0.5) * 2;
+        for (const jaw of [up, lo]) {
+          const dn = jaw === lo ? 1 : -1;
+          const f = dnode(jaw, t * 0.46 * sc, dn * -0.16 * sc, (0.35 + mfRnd() * 0.7) * sc);
+          f.rotation.set(dn * (1.35 + mfRnd() * 0.5), t * 0.5, (mfRnd() - 0.5) * 0.7, 'YXZ');
+          dvis(f, mPetals, (0.10 + mfRnd() * 0.05) * sc, (0.42 + mfRnd() * 0.42) * sc, (0.10 + mfRnd() * 0.05) * sc);
+        }
+      }
+      MK.mouths.push({ up, lo, sc });
+    };
+    buildMouth(maw, 1.0, 0, 0, 0, 0);                       // the main one
+    buildMouth(head, 0.52, -0.86, -0.30, 1.05, -0.62);      // and two set into the skull
+    buildMouth(head, 0.52, 0.86, -0.30, 1.05, 0.62);
     //  Six legs, evenly around the body. The femur is driven *up* and out — the
     //  knee ends above the back — and the tibia comes down outside it, which is
     //  the whole silhouette: a roof of legs you stand underneath.
@@ -6715,6 +6789,45 @@
       dvis(knee, mKnucs, 1.02, 0.92, 1.10, 0, 0.06, 0);
       dvis(ankle, mKnucs, 0.58, 0.52, 0.62);
       MK.legs.push({ hub, hip, knee, ankle, az, L1: ML1, L2: ML2, tip: new THREE.Vector3() });
+    }
+    //  The tissue is other things. Arms, hands and skulls are set through the
+    //  limbs and the trunk at whatever angle they were caught at — the fixed
+    //  shuffle above means the arrangement is chaotic but identical on every
+    //  machine. They ride the bone they are embedded in, so they move with it.
+    const embedIn = (par, count, reach, scale) => {
+      for (let i = 0; i < count; i++) {
+        const a = mfRnd() * 6.2832, t = 0.15 + mfRnd() * 0.7;
+        const n = dnode(par, Math.sin(a) * reach, -t * (par === MK.core ? 1.2 : 7.5), Math.cos(a) * reach);
+        n.rotation.set((mfRnd() - 0.4) * 2.4, a, (mfRnd() - 0.5) * 1.8, 'YXZ');
+        const s2 = scale * (0.7 + mfRnd() * 0.6);
+        //  Both kinds cost the same pieces — two bones and a knuckle — so the
+        //  part totals stay fixed however the shuffle falls. A random branch
+        //  that spends different numbers of instances makes the reserved counts
+        //  unknowable, and the rig guard can only check a number it can predict.
+        if (mfRnd() < 0.55) {                              // an arm, bent, reaching out of the mass
+          dvis(n, mBones, 0.10 * s2, 0.95 * s2, 0.10 * s2);
+          const fore = dnode(n, 0, -0.95 * s2, 0); fore.rotation.set(0.9 + mfRnd() * 0.8, 0, (mfRnd() - 0.5) * 0.8, 'YXZ');
+          dvis(fore, mBones, 0.075 * s2, 0.80 * s2, 0.075 * s2);
+          dvis(fore, mKnucs, 0.13 * s2, 0.10 * s2, 0.16 * s2, 0, -0.80 * s2, 0);      // the hand
+        } else {                                            // or a head and shoulder, half swallowed
+          dvis(n, mKnucs, 0.24 * s2, 0.27 * s2, 0.24 * s2, 0, -0.10 * s2, 0);
+          dvis(n, mBones, 0.09 * s2, 0.55 * s2, 0.09 * s2, 0, -0.30 * s2, 0.10 * s2);
+          const arm = dnode(n, 0.16 * s2, -0.34 * s2, 0);
+          arm.rotation.set(1.1 + mfRnd() * 0.9, 0, (mfRnd() - 0.5) * 1.2, 'YXZ');
+          dvis(arm, mBones, 0.07 * s2, 0.62 * s2, 0.07 * s2);
+        }
+      }
+    };
+    for (let i = 0; i < 6; i++) {                           // through the legs
+      embedIn(MK.legs[i].hip, 2, 0.9, 1.0);
+      embedIn(MK.legs[i].knee, 1, 0.62, 0.85);
+    }
+    embedIn(MK.core, 4, 2.4, 1.25);                         // and through the trunk
+    //  four more torsos pressed into the flanks, big enough to read at range
+    for (const sd of [-1, 1]) for (const fz2 of [1.0, -2.4]) {
+      const n = dnode(MK.core, 2.5 * sd, -0.5 + mfRnd() * 0.6, fz2);
+      n.rotation.set((mfRnd() - 0.5) * 1.2, mfRnd() * 3, (mfRnd() - 0.5) * 1.4, 'YXZ');
+      dvis(n, mOvoids, 0.52, 0.90, 0.42);
     }
     root.updateMatrixWorld(true);
     const got = [mOvoids.length, mBones.length, mKnucs.length, mSpikes.length, mPetals.length];
@@ -6754,9 +6867,14 @@
     //  the head hangs forward off the mass and aims on its own
     MK.neck.rotation.set(0.34 - s.headPitch * 0.40 - s.rear * 0.25, s.headYaw * 0.45, 0, 'YXZ');
     MK.head.rotation.set(-0.22 - s.headPitch * 0.45 + s.lunge * 0.30, s.headYaw * 0.55, s.headYaw * 0.12, 'YXZ');
-    const flare = s.maw;
-    for (let i = 0; i < M_PETAL; i++) {
-      MK.petals[i].rotation.x = Math.PI / 2 - flare * 1.00 - Math.sin(cityT * 2.4 + i * 1.6) * 0.06 * flare - 0.06;
+    //  the jaws: the big one leads, the two in the skull work slightly out of
+    //  step with it, so the front of the animal never looks like one mechanism
+    for (let i = 0; i < MK.mouths.length; i++) {
+      const M2 = MK.mouths[i];
+      const off = i === 0 ? 0 : Math.sin(cityT * (1.7 + i * 0.6) + i * 2.1) * 0.22;
+      const o = Math.max(0, Math.min(1, s.maw + off + (i ? 0.10 : 0)));
+      M2.up.rotation.x = -0.10 - o * 0.62;
+      M2.lo.rotation.x = 0.12 + o * 1.05;
     }
 
     for (let i = 0; i < 6; i++) {
@@ -7543,7 +7661,7 @@
     const bolt = boltFlash * boltFlash;
     for (const mt of [mfSkinMat, mfShellMat, mfMawMat]) {
       mt.uniforms.uBolt.value = bolt;
-      mt.uniforms.uAmb.value = 0.30 * BACK_LIT + bolt * 0.6;
+      mt.uniforms.uAmb.value = 0.19 * BACK_LIT + bolt * 0.6;
       mt.uniforms.uFogCol.value.copy(scene.fog.color);
       mt.uniforms.uFogDens.value = FOG_DENSITY * 2.1;
       mt.uniforms.uTime.value = cityT;
