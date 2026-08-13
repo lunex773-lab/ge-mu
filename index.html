@@ -1242,6 +1242,22 @@
       flight(SM, sx1, y1, ym);                           // east run, climbing back toward −z
       slab(sx0, sx1, sz0, rz0, y1);                      // arrival landing on the new floor
     }
+    //  What an animal needs to know to use this building the way you do: where
+    //  the hole in the ground floor is, and where the flights are. All of it is
+    //  already implied by the geometry above — recording it here just means the
+    //  AI reads the same numbers the walls were built from instead of guessing
+    //  at them from the outside.
+    rec.door = { x: b.cx, z: Z1 + WT, out: Z1 + WT + 2.4, in: Z1 - 1.6, w: DW };
+    rec.stair = {
+      x0: sx0, x1: sx1, z0: sz0, z1: sz1,
+      wx: (sx0 + SM) / 2,          // centre of the west run (climbs toward +z)
+      ex: (SM + sx1) / 2,          // centre of the east run (climbs toward −z)
+      foot: rz0, head: rz1,        // the two ends of every run
+      land: (sz0 + rz0) / 2,       // arrival landing — where a floor is joined
+      half: (rz1 + sz1) / 2,       // half landing at the turn
+      top: topStair,
+    };
+    rec.acc = acc;
     // entrance canopy + door posts
     put('canopy', b.cx, FH - 0.5, Z1 + WT + 0.75, DW + 1.6, 0.24, 1.7);
     for (const s of [-1, 1]) put('post', b.cx + s * (DW / 2 + 0.15), 0, Z1 + WT + 0.05, 0.3, FH - 0.5, 0.3);
@@ -1340,6 +1356,68 @@
       }
     }
   }
+  // ---- getting in, and getting upstairs -------------------------------
+  //  A creature used to steer straight at you and press its face against the
+  //  wall you were standing behind — or, worse, walk through it, because a
+  //  0.32 m wall is thinner than one frame of a nine-metre-a-second charge.
+  //  These four give it the same route you have: the door, then the flights.
+  const FLOOR_OF = (y) => Math.max(0, Math.round(y / FH));
+  function bldAt(x, z) {
+    const near = cityNear(x, z);
+    for (let i = 0; i < near.length; i++) {
+      const r = near[i];
+      if (x > r.cx - r.hw && x < r.cx + r.hw && z > r.cz - r.hd && z < r.cz + r.hd) return r;
+    }
+    return null;
+  }
+  //  The next foothold on the way to a floor of this building. Stateless on
+  //  purpose: it is recomputed from where the animal actually is, so shoving it
+  //  off a step or killing the one in front never leaves anybody following a
+  //  plan that has stopped being true.
+  function stairStep(r, ax, az, ay, want) {
+    const S = r.stair, here = FLOOR_OF(ay);
+    if (S.top < 1) return null;                        // nothing to climb
+    const inShaft = ax > S.x0 - 0.5 && ax < S.x1 + 0.5 && az > S.z0 - 0.5 && az < S.z1 + 0.5;
+    if (!inShaft) return { x: S.ex, z: S.land };       // find the stairwell first
+    const up = want > here, west = ax < (S.x0 + S.x1) / 2;
+    //  Going up you take the west run outward and the east run back; going down
+    //  it is the other way about, because that is the way the flights are built.
+    const climbX = up ? S.wx : S.ex, backX = up ? S.ex : S.wx;
+    if (az < S.foot + 0.6) {                           // on an arrival landing
+      return (west === (climbX === S.wx)) ? { x: climbX, z: S.head } : { x: climbX, z: S.land };
+    }
+    if (az > S.head - 0.6) {                           // at the turn
+      return Math.abs(ax - backX) > 0.7 ? { x: backX, z: S.half } : { x: backX, z: S.foot };
+    }
+    return { x: west ? S.wx : S.ex, z: (west === up) ? S.head : S.foot };   // mid-flight: keep going
+  }
+  //  null means "the way is clear, walk at them". Anything else is somewhere to
+  //  put your feet first.
+  function navNext(ax, az, ay, tx, tz, ty) {
+    const me = bldAt(ax, az), you = bldAt(tx, tz);
+    const mf = FLOOR_OF(ay);
+    if (me === you) {
+      if (!me) return null;                            // both out on the street
+      const yf = FLOOR_OF(ty);
+      return mf === yf ? null : stairStep(me, ax, az, ay, yf);
+    }
+    if (me) {                                          // in the wrong building: leave it
+      if (mf > 0) return stairStep(me, ax, az, ay, 0);
+      return { x: me.door.x, z: me.door.out };
+    }
+    //  Outside, and you are in there. Two waypoints, not one: standing *at* the
+    //  approach point still leaves it outside, so a single door target has it
+    //  arrive and then queue there for ever, nose against the canopy. The
+    //  second one is through the opening, which is what makes it a door rather
+    //  than a place to stand.
+    const dd = Math.hypot(ax - you.door.x, az - you.door.out);
+    return dd < 3.6 ? { x: you.door.x, z: you.door.in } : { x: you.door.x, z: you.door.out };
+  }
+  //  Reachable at all? Two metres of height difference is a different storey,
+  //  and nothing bites through a floor slab.
+  const SAME_FLOOR = 2.1;
+  const onSameLevel = (ay, ty) => Math.abs(ay - ty) < SAME_FLOOR;
+
   // ray vs AABB (slab method). rayAabb ignores boxes the origin already sits in;
   // aabbTouch also counts those, so the broadphase keeps your own building.
   function rayAabb(ro, rd, b) {
@@ -5113,10 +5191,18 @@
   //  Steer toward a point, slide off walls and wrecks, and keep out of each
   //  other's way with a soft separation push so a pack never stacks up.
   function dogStep(d, tx, tz, speed, dt, sep) {
+    //  Route round the architecture rather than into it. The waypoint replaces
+    //  the destination only while one is needed; the moment the way is clear
+    //  navNext returns null and it goes back to walking straight at you.
+    const wpt = navNext(d.x, d.z, d.y, tx, tz, p.y - EYE);
+    if (wpt) { tx = wpt.x; tz = wpt.z; }
     const dx = tx - d.x, dz = tz - d.z, dd = Math.hypot(dx, dz);
     let ux = dd > 0.01 ? dx / dd : Math.sin(d.hd), uz = dd > 0.01 ? dz / dd : Math.cos(d.hd);
-    if (sep !== false) {
-      //  Everything nearby pushes, not just packmates. Separation used to run
+    if (sep !== false && !d.inB) {
+      //  Everything nearby pushes, not just packmates. Indoors it is switched
+      //  off entirely: a stair run is two metres wide, and a crowd force that
+      //  reads the room as open ground would walk them off the side of it.
+      //  They queue on the steps instead, which is what a corridor is for. Separation used to run
       //  over the dog's own pack only, which is fine while the packs are spread
       //  across the district and useless the moment they all converge on one
       //  player: packs re-form at six members, so twenty dogs arriving together
@@ -5157,15 +5243,23 @@
     const want = Math.atan2(ux, uz);
     const turn = easeHeading(d, want, dt, 5.5, d.st === 'chase' || d.st === 'attack' ? 4.2 : 2.6);
     d.lean += (-turn * 0.055 - d.lean) * Math.min(1, dt * 8);
-    const mx = Math.sin(d.hd) * speed * dt, mz = Math.cos(d.hd) * speed * dt;
-    const nx = d.x + mx, nz = d.z + mz;
-    _dEye.set(nx, d.y, nz);
-    cityCollide(_dEye, d.y, d.y + 0.9, 0.42);
-    wreckCollide(_dEye, 0.42);
-    if (Math.abs(_dEye.x) < WORLD * 0.48 && Math.abs(_dEye.z) < WORLD * 0.48) { d.x = _dEye.x; d.z = _dEye.z; }
-    const moved = Math.hypot(d.x - (nx - mx), d.z - (nz - mz));
-    d.sp = dt > 1e-5 ? moved / dt : 0;
+    //  Substepped, because a charging demodog covers 0.31 m in a frame and the
+    //  wall it is charging through is 0.32 m thick. One test per frame lets it
+    //  start one side and finish the other with nothing in between to push it
+    //  back — which is the entire "they walk through walls" complaint.
+    const bx0 = d.x, bz0 = d.z;
+    const full = speed * dt;
+    const steps = Math.min(4, 1 + Math.floor(full / 0.22));
+    const sx2 = Math.sin(d.hd) * (full / steps), sz2 = Math.cos(d.hd) * (full / steps);
+    for (let q = 0; q < steps; q++) {
+      _dEye.set(d.x + sx2, d.y, d.z + sz2);
+      cityCollide(_dEye, d.y + 0.05, d.y + 0.95, 0.42);
+      wreckCollide(_dEye, 0.42);
+      if (Math.abs(_dEye.x) < WORLD * 0.48 && Math.abs(_dEye.z) < WORLD * 0.48) { d.x = _dEye.x; d.z = _dEye.z; }
+    }
+    d.sp = dt > 1e-5 ? Math.hypot(d.x - bx0, d.z - bz0) / dt : 0;
     d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
+    d.inB = !!bldAt(d.x, d.z);
     return dd;
   }
   function dogWanderPoint(d) {
@@ -5203,7 +5297,8 @@
     // pressing in: wants a friend, wants to be healthy, wants to be close-ish
     S.chase = known ? 0.55 + (allies - 1) * 0.13 + hpF * 0.35 - Math.max(0, dist - D_LIKED) * 0.012
       - (engaged >= 2 && d.st !== 'chase' && d.st !== 'attack' ? 0.55 : 0) : 0;
-    S.attack = (known && d.see > 0 && dist < D_BITE_R + 1.4 && d.atkCd <= 0) ? 1.35 + hpF * 0.3 : 0;
+    //  and it does not wind up to bite a ceiling
+    S.attack = (known && d.see > 0 && dist < D_BITE_R + 1.4 && onSameLevel(d.y, p.y - EYE) && d.atkCd <= 0) ? 1.35 + hpF * 0.3 : 0;
     // having bitten, get out of the way; also what the ones not chosen to press do
     S.reposition = known && dist < 13 ? 0.48 + (engaged >= 2 ? 0.5 : 0) + (d.atkCd > 0 ? 0.75 : 0) : 0;
     S.retreat = known ? (1 - hpF) * 1.5 + (d.hurtRecent > 0 ? 0.7 : 0) - (allies - 1) * 0.10 : 0;
@@ -5296,7 +5391,7 @@
         wantMaw = 1; wantTail = 0.9;
         if (d.stT > 0.18 && !d.bit) {
           d.bit = true;
-          if (!dead && d.tdist < D_BITE_R && dogHitCd <= 0 && wState === WS.BACK) {
+          if (!dead && d.tdist < D_BITE_R && onSameLevel(d.y, p.y - EYE) && dogHitCd <= 0 && wState === WS.BACK) {
             applyDamage(D_BITE_DMG, null); dogHitCd = 0.42;
             camShake = Math.max(camShake, 0.26);
           }
@@ -6139,7 +6234,7 @@
         playGorSwing(g.tdist, gorPan(g), a.kind);
         if (a.kind === 'dclaw') a.arm = a.arm === 2 ? 2 : 1 - a.arm;
       }
-      if (!a.hit && k > 0.35 && !dead && g.tdist < A.reach && gorHitCd <= 0 && wState === WS.BACK) {
+      if (!a.hit && k > 0.35 && !dead && g.tdist < A.reach && onSameLevel(g.y, p.y - EYE) && gorHitCd <= 0 && wState === WS.BACK) {
         a.hit = 1;
         const dmg = Math.round(A.dmg * (g.enraged ? 1.25 : 1));
         applyDamage(dmg, null); gorHitCd = 0.5;
@@ -6163,17 +6258,23 @@
 
   // ---- movement -----------------------------------------------------
   function gorStep(g, tx, tz, speed, dt) {
+    const wpt = navNext(g.x, g.z, g.y, tx, tz, p.y - EYE);     // it uses the door too
+    if (wpt) { tx = wpt.x; tz = wpt.z; }
     const dx = tx - g.x, dz = tz - g.z, dd = Math.hypot(dx, dz);
     const ux = dd > 0.01 ? dx / dd : Math.sin(g.hd), uz = dd > 0.01 ? dz / dd : Math.cos(g.hd);
     const want = Math.atan2(ux, uz);
     const turn = easeHeading(g, want, dt, 4.6, g.enraged ? 3.4 : 2.6);
     g.lean += (-turn * 0.05 - g.lean) * Math.min(1, dt * 8);
-    const mx = Math.sin(g.hd) * speed * dt, mz = Math.cos(g.hd) * speed * dt;
     const bx = g.x, bz = g.z;
-    _gFootW.set(g.x + mx, g.y, g.z + mz);
-    cityCollide(_gFootW, g.y, g.y + 2.3, 0.52);           // it is tall: check head height too
-    wreckCollide(_gFootW, 0.52);
-    if (Math.abs(_gFootW.x) < WORLD * 0.48 && Math.abs(_gFootW.z) < WORLD * 0.48) { g.x = _gFootW.x; g.z = _gFootW.z; }
+    const full = speed * dt;
+    const steps = Math.min(4, 1 + Math.floor(full / 0.22));   // no tunnelling through a facade
+    const sx2 = Math.sin(g.hd) * (full / steps), sz2 = Math.cos(g.hd) * (full / steps);
+    for (let q = 0; q < steps; q++) {
+      _gFootW.set(g.x + sx2, g.y, g.z + sz2);
+      cityCollide(_gFootW, g.y + 0.05, g.y + 2.3, 0.52);      // it is tall: check head height too
+      wreckCollide(_gFootW, 0.52);
+      if (Math.abs(_gFootW.x) < WORLD * 0.48 && Math.abs(_gFootW.z) < WORLD * 0.48) { g.x = _gFootW.x; g.z = _gFootW.z; }
+    }
     //  the king's ground is his own — a predator that walks through him reads as
     //  two monsters occupying one space, which is worse than either alone
     if (vec.live && !vec.dead) {
@@ -8831,7 +8932,7 @@
           playVecWave();
           camShake = Math.max(camShake, 1.15);
           psyOnset(0.5, 1400);
-          if (dist < V_WAVE_R && !dead && wState === WS.BACK) {
+          if (dist < V_WAVE_R && !dead && wState === WS.BACK && Math.abs((p.y - EYE) - vec.y) < 4.2) {
             //  §8: damage falls off, knockback does not disappear, and it is a
             //  physics impulse rather than a teleport — you are thrown, and you
             //  land where the ground is
@@ -8866,7 +8967,8 @@
         vec.armExtWant[i] = 0.25 + u * 0.75;               // out
         vec.gripWant = 0.2 + u * 0.7;
         if (!a.sfx) { a.sfx = 1; playVecLimb(); }
-        if (!a.hit && u > 0.35 && dist < V_LIMB_R * (0.5 + ext01(vec.armExt[i])) && !dead && wState === WS.BACK) {
+        if (!a.hit && u > 0.35 && dist < V_LIMB_R * (0.5 + ext01(vec.armExt[i])) && !dead && wState === WS.BACK
+            && Math.abs((p.y - EYE) - vec.y) < 3.6) {
           a.hit = 1;
           applyDamage(V_LIMB_DMG, null);
           camShake = Math.max(camShake, 0.7);
@@ -8903,7 +9005,8 @@
         if (!a.hit) {
           a.hit = 1;
           vec.gripWant = 1; vec.spreadWant = 0;
-          if (dist < V_GRAB_R && !dead && wState === WS.BACK && vecSee()) psyGrab();
+          if (dist < V_GRAB_R && !dead && wState === WS.BACK && vecSee()
+              && Math.abs((p.y - EYE) - vec.y) < 4.2) psyGrab();
           else playVecLimb();
         }
       } else {
