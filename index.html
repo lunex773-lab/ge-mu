@@ -1403,6 +1403,16 @@
     }
     if (me) {                                          // in the wrong building: leave it
       if (mf > 0) return stairStep(me, ax, az, ay, 0);
+      //  On the ground and still in the stairwell, the door is not reachable in
+      //  a straight line: the shaft is walled along its side and its only mouth
+      //  is past the end of the flights. Aiming at the entrance from in here
+      //  presses an animal into that side wall until something else moves it,
+      //  which is precisely what one of them spent forty-nine seconds doing.
+      const S = me.stair;
+      if (ax > S.x0 - 0.5 && ax < S.x1 + 0.5 && az > S.z0 - 0.5 && az < S.z1 + 0.5) {
+        if (az > S.foot + 0.4) return { x: (S.x0 + S.x1) / 2, z: S.land };   // down to the landing
+        return { x: S.x1 + 1.8, z: S.land };                                  // and out of the shaft
+      }
       return { x: me.door.x, z: me.door.out };
     }
     //  Outside, and you are in there. Two waypoints, not one: standing *at* the
@@ -5364,6 +5374,16 @@
     d.stagger = Math.max(0, d.stagger - dt * 2.6);
     d.hurtRecent = Math.max(0, (d.hurtRecent || 0) - dt);
     if (d.dead) { d.deadT += dt; d.sp = 0; return; }
+
+    //  Wedged. Three seconds of wanting to move and not moving means the route
+    //  is wrong, not that it needs to push harder — and it can happen in any
+    //  state, so the recovery cannot live inside one branch of the machine. Drop
+    //  whatever it was doing, forget the target that led it here, and wander:
+    //  wander is the one state that always has somewhere reachable to go.
+    if ((d.stuck || 0) > 3) {
+      d.stuck = 0; d.hasT = false; d.st = 'wander'; d.stT = 0;
+      const w = dogWanderPoint(d); d.wx = w.x; d.wz = w.z; d.wanderT = 5 + Math.random() * 5;
+    }
 
     // ---- senses
     const see = dogSee(d);
