@@ -3033,7 +3033,7 @@
         cur: new THREE.Vector3(s.x, s.y, s.z), tgt: new THREE.Vector3(s.x, s.y, s.z),
         yaw: s.r || 0, tgtYaw: s.r || 0, stride: 0, lastSeen: performance.now(),
         hp: 100, hpShown: 100, dead: false, inv: false, kills: 0, vx: 0, vz: 0, recvT: performance.now(), recoil: 0,
-        buf: [], interp: false,
+        buf: [], interp: false, w: s.w === undefined ? WS.NORMAL : s.w,
       };
       MP.peers.set(s.id, peer);
       recomputeHost();                                  // lowest id in the room owns the troop
@@ -3042,6 +3042,7 @@
     peer.tgt.set(s.x, s.y, s.z);
     peer.tgtYaw = s.r || 0;
     peer.vx = s.vx || 0; peer.vz = s.vz || 0;
+    if (s.w !== undefined) peer.w = s.w;
     peer.recvT = performance.now();
     peer.lastSeen = peer.recvT;
     peer.buf.push({ t: peer.recvT, x: s.x, y: s.y, z: s.z });   // snapshot history
@@ -3126,6 +3127,7 @@
       id: MP.id,
       x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
       vx: +vx.toFixed(2), vz: +vz.toFixed(2),
+      w: wState,                                 // which side of the tear I am on
     };
     const hpR = Math.round(hp);
     if (keyframe || MP.sentName !== MP.name) { msg.n = MP.name; MP.sentName = MP.name; }
@@ -3186,7 +3188,11 @@
       if (d < -Math.PI) d += Math.PI * 2;
       peer.yaw += d * k;
       peer.group.rotation.y = peer.yaw + Math.PI;
-      peer.group.visible = !peer.dead && !peer.inv;      // hidden when cloaked or downed
+      //  and a body only exists on the side it is standing on: without this a
+      //  player back in the daylight city is drawn walking through the backside
+      //  as a ghost, and shot at by everyone over here
+      const pw = peer.w === undefined ? WS.NORMAL : peer.w;
+      peer.group.visible = !peer.dead && !peer.inv && pw === wState;
       if (peer.hp !== peer.hpShown) { peer.hpShown = peer.hp; setPeerHp(peer); }
       const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
       const air = (peer.cur.y - height(peer.cur.x, peer.cur.z)) > 0.5;
@@ -3366,6 +3372,7 @@
   //  rival player comes within ~45 m; the two layers crossfade. Everything is
   //  synthesised (no asset files), routed under the SFX master gain. ──────────
   let inGame = false;
+  let stormStart = false;          // room 'ストシン': begin on the other side
   let musicInit = false, musicGain = null, calmGain = null, intenseGain = null, intenseBus = null, dreadGain = null, huntGain = null, throneGain = null;
   let musicStep = 0, musicNext = 0, musicIntensity = 0;
   const MSTEP = 0.15;                                   // seconds per 8th-note step
@@ -3737,6 +3744,7 @@
     let hitId = null, hitDist = Infinity, hitMonkey = null;
     for (const [id, peer] of MP.peers) {
       if (peer.dead) continue;                        // cloaked players are hidden but still hittable
+      if ((peer.w === undefined ? WS.NORMAL : peer.w) !== wState) continue;   // but not across the tear
       _cc.copy(peer.cur); _cc.y += 1.15;
       const t = raySphere(_ro, _rd, _cc, 0.95);
       if (t > 0.5 && t < blockDist && t < hitDist) { hitDist = t; hitId = id; hitMonkey = null; }
@@ -4220,6 +4228,10 @@
     if (gate.classList.contains('gone')) return;
     MP.name = (nickEl.value || '').trim().slice(0, 16) || ('旅人-' + MP.id.slice(1, 4));
     MP.room = (roomEl.value || '').trim().slice(0, 24) || 'lobby';
+    //  One room name skips the front half of the game: the tear is already cut
+    //  and you start through it, standing in front of it. It is a way straight
+    //  to the other side for anyone who has seen the daylight city enough times.
+    stormStart = MP.room === 'ストシン';
     try { localStorage.setItem('contour.nick', MP.name); localStorage.setItem('contour.room', MP.room); } catch (e) {}
     gate.classList.add('gone');
     hud.classList.add('live');
@@ -5240,6 +5252,15 @@
       ux += sx * 2.6; uz += sz * 2.6;
       const un = Math.hypot(ux, uz) || 1; ux /= un; uz /= un;
     }
+    //  Pressing into geometry that is not going to move. Rather than grind
+    //  there forever, lean along the surface — each animal picks a consistent
+    //  side, so a pair at the same corner peel off in opposite directions
+    //  instead of both shuffling into the same brick.
+    if (d.stuck > 0.5) {
+      const sd2 = (d.slot & 1) ? 1 : -1, ca = Math.cos(1.15 * sd2), sa = Math.sin(1.15 * sd2);
+      const rx2 = ux * ca - uz * sa, rz2 = ux * sa + uz * ca;
+      ux = rx2; uz = rz2;
+    }
     const want = Math.atan2(ux, uz);
     const turn = easeHeading(d, want, dt, 5.5, d.st === 'chase' || d.st === 'attack' ? 4.2 : 2.6);
     d.lean += (-turn * 0.055 - d.lean) * Math.min(1, dt * 8);
@@ -5258,15 +5279,34 @@
       if (Math.abs(_dEye.x) < WORLD * 0.48 && Math.abs(_dEye.z) < WORLD * 0.48) { d.x = _dEye.x; d.z = _dEye.z; }
     }
     d.sp = dt > 1e-5 ? Math.hypot(d.x - bx0, d.z - bz0) / dt : 0;
+    //  wanted to move, did not: something is in the way and pushing harder at
+    //  it will not help
+    d.stuck = (speed > 0.6 && d.sp < speed * 0.3) ? (d.stuck || 0) + dt : 0;
     d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
     d.inB = !!bldAt(d.x, d.z);
     return dd;
   }
+  const D_ROAM = WORLD * 0.44;
   function dogWanderPoint(d) {
+    //  Indoors there is nothing to wander to. Every candidate a metre away is
+    //  through a wall, so it grinds along the plaster until something changes.
+    //  With no reason to be in here, it leaves the way it came in.
+    const inside = bldAt(d.x, d.z);
+    if (inside) {
+      const w = navNext(d.x, d.z, d.y, inside.door.x, inside.door.out, 0);
+      return w || { x: inside.door.x, z: inside.door.out };
+    }
     for (let i = 0; i < 12; i++) {
       const a = d.hd + (Math.random() - 0.5) * 2.4, r = 10 + Math.random() * 26;
-      const x = d.x + Math.sin(a) * r, z = d.z + Math.cos(a) * r;
-      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+      //  Reflected off the world edge, not rejected at it. Rejecting is what put
+      //  the whole population in the middle of the map: near the boundary every
+      //  outward candidate is thrown away and only the inward ones survive, so
+      //  the random walk acquires a steady drift toward the centre and after a
+      //  few minutes that is where all forty-eight of them are. A reflecting
+      //  walk has no such bias — its resting distribution is flat.
+      let x = d.x + Math.sin(a) * r, z = d.z + Math.cos(a) * r;
+      if (x > D_ROAM) x = 2 * D_ROAM - x; else if (x < -D_ROAM) x = -2 * D_ROAM - x;
+      if (z > D_ROAM) z = 2 * D_ROAM - z; else if (z < -D_ROAM) z = -2 * D_ROAM - z;
       if (clearAt(x, z, 1.0)) return { x, z };
     }
     return { x: d.x, z: d.z };
@@ -5348,8 +5388,11 @@
     switch (d.st) {
       case 'wander': {
         d.wanderT -= dt;
-        if (d.wanderT <= 0 || Math.hypot(d.wx - d.x, d.wz - d.z) < 2.2) {
+        //  a whole second of getting nowhere means the place it chose is not
+        //  reachable from here, whatever the straight line says
+        if (d.wanderT <= 0 || Math.hypot(d.wx - d.x, d.wz - d.z) < 2.2 || d.stuck > 1.0) {
           const w = dogWanderPoint(d); d.wx = w.x; d.wz = w.z; d.wanderT = 4 + Math.random() * 7;
+          d.stuck = 0;
         }
         dogStep(d, d.wx, d.wz, 1.45, dt);
         lookX = d.x + Math.sin(d.hd + Math.sin(cityT * 0.4 + d.slot) * 0.9) * 6;   // casting about as it goes
@@ -9686,6 +9729,37 @@
     if (deathSeen.has(key)) return;
     deathSeen.add(key);
   }
+  //  'ストシン': cut the tear, step through it, and stand in front of it. The
+  //  gate is genuinely there afterwards — it is the way back, and it is what
+  //  every other player in the room syncs to — so this is the ordinary opening
+  //  sequence run at once rather than a separate mode with its own rules.
+  function doStormStart() {
+    if (!rift.present) {
+      myKills = Math.max(myKills, GATE_NEED);
+      gateUnlocked = true; saveGate();
+      openGate();
+      if (!rift.present) return;                 // no site yet — try again next frame
+    }
+    stormStart = false;
+    setWorld(WS.BACK);
+    const bx = Math.sin(rift.ry), bz = Math.cos(rift.ry);
+    let placed = false;
+    for (const r of [3.4, 5.0, 7.0, 9.5]) {      // just clear of it, and clear of a wall
+      for (const side of [0, 1, -1]) {
+        const x = rift.x + bx * r + bz * side * 2.2, z = rift.z + bz * r - bx * side * 2.2;
+        if (!clearAt(x, z, 0.9)) continue;
+        p.set(x, supportHeight(x, z, rift.y + 1) + EYE, z);
+        placed = true; break;
+      }
+      if (placed) break;
+    }
+    if (!placed) p.set(rift.x + bx * 3.4, rift.y + EYE, rift.z + bz * 3.4);
+    yaw = Math.atan2(-(rift.x - p.x), -(rift.z - p.z));   // turned to look back at it
+    vy = 0;
+    gateCool = 3.0;                              // do not fall straight back through
+    publishState(true);
+    notify('裏側から始まる', 3200);
+  }
   function onGateReq() { if (!rift.present) { gateUnlocked = true; openGate(); } }
   function onDeathMsg(msg) { applyMonkeyDeath(msg.i, msg.by, msg.s); }
 
@@ -10003,10 +10077,15 @@
       ctx.strokeStyle = 'rgba(255,110,80,.9)'; ctx.lineWidth = full ? 3 : 1.6;
       ctx.beginPath(); ctx.arc(m[0], m[1], r + (full ? 6 : 3), 0, 6.3); ctx.stroke();
     }
-    // other players are hidden — only a compass pickup reveals them, for 30 s,
-    // and going invisible drops you off even that (the cloak beats the compass)
-    if (revealT > 0) for (const [, peer] of MP.peers) {
+    //  On the normal side other players are hidden — only a compass pickup
+    //  reveals them, for 30 s, and going invisible drops you off even that.
+    //  Over the tear that secrecy is dropped: the district is large, dark and
+    //  full of things that hunt in packs, and not being able to find each other
+    //  is not tension, it is just being alone in the fog. Only peers standing on
+    //  the same side are drawn — someone back on the normal side is not there.
+    if (wState === WS.BACK || revealT > 0) for (const [, peer] of MP.peers) {
       if (peer.inv) continue;
+      if ((peer.w === undefined ? WS.NORMAL : peer.w) !== wState) continue;
       const m = w2m(peer.cur.x, peer.cur.z, size); ctx.fillStyle = peer.dead ? '#777' : '#ff6b5a';
       ctx.beginPath(); ctx.arc(m[0], m[1], full ? 8 : 4.2, 0, 6.3); ctx.fill();
     }
@@ -10104,6 +10183,7 @@
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
+    if (stormStart && inGame) doStormStart();
 
     // --- assemble move vector from keys + joystick ---
     // move relative to aim: player yaw (1st) or camera orbit (3rd)
