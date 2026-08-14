@@ -2862,7 +2862,7 @@
         if (!dg.live) continue;
         const h = (((dg.hd || 0) % 6.2832) + 6.2832) % 6.2832;
         k.push(dg.slot, Math.round(dg.x * 10), Math.round(dg.z * 10), Math.round(h * HDQ),
-               Math.max(0, dg.hp), D_ST.indexOf(dg.st) + 1, dg.dead ? 1 : 0);
+               Math.max(0, dg.hp), D_ST.indexOf(dg.st) + 1, (dg.dead ? 1 : 0) | (dg.lord ? 2 : 0));
       }
       if (k.length) msg.k = k;
     }
@@ -4736,11 +4736,19 @@
   //  built out of scaled ovoids rather than a mesh per lump.
   const dogFleshShader = {
     vertexShader: `
-      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog;
+      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog; varying float vTaint;
       void main() {
         mat4 mm = modelMatrix;
         #ifdef USE_INSTANCING
           mm = modelMatrix * instanceMatrix;
+        #endif
+        //  One float per instance, carried on the colour attribute: how far
+        //  this particular animal has been taken over. Per-instance because
+        //  the whole point of the render path is that a species is one draw
+        //  call, so a second material for the owned ones would double it.
+        vTaint = 0.0;
+        #ifdef USE_INSTANCING_COLOR
+          vTaint = instanceColor.r;
         #endif
         vL = position;
         vec4 wp = mm * vec4(position, 1.0); vW = wp.xyz;
@@ -4751,7 +4759,7 @@
     fragmentShader: `
       uniform vec3 uSkin, uDeep, uFogCol, uSunDir, uAmbCol, uShell, uGlowCol;
       uniform float uFogDens, uAmb, uBolt, uRidge, uTime, uWet, uGlow, uGloss;
-      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog;
+      varying vec3 vN; varying vec3 vL; varying vec3 vW; varying float vFog; varying float vTaint;
       float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       void main() {
         vec3 n = normalize(vN);
@@ -4822,6 +4830,26 @@
           //  grazing angle and a generous rim turns every leg into a neon tube
           col += uGlowCol * rim * rim * uGlow * 0.09;
         }
+        // Owned. The hive does not paint them, it fills them — so the deep
+        // tone goes to clotted blood first and the raised tissue after, which
+        // darkens the creases before the surface and reads as something under
+        // the hide rather than a coat over it. The pulse travels along the
+        // sinew, at the pace of something being fed through.
+        if (vTaint > 0.001) {
+          //  Dried blood, not a signal lamp. The first pass at this saturated
+          //  the red channel across the whole animal — every value above ran
+          //  past 1.0 once the sun term and the two additive terms were in —
+          //  and a channel that is pegged carries no detail, so the sinew the
+          //  rest of this shader exists to draw stopped being visible at all.
+          //  Everything here is deliberately dark: the creases go almost black
+          //  and only the raised tissue is allowed any colour.
+          vec3 clot = vec3(0.085, 0.010, 0.016), raw = vec3(0.335, 0.040, 0.034);
+          vec3 blood = mix(clot, raw, clamp(0.20 + 0.80 * crease, 0.0, 1.0));
+          col = mix(col, blood * (uAmb + 0.72 * ndl), vTaint * 0.86);
+          float beat = 0.52 + 0.48 * sin(uTime * 2.3 - vL.y * 3.6 + seed * 6.3);
+          col += vec3(0.145, 0.008, 0.012) * pow(clamp(crease, 0.0, 1.0), 3.0) * beat * vTaint;
+          col += vec3(0.085, 0.005, 0.008) * rim * vTaint;
+        }
         col += vec3(0.60, 0.10, 0.07) * uBolt * (0.30 + 0.70 * rim);
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
         gl_FragColor = vec4(mix(col, uFogCol, clamp(f, 0.0, 1.0)), 1.0);
@@ -4865,6 +4893,90 @@
   const dogPawI = dIM(dogPawGeo, dogSkinMat, DOG_DRAW * D_PAW);
   const dogPetalI = dIM(dogPetalGeo, dogMawMat, DOG_DRAW * D_PETAL);
   const dogParts = [dogOvoidI, dogBoneI, dogKnucI, dogPawI, dogPetalI];
+  //  Seed the colour buffers now rather than the first time something is
+  //  claimed. setColorAt allocates them lazily, and the allocation is what
+  //  switches USE_INSTANCING_COLOR on — so leaving it until mid-fight means
+  //  recompiling five programs at the exact moment a boss summons.
+  const _tZero = new THREE.Color(0, 0, 0);
+  const seedTaint = (parts) => { for (const q of parts) { for (let i = 0; i < q.count; i++) q.setColorAt(i, _tZero); q.instanceColor.needsUpdate = true; } };
+  seedTaint(dogParts);
+
+  // ---- the ground opening ---------------------------------------------
+  //  What a summon looks like from outside: the road splits and something
+  //  comes up through it. The whole effect is one geometry — a radial glow
+  //  and nine tapered gashes, vertex-coloured hot at the root and black at
+  //  the tips — so a rift costs one instance and the pool costs one draw
+  //  call. Additive, so black is simply nothing and the fade is free: dim
+  //  the instance colour and the gash goes out.
+  //  A demodog is about 1.5 m at the shoulder and a gorgon twice that, so the
+  //  drop has to clear the taller one or its back shows through the road.
+  const D_RISE_T = 1.7, D_RISE_DROP = 2.6, G_RISE_T = 2.4, G_RISE_DROP = 4.2;
+  const RIFT_N = 6;
+  const riftGeo = (() => {
+    const pos = [], col = [];
+    const push = (x, z, r, g, b) => { pos.push(x, 0, z); col.push(r, g, b); };
+    const rnd = mulberry(0x5eed1);
+    const DSEG = 18, DR = 0.46;
+    for (let i = 0; i < DSEG; i++) {                    // the hole: hot centre, dark rim
+      const a0 = (i / DSEG) * 6.2832, a1 = ((i + 1) / DSEG) * 6.2832;
+      push(0, 0, 1.00, 0.26, 0.12);
+      push(Math.sin(a0) * DR, Math.cos(a0) * DR, 0.16, 0.01, 0.01);
+      push(Math.sin(a1) * DR, Math.cos(a1) * DR, 0.16, 0.01, 0.01);
+    }
+    for (let i = 0; i < 9; i++) {                       // the cracks running off it
+      const a = (i / 9) * 6.2832 + (rnd() - 0.5) * 0.5;
+      const len = 0.62 + rnd() * 0.46, w = 0.045 + rnd() * 0.05;
+      const sx = Math.sin(a), sz = Math.cos(a), px = -sz, pz = sx;
+      const rx = sx * 0.17, rz = sz * 0.17;
+      push(rx + px * w, rz + pz * w, 0.95, 0.20, 0.08);
+      push(rx - px * w, rz - pz * w, 0.95, 0.20, 0.08);
+      push(sx * len, sz * len, 0.0, 0.0, 0.0);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    return g;
+  })();
+  const riftMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const riftI = new THREE.InstancedMesh(riftGeo, riftMat, RIFT_N);
+  riftI.frustumCulled = false; riftI.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  riftI.visible = false; scene.add(riftI);
+  for (let i = 0; i < RIFT_N; i++) riftI.setColorAt(i, _tZero);
+  riftI.instanceColor.needsUpdate = true;
+  const rifts = [];
+  const _rfM = new THREE.Matrix4(), _rfQ = new THREE.Quaternion(), _rfP = new THREE.Vector3(),
+        _rfS = new THREE.Vector3(), _rfE = new THREE.Euler(), _rfC = new THREE.Color();
+  function summonRift(x, z, r, life) {
+    if (rifts.length >= RIFT_N) rifts.shift();
+    rifts.push({ x, z, r, t: 0, life: life || 3.0, spin: Math.random() * 6.2832 });
+  }
+  function updateRifts(dt) {
+    if (!rifts.length) { if (riftI.visible) riftI.visible = false; return; }
+    riftI.visible = true;
+    let n = 0;
+    for (let i = rifts.length - 1; i >= 0; i--) {
+      const f = rifts[i];
+      f.t += dt;
+      const k = f.t / f.life;
+      if (k >= 1) { rifts.splice(i, 1); continue; }
+      //  It tears open fast and closes slowly — the other way round reads as a
+      //  light being switched on rather than as ground giving way.
+      const open = Math.min(1, k / 0.13);
+      const heat = (1 - smooth01(k, 0.62, 1.0)) * (0.82 + 0.18 * Math.sin(f.t * 37 + f.spin));
+      _rfP.set(f.x, supportHeight(f.x, f.z, 1) + 0.05, f.z);
+      _rfE.set(0, f.spin, 0, 'YXZ'); _rfQ.setFromEuler(_rfE);
+      _rfS.set(f.r * open, 1, f.r * open);
+      riftI.setMatrixAt(n, _rfM.compose(_rfP, _rfQ, _rfS));
+      _rfC.setScalar(Math.max(0, heat));
+      riftI.setColorAt(n, _rfC);
+      n++;
+    }
+    riftI.count = n;
+    riftI.instanceMatrix.needsUpdate = true;
+    if (riftI.instanceColor) riftI.instanceColor.needsUpdate = true;
+  }
+  const smooth01 = (x, a, b) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
   // ---- one shared skeleton, posed once per dog ----------------------
   //  Bones carry rotation only; every visible piece hangs off a bone as a
@@ -4983,7 +5095,7 @@
     const G = D_GAIT[s.gait] || D_GAIT.walk;
     const mv = Math.min(1, s.sp / (s.gait === 'gallop' ? 9 : s.gait === 'trot' ? 4.4 : 1.9));
     const ph = s.gaitPh;
-    DK.root.position.set(s.x, s.y, s.z);
+    DK.root.position.set(s.x, s.y + (s.riseY || 0), s.z);
     DK.root.rotation.set(0, s.hd, s.lean, 'YXZ');
 
     // the trunk: a bob at twice the step rate, a roll that rocks with it, and
@@ -5054,12 +5166,22 @@
     }
     DK.root.updateMatrixWorld(true);
   }
-  function writeDog(slot) {
+  //  Draw slots are packed, so the taint has to be written against the render
+  //  index rather than the animal's own — the two are unrelated, and writing it
+  //  against the entity slot paints whichever animal happens to be drawn there.
+  const _tCol = new THREE.Color();
+  function taintI(mesh, k, n, t) { _tCol.setRGB(t, 0, 0); for (let i = 0; i < n; i++) mesh.setColorAt(k + i, _tCol); }
+  function writeDog(slot, taint) {
     let k = slot * D_OVOID; for (let i = 0; i < D_OVOID; i++) dogOvoidI.setMatrixAt(k + i, dOvoids[i].matrixWorld);
+    taintI(dogOvoidI, k, D_OVOID, taint);
     k = slot * D_BONE; for (let i = 0; i < D_BONE; i++) dogBoneI.setMatrixAt(k + i, dBones[i].matrixWorld);
+    taintI(dogBoneI, k, D_BONE, taint);
     k = slot * D_KNUC; for (let i = 0; i < D_KNUC; i++) dogKnucI.setMatrixAt(k + i, dKnucs[i].matrixWorld);
+    taintI(dogKnucI, k, D_KNUC, taint);
     k = slot * D_PAW; for (let i = 0; i < D_PAW; i++) dogPawI.setMatrixAt(k + i, dPaws[i].matrixWorld);
+    taintI(dogPawI, k, D_PAW, taint);
     k = slot * D_PETAL; for (let i = 0; i < D_PETAL; i++) dogPetalI.setMatrixAt(k + i, dPetals[i].matrixWorld);
+    taintI(dogPetalI, k, D_PETAL, taint);
   }
   const _dHideM = new THREE.Matrix4().makeScale(0.0001, 0.0001, 0.0001);
   function hideDogSlot(slot) {
@@ -5159,7 +5281,7 @@
       wx: spot.x, wz: spot.z, wanderT: 0, strafe: Math.random() < 0.5 ? 1 : -1,
       hideX: 0, hideZ: 0, hasHide: false, stepPh: Math.random(), breath: Math.random() * 6,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
-      lord: null, lordSlot: -1, lordFar: 0,
+      lord: null, lordSlot: -1, lordFar: 0, taint: 0, rise: 1, riseY: 0,
     });
     return d;
   }
@@ -5417,6 +5539,17 @@
     d.stagger = Math.max(0, d.stagger - dt * 2.6);
     d.hurtRecent = Math.max(0, (d.hurtRecent || 0) - dt);
     if (d.dead) { d.deadT += dt; d.sp = 0; return; }
+    //  Still coming up. It does not decide anything, does not walk, and does
+    //  not bite — it claws its way out with its jaws working, and only then
+    //  joins in. Without this it sets off for its station while still buried.
+    if (d.rise < 1) {
+      d.sp = 0; d.stuck = 0;
+      d.maw += (0.85 - d.maw) * Math.min(1, dt * 5);
+      d.crouch += (0.8 - d.crouch) * Math.min(1, dt * 4);
+      d.headPitch += (-0.55 - d.headPitch) * Math.min(1, dt * 4);
+      d.hd += dt * 0.9;
+      return;
+    }
 
     //  Wedged. Three seconds of wanting to move and not moving means the route
     //  is wrong, not that it needs to push harder — and it can happen in any
@@ -5922,7 +6055,7 @@
       d.lod = d2 < 1600 ? 0 : d2 < 8100 ? 1 : d2 < 40000 ? 2 : 3;   // 40 / 90 / 200 m
       // held still by the debug harness: posed, drawn, and not thinking, so a
       // specific frame of a specific gait can be looked at without it walking off
-      if (d.pinned) { poseDog(d, dt, true); writeDog(d.slot); continue; }
+      if (d.pinned) { poseDog(d, dt, true); writeDog(d.slot, d.taint || 0); continue; }
       if (mine) {
         //  AI LOD: everything close thinks every frame, the middle band every
         //  third, the far band every eighth — with the step scaled so their
@@ -5944,6 +6077,21 @@
         d.tailUp += ((d.st === 'wander' ? 0 : 0.7) - d.tailUp) * Math.min(1, dt * 4);
         d.headYaw += (0 - d.headYaw) * Math.min(1, dt * 3);
       }
+
+      //  Being taken over is not instant and neither is being let go: the
+      //  colour bleeds in over about a second, which is long enough to read as
+      //  something happening to the animal rather than a palette swap.
+      const twant = (mine ? !!d.lord : !!d.lordNet) ? 1 : 0;
+      d.taint = (d.taint || 0) + (twant - (d.taint || 0)) * Math.min(1, dt * 1.6);
+      //  Climbing out. It starts below the road and the road hides it — the
+      //  ground is opaque and drawn first, so the depth buffer does the
+      //  clipping for nothing. Quadratic, so it hangs in the hole and then
+      //  hauls itself clear rather than rising like a lift.
+      if (d.rise < 1) {
+        d.rise = Math.min(1, (d.rise || 0) + dt / D_RISE_T);
+        const u = 1 - d.rise;
+        d.riseY = -u * u * D_RISE_DROP;
+      } else d.riseY = 0;
 
       // ---- gait selection and the animation clock
       if (!d.dead) {
@@ -5973,11 +6121,12 @@
       if (d.lod >= 2 && !d.dead) continue;
       if (dogHigh >= DOG_DRAW) continue;
       poseDog(d, dt, d.lod === 0);
-      writeDog(dogHigh++);
+      writeDog(dogHigh++, d.taint || 0);
     }
     dogOvoidI.count = dogHigh * D_OVOID; dogBoneI.count = dogHigh * D_BONE;
     dogKnucI.count = dogHigh * D_KNUC; dogPawI.count = dogHigh * D_PAW;
     dogPetalI.count = dogHigh * D_PETAL;
+    for (const q of dogParts) if (q.instanceColor) q.instanceColor.needsUpdate = true;
     for (const m of dogParts) m.instanceMatrix.needsUpdate = true;
     // the flesh answers to the same light the rest of the other side does
     const bolt = boltFlash * boltFlash;
@@ -5997,7 +6146,7 @@
   //  client being bitten, against those now-identical positions, so each
   //  player takes their own beating and nobody is bitten by a ghost.
   const D_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack',
-                'reposition', 'observe', 'retreat', 'hide', 'call', 'flee'];
+                'reposition', 'observe', 'retreat', 'hide', 'call', 'flee', 'escort'];
   function applyDogSnapshot(k) {
     if (!k) {                                     // owner has no dogs up: neither have we
       if (dogs.some((o) => o.live)) clearDogs();
@@ -6029,7 +6178,9 @@
         d.st = st; d.stT = 0;
       }
       d.lunge = st === 'attack' ? 1 : Math.max(0, d.lunge - 0.1);
-      if (k[i + 6] && !d.dead) { d.dead = true; d.deadT = 0; playDogDeath(d.tdist, dogPan(d)); }
+      const dfl = k[i + 6] | 0;
+      d.lordNet = !!(dfl & 2);                    // owned: the follower tints it locally
+      if ((dfl & 1) && !d.dead) { d.dead = true; d.deadT = 0; playDogDeath(d.tdist, dogPan(d)); }
     }
     for (const o of dogs) if (o.live && !o.netSeen) despawnDog(o);
   }
@@ -6069,7 +6220,13 @@
   //  no retreat state, no hide state, no flee state and no call — not tuned
   //  down, absent — so at ten percent health it is still walking at you. What
   //  makes it frightening is that it does not stop.
-  const NGOR = 6, GOR_DRAW = 4;         // across the district, rarely two together
+  //  Two of these are headroom, not district population. The stocker fills to
+  //  GOR_WILD and stops; the pool goes to NGOR. Without the gap a summon can
+  //  never land: the stocker tops the district up every twenty seconds, so by
+  //  the time a flayer asks for an escort spawnGorgon has no free slot and
+  //  returns null, mfSummon breaks out of its loop, and the escort quietly
+  //  arrives as dogs only. Measured: gorWant 2, gorgons made 0.
+  const NGOR = 8, GOR_WILD = 6, GOR_DRAW = 4;   // across the district, rarely two together
   const GOR_HP = 420;                   // ~4.5 demodogs, ~21 rounds
   const G_VIS = 42, G_VIS_COS = Math.cos(1.34), G_PERIPH = 11;   // sharper eyes than the dogs
   const G_HEAR = 72;                    // and it hears the whole district
@@ -6108,6 +6265,7 @@
   const gorClawI = dIM(dogPetalGeo, gorClawMat, GOR_DRAW * G_CLAW);
   const gorPetalI = dIM(dogPetalGeo, gorMawMat, GOR_DRAW * G_PETAL);
   const gorParts = [gorOvoidI, gorBoneI, gorKnucI, gorClawI, gorPetalI];
+  seedTaint(gorParts);
 
   //  Standing about 2.7 m — a little under a floor, so it can walk indoors and
   //  up a stairwell without its head through the slab, which the spec is
@@ -6219,7 +6377,7 @@
     const mv = Math.min(1, s.sp / G.ref);
     const ph = s.gaitPh;
     const atk = s.atk;                                    // the attack currently playing, or null
-    GK.root.position.set(s.x, s.y, s.z);
+    GK.root.position.set(s.x, s.y + (s.riseY || 0), s.z);
     GK.root.rotation.set(0, s.hd, s.lean, 'YXZ');
 
     const bob = Math.sin(ph * 12.566) * G.bob * mv;
@@ -6310,12 +6468,17 @@
     }
     GK.root.updateMatrixWorld(true);
   }
-  function writeGor(slot) {
+  function writeGor(slot, taint) {
     let k = slot * G_OVOID; for (let i = 0; i < G_OVOID; i++) gorOvoidI.setMatrixAt(k + i, gOvoids[i].matrixWorld);
+    taintI(gorOvoidI, k, G_OVOID, taint);
     k = slot * G_BONE; for (let i = 0; i < G_BONE; i++) gorBoneI.setMatrixAt(k + i, gBones[i].matrixWorld);
+    taintI(gorBoneI, k, G_BONE, taint);
     k = slot * G_KNUC; for (let i = 0; i < G_KNUC; i++) gorKnucI.setMatrixAt(k + i, gKnucs[i].matrixWorld);
+    taintI(gorKnucI, k, G_KNUC, taint);
     k = slot * G_CLAW; for (let i = 0; i < G_CLAW; i++) gorClawI.setMatrixAt(k + i, gClaws[i].matrixWorld);
+    taintI(gorClawI, k, G_CLAW, taint);
     k = slot * G_PETAL; for (let i = 0; i < G_PETAL; i++) gorPetalI.setMatrixAt(k + i, gPetals[i].matrixWorld);
+    taintI(gorPetalI, k, G_PETAL, taint);
   }
   function hideGorSlot(slot) {
     let k = slot * G_OVOID; for (let i = 0; i < G_OVOID; i++) gorOvoidI.setMatrixAt(k + i, _dHideM);
@@ -6499,7 +6662,7 @@
       stepBeat: -1, breath: Math.random() * 4, noise: null, noiseS: 0,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
       spawnD: Math.hypot(spot.x - p.x, spot.z - p.z),
-      lord: null, lordSlot: -1, lordFar: 0,
+      lord: null, lordSlot: -1, lordFar: 0, taint: 0, rise: 1, riseY: 0,
     });
     return g;
   }
@@ -6515,6 +6678,7 @@
     g.atkCd = Math.max(0, g.atkCd - dt);
     g.stagger = Math.max(0, g.stagger - dt * 2.0);
     if (g.dead) { g.deadT += dt; g.sp = 0; g.mawWant = 0.55; return; }
+    if (g.rise < 1) { g.sp = 0; g.mawWant = 1; g.crouch = 0.7; g.hd += dt * 0.6; return; }
     if (g.atk) { gorRunAtk(g, dt); return; }
 
     const see = gorSee(g);
@@ -6874,9 +7038,9 @@
         live++;
         if (Math.hypot(g.x - p.x, g.z - p.z) < G_NEAR) near++;
       }
-      if (gorSpawnCd <= 0 && live < NGOR && !gorHoldSpawn) {
+      if (gorSpawnCd <= 0 && live < GOR_WILD && !gorHoldSpawn) {
         //  stock the district on arrival, then top up slowly
-        gorSpawnCd = live < NGOR - 1 ? 2.5 + Math.random() * 2.5 : 22 + Math.random() * 26;
+        gorSpawnCd = live < GOR_WILD - 1 ? 2.5 + Math.random() * 2.5 : 22 + Math.random() * 26;
         spawnGorgon();
       }
       void near;
@@ -6891,7 +7055,7 @@
       if (g.pinned) {
         //  held by the debug harness: posed exactly as handed over and left
         //  there, easing included, so a specific frame can be photographed
-        if (gorHigh < GOR_DRAW) { poseGorgon(g, dt, true); writeGor(gorHigh++); }
+        if (gorHigh < GOR_DRAW) { poseGorgon(g, dt, true); writeGor(gorHigh++, g.taint || 0); }
         continue;
       }
       if (mine) {
@@ -6910,6 +7074,16 @@
         g.headYawWant = 0; g.headPitchWant = 0;
       }
 
+      //  Being taken over is not instant and neither is being let go: the
+      //  colour bleeds in over about a second, which is long enough to read as
+      //  something happening to the animal rather than a palette swap.
+      const twant = (mine ? !!g.lord : !!g.lordNet) ? 1 : 0;
+      g.taint = (g.taint || 0) + (twant - (g.taint || 0)) * Math.min(1, dt * 1.6);
+      if (g.rise < 1) {                                   // as the dog: see updateDogs
+        g.rise = Math.min(1, (g.rise || 0) + dt / G_RISE_T);
+        const u = 1 - g.rise;
+        g.riseY = -u * u * G_RISE_DROP;
+      } else g.riseY = 0;
       // eased channels — nothing here ever snaps
       const ez = Math.min(1, dt * 6);
       g.headYaw += ((g.headYawWant || 0) - g.headYaw) * ez;
@@ -6939,11 +7113,12 @@
       if (g.lod >= 2 && !g.dead && !g.pinned) continue;      // still thinking, not drawn
       if (gorHigh >= GOR_DRAW) continue;
       poseGorgon(g, dt, g.lod === 0);
-      writeGor(gorHigh++);
+      writeGor(gorHigh++, g.taint || 0);
     }
     gorOvoidI.count = gorHigh * G_OVOID; gorBoneI.count = gorHigh * G_BONE;
     gorKnucI.count = gorHigh * G_KNUC; gorClawI.count = gorHigh * G_CLAW;
     gorPetalI.count = gorHigh * G_PETAL;
+    for (const q of gorParts) if (q.instanceColor) q.instanceColor.needsUpdate = true;
     for (const m of gorParts) m.instanceMatrix.needsUpdate = true;
     const bolt = boltFlash * boltFlash;
     for (const mt of [gorSkinMat, gorMawMat, gorClawMat]) {
@@ -6980,7 +7155,7 @@
   }
 
   // ---- network ------------------------------------------------------
-  const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage'];
+  const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage', 'escort'];
   function gorSnapshot() {
     const k = [];
     for (const g of gorgons) {
@@ -6988,7 +7163,7 @@
       const h = (((g.hd || 0) % 6.2832) + 6.2832) % 6.2832;
       k.push(g.slot, Math.round(g.x * 10), Math.round(g.z * 10), Math.round(h * HDQ),
              Math.max(0, g.hp), G_ST.indexOf(g.st) + 1,
-             (g.dead ? 1 : 0) | (g.enraged ? 2 : 0) | (g.atk ? 4 : 0));
+             (g.dead ? 1 : 0) | (g.enraged ? 2 : 0) | (g.atk ? 4 : 0) | (g.lord ? 8 : 0));
     }
     return k;
   }
@@ -7008,6 +7183,7 @@
       g.hp = (g.hpHold && performance.now() < g.hpHold) ? Math.min(g.hp, nh) : nh;
       const st = G_ST[k[i + 5] - 1];
       const fl = k[i + 6];
+      g.lordNet = !!(fl & 8);            // owned: the follower tints it locally
       if (st && st !== g.st) {
         if (st === 'enrage') playGorRoar(g.tdist, gorPan(g));
         if (st === 'attack') playGorWind(g.tdist, gorPan(g), true);
@@ -7611,6 +7787,7 @@
       const g = spawnGorgon(spot); if (!g) break;
       g.hasT = m.hasT; g.tx = m.tx; g.tz = m.tz; g.seeT = m.seeT;
       g.lord = 'mf'; g.lordSlot = m.slot; if (!m.hasT) { g.st = 'escort'; g.stT = 0; }
+      g.rise = 0; g.taint = 0.5; summonRift(spot.x, spot.z, 4.4, 3.4);
       made++;
     }
     for (let i = 0; i < dogWant; i++) {
@@ -7621,6 +7798,7 @@
       d.hasT = m.hasT; d.tx = m.tx; d.tz = m.tz; d.seeT = m.seeT;
       d.lord = 'mf'; d.lordSlot = m.slot;
       d.st = m.hasT ? 'chase' : 'escort'; d.stT = 0;
+      d.rise = 0; d.taint = 0.5; summonRift(spot.x, spot.z, 2.9, 2.8);
       made++;
     }
     if (made) { m.mawWant = 1; m.summonFx = 0.9; playMfSummon(m.tdist, mfPan(m)); }
@@ -8692,7 +8870,7 @@
       wx: spot.x, wz: spot.z, wanderT: 0, cmdT: 0, mentalT: 22 + Math.random() * 20,
       orbit: [], stepBeat: -1, voiceT: 6, lod: 0, awake: false,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, rspd: 0, hpHold: 0,
-      dodgeX: 0, dodgeZ: 0, lastPX: p.x, lastPZ: p.z,
+      dodgeX: 0, dodgeZ: 0, lastPX: p.x, lastPZ: p.z, summonCd: 18,
     });
     return vec;
   }
@@ -8789,6 +8967,48 @@
       sent++;
     }
     vec.cmdSent = sent;
+  }
+  //  §21/§29: he calls, but he calls for what is missing and nothing more.
+  //  Recruiting runs first and takes whatever is already loose within 96 m, so
+  //  in a stocked district this almost never has to make a body at all — and
+  //  when it does, it stops at the same court size the recruiting stops at.
+  //  That is the difference between a king summoning his own and a boss fight
+  //  that buries the player in demodogs, which is what an uncapped call is.
+  const V_SUMMON_CD = 46;
+  function vecRing(r) {
+    for (let i = 0; i < 20; i++) {
+      const a = Math.random() * 6.2832;
+      const x = vec.x + Math.sin(a) * r, z = vec.z + Math.cos(a) * r;
+      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+      if (clearAt(x, z, 1.3)) return { x, z };
+    }
+    return null;
+  }
+  function vecSummon(dogWant, gorWant) {
+    let made = 0;
+    for (let i = 0; i < gorWant; i++) {
+      if (retinueOf(gorgons, 'vec', -1) >= V_RET.gors) break;
+      const spot = vecRing(32 + Math.random() * 12); if (!spot) break;
+      const g = spawnGorgon(spot); if (!g) break;
+      g.lord = 'vec'; g.lordSlot = -1;
+      g.hasT = vec.hasT; g.tx = vec.tx; g.tz = vec.tz; g.seeT = vec.seeT;
+      g.st = vec.hasT ? 'chase' : 'escort'; g.stT = 0;
+      g.rise = 0; g.taint = 0.5; summonRift(spot.x, spot.z, 4.4, 3.4);
+      made++;
+    }
+    for (let i = 0; i < dogWant; i++) {
+      if (retinueOf(dogs, 'vec', -1) >= V_RET.dogs) break;
+      const spot = vecRing(30 + Math.random() * 14); if (!spot) break;
+      const d = spawnDog(); if (!d) break;
+      d.x = d.rx = spot.x; d.z = d.rz = spot.z; d.y = supportHeight(spot.x, spot.z, 1);
+      d.lord = 'vec'; d.lordSlot = -1;
+      d.hasT = vec.hasT; d.tx = vec.tx; d.tz = vec.tz; d.seeT = vec.seeT;
+      d.st = vec.hasT ? 'chase' : 'escort'; d.stT = 0;
+      d.rise = 0; d.taint = 0.5; summonRift(spot.x, spot.z, 2.9, 2.8);
+      made++;
+    }
+    if (made) vec.summonFx = 1;
+    return made;
   }
   function vecHiveCount() {
     let n = 0;
@@ -9038,6 +9258,7 @@
     vec.vuln = Math.max(0, vec.vuln - dt);
     vec.mentalT -= dt;
     vec.voiceT -= dt;
+    vec.summonCd -= dt;
     if (vec.dead) { vec.deadT += dt; vec.sp = 0; return; }
 
     vecCommand(dt);
@@ -9126,8 +9347,14 @@
         if (vec.stT > 0.8 && !vec.cmdDone) {
           vec.cmdDone = 1; vec.cmdT = 0; vecCommand(0);
           playVecCommand();
+          //  and what does not answer, he grows. The order goes out first on
+          //  purpose: anything already standing there is claimed by the command
+          //  above, so this only ever makes up the shortfall.
+          let grew = 0;
+          if (vec.summonCd <= 0) { vec.summonCd = V_SUMMON_CD; grew = vecSummon(2, 1); }
           const n = vecHiveCount();
-          if (n > 0) notify('何かに命令している', 2400);
+          if (grew) notify('地面が裂けている', 2600);
+          else if (n > 0) notify('何かに命令している', 2400);
         }
         if (vec.stT > 2.4) { vec.cmdDone = 0; vec.archWant = 0; vec.st = 'hunt'; vec.stT = 0; }
         break;
@@ -9146,6 +9373,14 @@
         //  keeps the orbit topped up while he walks, which is §12's whole point:
         //  the things around him are a wall as much as they are ammunition
         if (vec.phase >= 2 && vec.orbit.length < 2 && Math.random() < dt * 0.35) vecLift(2);
+        //  and when the court has thinned he breaks off and calls. Only from
+        //  here, and only on the long cooldown — 'command' is otherwise a
+        //  phase-0 beat, so without this he calls once at the start of the
+        //  fight and never again however many of his are killed.
+        if (vec.summonCd <= 0 && vec.stT > 3 && !vec.atk &&
+            retinueOf(dogs, 'vec', -1) + retinueOf(gorgons, 'vec', -1) < V_RET.dogs) {
+          vec.st = 'command'; vec.stT = 0; vec.cmdDone = 0;
+        }
         break;
       }
       case 'combat': vec.st = 'hunt'; vec.stT = 0; break;
@@ -10226,6 +10461,7 @@
     updateGorgons(dt);
     updateFlayers(dt);
     updateVecna(dt);                         // and the king outranks all of it
+    updateRifts(dt);                         // and the ground it calls them up through
     if (wState === WS.BACK) {
       updateSpores(dt);
       // a bolt throws the whole city into relief for a few frames
