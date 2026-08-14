@@ -1755,8 +1755,18 @@
     while (da < -Math.PI) da += 6.2832;
     let w = da * gain;
     if (w > maxW) w = maxW; else if (w < -maxW) w = -maxW;
-    a.hd += w * dt;
-    return w;                                  // rad/s, +ve = turning right
+    //  Never turn past the thing being turned towards. At a frame's dt this
+    //  clamp never fires — the ease is a fraction of the error — but the AI LOD
+    //  hands far creatures a whole second and a bit at a time, and 2.6 rad/s of
+    //  it is 3.1 radians in one go: a half-radian correction becomes a 179°
+    //  overshoot, the next step overshoots back, and the animal spins. It reads
+    //  as full speed with no progress, which is exactly how it measured — an
+    //  escort 32 m behind a master strolling at 2.4 m/s, running flat out at
+    //  8.4 and falling further behind every sample.
+    let step = w * dt;
+    if (step > 0 ? step > da : step < da) step = da;
+    a.hd += step;
+    return dt > 1e-5 ? step / dt : 0;          // rad/s, +ve = turning right
   }
   function easePose(a, bx, bz, tgtH, dt, rate, maxCatch, gain, maxW) {
     if (a.rx === undefined) { a.rx = bx; a.rz = bz; }
@@ -5149,11 +5159,12 @@
       wx: spot.x, wz: spot.z, wanderT: 0, strafe: Math.random() < 0.5 ? 1 : -1,
       hideX: 0, hideZ: 0, hasHide: false, stepPh: Math.random(), breath: Math.random() * 6,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
+      lord: null, lordSlot: -1, lordFar: 0,
     });
     return d;
   }
   function despawnDog(d) {
-    d.live = false; d.dead = false; d.hp = 0;
+    d.live = false; d.dead = false; d.hp = 0; d.lord = null;
     hideDogSlot(d.slot);
     const pk = dogPacks[d.pack];
     if (pk) { const i = pk.members.indexOf(d.slot); if (i >= 0) pk.members.splice(i, 1); }
@@ -5212,11 +5223,14 @@
   // ---- movement -----------------------------------------------------
   //  Steer toward a point, slide off walls and wrecks, and keep out of each
   //  other's way with a soft separation push so a pack never stacks up.
-  function dogStep(d, tx, tz, speed, dt, sep) {
+  function dogStep(d, tx, tz, speed, dt, sep, ty) {
     //  Route round the architecture rather than into it. The waypoint replaces
     //  the destination only while one is needed; the moment the way is clear
     //  navNext returns null and it goes back to walking straight at you.
-    const wpt = navNext(d.x, d.z, d.y, tx, tz, p.y - EYE);
+    //  ty is whose floor the destination is on, and it is not always yours: an
+    //  escort is walking to a spot beside its master, so routing it up the
+    //  stairs because *you* are on the fifth is exactly wrong.
+    const wpt = navNext(d.x, d.z, d.y, tx, tz, ty === undefined ? p.y - EYE : ty);
     if (wpt) { tx = wpt.x; tz = wpt.z; }
     const dx = tx - d.x, dz = tz - d.z, dd = Math.hypot(dx, dz);
     let ux = dd > 0.01 ? dx / dd : Math.sin(d.hd), uz = dd > 0.01 ? dz / dd : Math.cos(d.hd);
@@ -5280,7 +5294,15 @@
     //  back — which is the entire "they walk through walls" complaint.
     const bx0 = d.x, bz0 = d.z;
     const full = speed * dt;
-    const steps = Math.min(4, 1 + Math.floor(full / 0.22));
+    //  The cap has to scale with the step, not sit at a constant. The AI LOD
+    //  hands a far creature a second and a bit at a time, and four substeps of
+    //  that is 2.5 m a piece — eight times the thickness this is meant to stop
+    //  it crossing, so the far band walks into buildings and then spends its
+    //  next ticks navigating back out of them. Scaling the cap with dt keeps
+    //  the substep near 0.3 m at every LOD while still costing the far band
+    //  about a third of the near band per second of play, because it is the
+    //  substeps *per second* that are worth bounding and they tick rarely.
+    const steps = Math.min(4 + Math.floor(dt * 24), 1 + Math.floor(full / 0.22));
     const sx2 = Math.sin(d.hd) * (full / steps), sz2 = Math.cos(d.hd) * (full / steps);
     for (let q = 0; q < steps; q++) {
       _dEye.set(d.x + sx2, d.y, d.z + sz2);
@@ -5308,12 +5330,9 @@
     }
     for (let i = 0; i < 12; i++) {
       const a = d.hd + (Math.random() - 0.5) * 2.4, r = 10 + Math.random() * 26;
-      //  Reflected off the world edge, not rejected at it. Rejecting is what put
-      //  the whole population in the middle of the map: near the boundary every
-      //  outward candidate is thrown away and only the inward ones survive, so
-      //  the random walk acquires a steady drift toward the centre and after a
-      //  few minutes that is where all forty-eight of them are. A reflecting
-      //  walk has no such bias — its resting distribution is flat.
+      //  Reflected off the world edge, not rejected at it. Rejecting biases the
+      //  walk inward: near the boundary every outward candidate is thrown away
+      //  and only the inward ones survive. A reflecting walk has no such bias.
       let x = d.x + Math.sin(a) * r, z = d.z + Math.cos(a) * r;
       if (x > D_ROAM) x = 2 * D_ROAM - x; else if (x < -D_ROAM) x = -2 * D_ROAM - x;
       if (z > D_ROAM) z = 2 * D_ROAM - z; else if (z < -D_ROAM) z = -2 * D_ROAM - z;
@@ -5328,7 +5347,7 @@
   //  the threat is, how hurt it is, how many of its own are up, whether there
   //  is anything to get behind — and the best one wins, with a bonus for
   //  whatever it is already doing so it does not dither on the spot.
-  const D_DWELL = { attack: 0.55, call: 1.9, hide: 1.2, retreat: 1.0, reposition: 0.7, investigate: 1.4, alert: 0.8 };
+  const D_DWELL = { attack: 0.55, call: 1.9, hide: 1.2, retreat: 1.0, reposition: 0.7, investigate: 1.4, alert: 0.8, escort: 1.6 };
   function dogDecide(d, dt) {
     const pk = dogPacks[d.pack];
     const hpF = d.hp / DOG_HP;
@@ -5342,6 +5361,14 @@
     for (const k in S) S[k] = 0;
 
     S.wander = 0.30;
+    //  With nothing to hunt, a follower keeps station on its master instead of
+    //  wandering off — which is the whole difference between an escort and a
+    //  handful of animals that happened to be summoned in the same place. It
+    //  still loses to a loud noise: it is a hound, not a bodyguard. And it is
+    //  gated on there being nothing to hunt, because ungated it scores level
+    //  with chase at any real distance and the retinue politely declines to
+    //  fight.
+    S.escort = (d.lord && !known) ? 0.90 : 0;
     S.investigate = (d.noise && cityT - d.noise.t < 6 && !known) ? 0.72 + d.noiseS * 0.5 : 0;
     S.alert = known && dist > 16 ? 0.62 : 0;
     // pressing in: wants a friend, wants to be healthy, wants to be close-ish
@@ -5356,10 +5383,26 @@
     S.observe = known && hpF < 0.85 && dist > 11 ? 0.55 : 0;
     S.call = (hpF < 0.55 || (known && allies < 2)) && d.callCd <= 0 && known ? 1.15 + (1 - hpF) * 0.8 : 0;
     S.flee = hpF < 0.22 ? 1.7 + (allies < 2 ? 0.5 : 0) : 0;
-    // roles keep a pack from arriving as one lump (§33)
-    if (d.role === 'flank') { S.reposition += 0.55; S.chase -= 0.35; }
-    if (d.role === 'watch') { S.observe += 0.60; S.chase -= 0.55; S.attack -= 0.4; }
-    if (d.role === 'engage') { S.chase += 0.40; }
+    //  Roles keep a pack from arriving as one lump (§33) — but a role is a
+    //  statement about how to approach a target, so it means nothing without
+    //  one, and applying it anyway is what put the whole population in the
+    //  middle of the map. Roles are dealt to every animal, and everything that
+    //  cannot see you is dealt 'watch'; 'watch' adds 0.60 to observe
+    //  unconditionally, which beats wander's 0.30; and observe walks a ring
+    //  around d.tx,d.tz — which for an animal that has never once seen you is
+    //  still the (0, 0) it was born with. So every idle demodog in the district
+    //  was quietly walking to the exact centre of the world. Measured: all 46
+    //  in observe, none of them aware of anything, mean radius falling 223 →
+    //  194 → 164 and the outer ring emptying into the middle.
+    if (known) {
+      if (d.role === 'flank') { S.reposition += 0.55; S.chase -= 0.35; }
+      if (d.role === 'watch') { S.observe += 0.60; S.chase -= 0.55; S.attack -= 0.4; }
+      if (d.role === 'engage') { S.chase += 0.40; }
+    }
+    //  §53: nothing of VECNA's runs away or goes to ground while he is watching.
+    //  vecCommand forces this too, but only every 2.6 s, and a dog that breaks
+    //  off in between is a dog the player watches lose its nerve.
+    if (d.lord === 'vec') { S.flee = 0; S.hide = 0; S.retreat *= 0.3; }
 
     let bestK = 'wander', bestV = -1;
     for (const k in S) if (S[k] > bestV) { bestV = S[k]; bestK = k; }
@@ -5408,8 +5451,14 @@
     switch (d.st) {
       case 'wander': {
         d.wanderT -= dt;
-        //  a whole second of getting nowhere means the place it chose is not
-        //  reachable from here, whatever the straight line says
+        //  A second of getting nowhere means the place it chose is not
+        //  reachable from here, whatever the straight line says — except on a
+        //  leg across town, which is a straight line through a city laid out on
+        //  a 66 m grid and therefore meets a building almost at once. Abandoning
+        //  those on first contact is what quietly cancelled every one of them:
+        //  the animal would set off for the far side, press a facade four
+        //  seconds later, and go back to circling where it already was. dogStep
+        //  slides it along the wall on its own; it only has to be allowed to.
         if (d.wanderT <= 0 || Math.hypot(d.wx - d.x, d.wz - d.z) < 2.2 || d.stuck > 1.0) {
           const w = dogWanderPoint(d); d.wx = w.x; d.wz = w.z; d.wanderT = 4 + Math.random() * 7;
           d.stuck = 0;
@@ -5418,6 +5467,38 @@
         lookX = d.x + Math.sin(d.hd + Math.sin(cityT * 0.4 + d.slot) * 0.9) * 6;   // casting about as it goes
         lookZ = d.z + Math.cos(d.hd + Math.sin(cityT * 0.4 + d.slot) * 0.9) * 6;
         wantCrouch = 0.15;
+        break;
+      }
+      case 'escort': {
+        //  It travels with its master rather than being told once where the
+        //  player was and then left to its own devices. Speed is banded off the
+        //  distance it has fallen behind, not constant: a follower running flat
+        //  out at a station it is already standing on grinds against the
+        //  separation push and vibrates on the spot.
+        const L = lordOf(d, dt);
+        if (!L) { d.st = 'wander'; d.stT = 0; break; }
+        const s = escortSpot(d, L, d.lord === 'vec' ? 5 : 9, 4, 2.6);
+        const behind = Math.hypot(L.x - d.x, L.z - d.z);
+        //  Pace is taken from the master rather than picked out of the air.
+        //  Fixed speed bands were the first thing I wrote and they do not work:
+        //  guess low and the escort is left behind by a master that is only
+        //  strolling, guess high and it barges into the thing it is escorting.
+        //  Matching its speed and adding a term for the gap it has to close
+        //  needs no tuning and cannot be wrong about a master whose own speed
+        //  changes with its state.
+        //
+        //  sep is off, as it is for a lunge. The stations are already spread —
+        //  every follower has its own bearing and its own radius — so the
+        //  separation push has nothing left to solve here and spends the whole
+        //  time shoving the formation apart faster than it can re-form.
+        const pace = (!s.ok || behind < s.ring - 1.5) ? 0
+          : Math.min(8.4, (L.sp || 0) * 1.2 + Math.max(0, behind - s.ring) * 0.9);
+        dogStep(d, s.x, s.z, pace, dt, false, L.y);
+        //  facing out, not in: a ring of animals all staring at their own master
+        //  looks like a pen, not a guard
+        lookX = d.x + Math.sin(s.bear + Math.sin(cityT * 0.5 + d.slot) * 0.7) * 9;
+        lookZ = d.z + Math.cos(s.bear + Math.sin(cityT * 0.5 + d.slot) * 0.7) * 9;
+        wantTail = 0.4; wantCrouch = 0.1; wantMaw = 0.1;
         break;
       }
       case 'investigate': {
@@ -5475,6 +5556,8 @@
         break;
       }
       case 'observe': {
+        //  and if there is nothing to watch, this is not the state to be in
+        if (!d.hasT) { d.st = 'wander'; d.stT = 0; break; }
         //  Watchers ring the target rather than queueing up behind it: each one
         //  keeps its own bearing, derived from its slot so it is stable, and its
         //  own distance. Sending them all to the same point behind the player is
@@ -6320,8 +6403,8 @@
   }
 
   // ---- movement -----------------------------------------------------
-  function gorStep(g, tx, tz, speed, dt) {
-    const wpt = navNext(g.x, g.z, g.y, tx, tz, p.y - EYE);     // it uses the door too
+  function gorStep(g, tx, tz, speed, dt, ty) {
+    const wpt = navNext(g.x, g.z, g.y, tx, tz, ty === undefined ? p.y - EYE : ty);   // it uses the door too
     if (wpt) { tx = wpt.x; tz = wpt.z; }
     const dx = tx - g.x, dz = tz - g.z, dd = Math.hypot(dx, dz);
     const ux = dd > 0.01 ? dx / dd : Math.sin(g.hd), uz = dd > 0.01 ? dz / dd : Math.cos(g.hd);
@@ -6330,7 +6413,7 @@
     g.lean += (-turn * 0.05 - g.lean) * Math.min(1, dt * 8);
     const bx = g.x, bz = g.z;
     const full = speed * dt;
-    const steps = Math.min(4, 1 + Math.floor(full / 0.22));   // no tunnelling through a facade
+    const steps = Math.min(4 + Math.floor(dt * 24), 1 + Math.floor(full / 0.22));   // scaled with dt: see dogStep
     const sx2 = Math.sin(g.hd) * (full / steps), sz2 = Math.cos(g.hd) * (full / steps);
     for (let q = 0; q < steps; q++) {
       _gFootW.set(g.x + sx2, g.y, g.z + sz2);
@@ -6416,10 +6499,11 @@
       stepBeat: -1, breath: Math.random() * 4, noise: null, noiseS: 0,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
       spawnD: Math.hypot(spot.x - p.x, spot.z - p.z),
+      lord: null, lordSlot: -1, lordFar: 0,
     });
     return g;
   }
-  function despawnGorgon(g) { g.live = false; g.dead = false; g.atk = null; hideGorSlot(g.slot); }
+  function despawnGorgon(g) { g.live = false; g.dead = false; g.atk = null; g.lord = null; hideGorSlot(g.slot); }
   function clearGorgons() { for (const g of gorgons) if (g.live) despawnGorgon(g); }
 
   // ---- the decision -------------------------------------------------
@@ -6456,7 +6540,26 @@
         g.sp = 0; g.mawWant = 1;
         if (g.stT > 1.25) { g.st = known ? 'chase' : 'wander'; g.stT = 0; g.mawWant = 0.2; }
         break;
+      case 'escort': {
+        //  Same station-keeping as the dog, at a heavier animal's spacing. It is
+        //  not a state it fights from: the moment it knows where you are it
+        //  drops out of formation and goes back to being a demogorgon.
+        const L = lordOf(g, dt);
+        if (!L) { g.st = 'wander'; g.stT = 0; break; }
+        const s = escortSpot(g, L, g.lord === 'vec' ? 6 : 13, 3, 4.5);
+        const behind = Math.hypot(L.x - g.x, L.z - g.z);
+        //  as with the dog: the master's own pace, plus what it takes to close
+        const pace = (!s.ok || behind < s.ring - 2) ? 0
+          : Math.min(7.8, (L.sp || 0) * 1.2 + Math.max(0, behind - s.ring) * 0.9);
+        gorStep(g, s.x, s.z, pace, dt, L.y);
+        lookX = g.x + Math.sin(s.bear) * 12; lookZ = g.z + Math.cos(s.bear) * 12;
+        g.mawWant = 0.06;
+        if (known) { g.st = 'alert'; g.stT = 0; }
+        else if (g.noise && cityT - g.noise.t < 7 && g.noiseS > 0.5) { g.st = 'investigate'; g.stT = 0; }
+        break;
+      }
       case 'wander': {
+        if (!known && lordOf(g, dt)) { g.st = 'escort'; g.stT = 0; break; }
         g.wanderT -= dt;
         if (g.wanderT <= 0 || Math.hypot(g.wx - g.x, g.wz - g.z) < 3) {
           for (let i = 0; i < 10; i++) {
@@ -6861,6 +6964,11 @@
         if (!d.live || d.dead) continue;
         const ddx = d.x - g.x, ddz = d.z - g.z, dd2 = ddx * ddx + ddz * ddz;
         if (dd2 > 289 || dd2 < 1e-4) continue;                      // within 17 m
+        //  but not at one of its own. Two members of the same retinue hold
+        //  stations a few metres apart on purpose; shoving them apart at
+        //  2.2 m/s undoes the formation faster than either can walk back into
+        //  it, and the escort spends the whole time drifting off its master.
+        if (d.lord && d.lord === g.lord && d.lordSlot === g.lordSlot) continue;
         const dd = Math.sqrt(dd2), push = (1 - dd / 17) * 2.2 * dt;
         d.x += ddx / dd * push; d.z += ddz / dd * push;
         //  and they mean it: the dog's own wander target is thrown out to the
@@ -7284,7 +7392,15 @@
     });
     return m;
   }
-  function despawnFlayer(m) { m.live = false; m.dead = false; m.atk = null; mfHideSlot(m.slot); }
+  function despawnFlayer(m) {
+    m.live = false; m.dead = false; m.atk = null; mfHideSlot(m.slot);
+    //  Release the retinue by hand rather than leaving it to expire on the next
+    //  lordOf. Slots are reused, and a follower that has not looked at its bond
+    //  for a few seconds would otherwise wake up owned by whatever spawned into
+    //  this slot next — a dog inheriting a stranger for a master.
+    for (const d of dogs) if (d.lord === 'mf' && d.lordSlot === m.slot) d.lord = null;
+    for (const g of gorgons) if (g.lord === 'mf' && g.lordSlot === m.slot) g.lord = null;
+  }
   function mfHideSlot(slot) {
     let k = slot * M_OVOID; for (let i = 0; i < M_OVOID; i++) mfOvoidI.setMatrixAt(k + i, _dHideM);
     k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, _dHideM);
@@ -7294,11 +7410,121 @@
   }
   function clearFlayers() { for (const m of flayers) if (m.live) despawnFlayer(m); if (bossEl) bossEl.classList.remove('on'); }
 
+  // ---- the retinue ----------------------------------------------------
+  //  Who follows whom, written down. Proximity used to stand in for this
+  //  everywhere, and proximity does not survive the master walking away: a
+  //  creature that happens to be standing nearby is not following anybody, so
+  //  an "escort" that was only ever a distance test dissolved silently the
+  //  first time the flayer took a different street. The bond is one-way — a
+  //  minion knows its lord, a lord counts its own — because that is the only
+  //  direction anything needs to read it in, and a list on the master is a
+  //  list that goes stale every time something dies.
+  //
+  //  The caps are the point, not an afterthought. A king who drags forty
+  //  bodies around with him is a king you cannot fight, and a street with
+  //  forty bodies on it is the crowding problem again by another name.
+  const MF_RET = { dogs: MF_ESC_DOG, gors: MF_ESC_GOR };   // §6/§7/§29
+  const V_RET = { dogs: 6, gors: 2 };                      // §22/§65: a few, not everything
+  const MF_TAKE = 58, V_TAKE = 96;                         // near enough to be claimed
+  const LEASH = 1.55;                                      // and how far it may then get before it is loose again
+  //  Resolves the bond and expires it in the same breath, so nothing else has
+  //  to remember to check whether the master is still alive or still nearby.
+  function lordOf(o, dt) {
+    if (!o.lord) return null;
+    let m = null, take = 0;
+    if (o.lord === 'vec') { m = vec.live && !vec.dead && vec.awake ? vec : null; take = V_TAKE; }
+    else { const f = flayers[o.lordSlot]; m = f && f.live && !f.dead ? f : null; take = MF_TAKE; }
+    if (!m) { o.lord = null; o.lordFar = 0; return null; }
+    //  Out of range is not the same as lost. A follower routed the long way
+    //  round a building, or one the master has simply out-walked for a moment,
+    //  is beyond the leash and closing — cutting it loose on the first frame
+    //  that reads long means the bond breaks and re-forms every time either of
+    //  them turns a corner. It has to *stay* out of reach to be free.
+    if (Math.hypot(o.x - m.x, o.z - m.z) > take * LEASH) {
+      o.lordFar = (o.lordFar || 0) + (dt || 0);
+      if (o.lordFar > 5) { o.lord = null; o.lordFar = 0; return null; }
+    } else o.lordFar = 0;
+    return m;
+  }
+  //  §21/§55: a claim only ever takes something loose. VECNA outranks a flayer
+  //  and could strip its escort off it, but a retinue that changes hands every
+  //  few seconds as the two of them drift past each other makes both of them
+  //  look indecisive, and the flayer commanding its own escort *is* the command
+  //  chain the specification describes. So: the wild get taken, the owned stay
+  //  owned, and the only thing that frees a minion is distance or a death.
+  function claimNear(arr, mx, mz, take, want, tag, slot) {
+    if (want <= 0) return 0;
+    let best = null, took = 0;
+    for (let n = 0; n < want; n++) {
+      best = null;
+      let bestD = take;
+      for (const o of arr) {
+        if (!o.live || o.dead || o.lord) continue;
+        const dr = Math.hypot(o.x - mx, o.z - mz);
+        if (dr < bestD) { bestD = dr; best = o; }
+      }
+      if (!best) break;
+      best.lord = tag; best.lordSlot = slot;
+      //  It stops whatever it was privately doing and falls in. Without this it
+      //  keeps running out its current wander timer and the bond looks broken
+      //  for the several seconds before the next decision.
+      if (best.st === 'wander' || best.st === 'idle' || best.st === 'search') { best.st = 'escort'; best.stT = 0; }
+      took++;
+    }
+    return took;
+  }
+  function retinueOf(arr, tag, slot) {
+    let n = 0;
+    for (const o of arr) if (o.live && !o.dead && o.lord === tag && (tag === 'vec' || o.lordSlot === slot)) n++;
+    return n;
+  }
+  //  Where a follower stands: its own bearing off its own slot and its own
+  //  radius, so a retinue rings the master instead of five of them queueing up
+  //  in the same spot behind it. Outside V_CLEAR for VECNA, because the ring he
+  //  keeps clear is enforced by a hard clamp further down and a station inside
+  //  it would have them fighting the clamp forever.
+  //
+  //  The station must also be somewhere you could stand. This is not a nicety:
+  //  both steppers route through navNext, and a target that lands inside a
+  //  building is not walked to — it is treated as somewhere to be *entered*,
+  //  so the follower is sent off to that building's front door instead. With
+  //  the master walking, the station lands in a different building every tick
+  //  and the escort spends the whole time sprinting between doors, moving at
+  //  full speed, never stuck, and steadily losing ground to a master strolling
+  //  at a third of its pace. Measured: 33 m behind, then 59, then 81, at 8.4 m/s
+  //  the whole way. So: rotate around the master until the spot is out on the
+  //  street, and if nothing is, stand where the master is — that at least is
+  //  somewhere it demonstrably got to.
+  //  The fallback matters as much as the search. Falling back to the master's
+  //  own position looks harmless and is the worst answer available: the master
+  //  is often standing over a footprint the followers cannot occupy, so every
+  //  one of them is handed a destination *inside a building*, navNext reads
+  //  that as somewhere to be entered, and they spend the rest of the walk
+  //  sprinting back and forth across one doorway. Traced: two of three
+  //  followers pinned on the same door waypoint at 8.4 m/s while the third,
+  //  which happened to get a clear station, sat on it perfectly. So when there
+  //  is nowhere to stand, stand still — ok:false, and the caller holds.
+  function escortSpot(o, L, base, spread, ringMul) {
+    const ring = (o.lord === 'vec' ? V_CLEAR + base : base) + (o.slot % spread) * ringMul;
+    const bear = L.hd + Math.PI + ((o.slot * 2.399) % 6.2832) * 0.55 - 0.9;
+    for (let ri = 0; ri < 2; ri++) {
+      const r = ri === 0 ? ring : ring * 1.45;      // pushed out a little if the near ring is all wall
+      for (let i = 0; i < 6; i++) {
+        const b = bear + (i === 0 ? 0 : (i & 1 ? 1 : -1) * Math.ceil(i / 2) * 0.8);
+        const x = L.x + Math.sin(b) * r, z = L.z + Math.cos(b) * r;
+        if (clearAt(x, z, 0.9)) return { x, z, ring, bear: b, ok: true };
+      }
+    }
+    return { x: o.x, z: o.z, ring, bear, ok: false };
+  }
+
   // ---- the command network -------------------------------------------
-  //  Anything of its kind standing inside MF_LINK is linked. No bookkeeping, no
-  //  ownership lists that can go stale — proximity *is* the link, so it breaks
-  //  the moment a minion wanders out of reach or the flayer walks away, and the
-  //  damage share stops with it exactly as the specification requires.
+  //  Separate from the retinue above and deliberately so. *Following* needs an
+  //  owner, because it has to survive the master moving. *Knowing* and
+  //  *bleeding* do not: anything of its kind standing inside MF_LINK is wired
+  //  in whether it follows the thing or not, so a wild pack that blunders past
+  //  a flayer still feeds it what it saw, and the link breaks the moment either
+  //  of them walks off — which is what the specification asks for.
   function mfLinkedTo(x, z) {
     for (const m of flayers) {
       if (!m.live || m.dead) continue;
@@ -7306,17 +7532,28 @@
     }
     return null;
   }
+  //  The escort cap is counted over what actually follows it, not over what
+  //  happens to be standing nearby. Those are different numbers the moment a
+  //  wild pack crosses the street: counted by proximity, a flayer with no
+  //  escort at all reads as full and never summons one.
   function mfCounts(m) {
-    let dogs_ = 0, gors = 0;
-    for (const d of dogs) if (d.live && !d.dead && Math.hypot(d.x - m.x, d.z - m.z) <= MF_LINK) dogs_++;
-    for (const g of gorgons) if (g.live && !g.dead && Math.hypot(g.x - m.x, g.z - m.z) <= MF_LINK) gors++;
-    return { dogs: dogs_, gors };
+    return { dogs: retinueOf(dogs, 'mf', m.slot), gors: retinueOf(gorgons, 'mf', m.slot) };
   }
   //  Two-way, and deliberately blunt: it hands down a target and an alert, and
   //  it takes up sightings and wounds. No formations, no roles — the escort
   //  keeps its own behaviour, it is just told what to look at.
   function mfCommand(m, dt) {
     const known = m.hasT && cityT - m.seeT < 22;
+    //  §6/§7: the escort is topped up out of whatever is already loose nearby
+    //  before it is ever topped up by summoning. A demodog that wanders into
+    //  the flayer's reach belongs to it from then on — which is what a hive
+    //  mind is, and a good deal cheaper than growing a new body for it.
+    m.claimT = (m.claimT || 0) - dt;
+    if (m.claimT <= 0) {
+      m.claimT = 1.4;
+      claimNear(dogs, m.x, m.z, MF_TAKE, MF_RET.dogs - retinueOf(dogs, 'mf', m.slot), 'mf', m.slot);
+      claimNear(gorgons, m.x, m.z, MF_TAKE, MF_RET.gors - retinueOf(gorgons, 'mf', m.slot), 'mf', m.slot);
+    }
     for (const d of dogs) {
       if (!d.live || d.dead) continue;
       if (Math.hypot(d.x - m.x, d.z - m.z) > MF_LINK) continue;
@@ -7326,7 +7563,7 @@
       }
       if (known && (!d.hasT || cityT - d.seeT > 3)) {              // §25: and hands the target back
         d.hasT = true; d.tx = m.tx; d.tz = m.tz; d.seeT = cityT - 1.5;
-        if (d.st === 'wander' || d.st === 'idle') { d.st = 'alert'; d.stT = 0; }
+        if (d.st === 'wander' || d.st === 'idle' || d.st === 'escort') { d.st = 'alert'; d.stT = 0; }
       }
     }
     for (const g of gorgons) {
@@ -7338,7 +7575,7 @@
       }
       if (known && (!g.hasT || cityT - g.seeT > 3)) {
         g.hasT = true; g.tx = m.tx; g.tz = m.tz; g.seeT = cityT - 1.5;
-        if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+        if (g.st === 'wander' || g.st === 'search' || g.st === 'escort') { g.st = 'chase'; g.stT = 0; }
       }
     }
     void dt;
@@ -7372,7 +7609,9 @@
       if (mfCounts(m).gors >= MF_ESC_GOR) break;
       const spot = mfRing(m, 26 + Math.random() * 16); if (!spot) break;
       const g = spawnGorgon(spot); if (!g) break;
-      g.hasT = m.hasT; g.tx = m.tx; g.tz = m.tz; g.seeT = m.seeT; made++;
+      g.hasT = m.hasT; g.tx = m.tx; g.tz = m.tz; g.seeT = m.seeT;
+      g.lord = 'mf'; g.lordSlot = m.slot; if (!m.hasT) { g.st = 'escort'; g.stT = 0; }
+      made++;
     }
     for (let i = 0; i < dogWant; i++) {
       if (mfCounts(m).dogs >= MF_ESC_DOG) break;
@@ -7380,7 +7619,8 @@
       const d = spawnDog(); if (!d) break;
       d.x = d.rx = spot.x; d.z = d.rz = spot.z; d.y = supportHeight(spot.x, spot.z, 1);
       d.hasT = m.hasT; d.tx = m.tx; d.tz = m.tz; d.seeT = m.seeT;
-      if (m.hasT) { d.st = 'chase'; d.stT = 0; }
+      d.lord = 'mf'; d.lordSlot = m.slot;
+      d.st = m.hasT ? 'chase' : 'escort'; d.stT = 0;
       made++;
     }
     if (made) { m.mawWant = 1; m.summonFx = 0.9; playMfSummon(m.tdist, mfPan(m)); }
@@ -7689,12 +7929,12 @@
     for (const d of dogs) {
       if (!d.live || d.dead || Math.hypot(d.x - m.x, d.z - m.z) > MF_LINK) continue;
       d.hasT = true; d.tx = fromX; d.tz = fromZ; d.seeT = cityT;
-      if (d.st === 'wander' || d.st === 'idle') { d.st = 'alert'; d.stT = 0; }
+      if (d.st === 'wander' || d.st === 'idle' || d.st === 'escort') { d.st = 'alert'; d.stT = 0; }
     }
     for (const g of gorgons) {
       if (!g.live || g.dead || Math.hypot(g.x - m.x, g.z - m.z) > MF_LINK) continue;
       g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
-      if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+      if (g.st === 'wander' || g.st === 'search' || g.st === 'escort') { g.st = 'chase'; g.stT = 0; }
     }
     if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
   }
@@ -8509,6 +8749,13 @@
     //  indistinguishable from no order at all.
     if (vec.cmdT > 0) return;
     vec.cmdT = 2.6;
+    //  §21/§53: what comes near him is his, hunt or no hunt — he does not need
+    //  a reason to be attended. Capped hard, and outside V_CLEAR: the retinue
+    //  is meant to read as a court standing around him, not as a wall of bodies
+    //  between the player and the fight.
+    claimNear(dogs, vec.x, vec.z, V_TAKE, V_RET.dogs - retinueOf(dogs, 'vec', -1), 'vec', -1);
+    claimNear(gorgons, vec.x, vec.z, V_TAKE, V_RET.gors - retinueOf(gorgons, 'vec', -1), 'vec', -1);
+    vec.retinue = retinueOf(dogs, 'vec', -1) + retinueOf(gorgons, 'vec', -1);
     if (!known) return;
     let sent = 0;
     //  §55 COMMAND PRIORITY: down the chain. The flayer is told, and what the
@@ -8532,13 +8779,13 @@
       .slice(0, n);
     for (const g of pick(gorgons, V_CMD_GOR)) {
       g.hasT = true; g.tx = vec.tx; g.tz = vec.tz; g.seeT = cityT;
-      if (g.st === 'wander' || g.st === 'search') { g.st = 'chase'; g.stT = 0; }
+      if (g.st === 'wander' || g.st === 'search' || g.st === 'escort') { g.st = 'chase'; g.stT = 0; }
       sent++;
     }
     for (const d of pick(dogs, V_CMD_DOG)) {
       d.hasT = true; d.tx = vec.tx; d.tz = vec.tz; d.seeT = cityT;
       //  §53: they do not hide and they do not break off while he is watching
-      if (d.st === 'wander' || d.st === 'idle' || d.st === 'hide' || d.st === 'flee') { d.st = 'chase'; d.stT = 0; }
+      if (d.st === 'wander' || d.st === 'idle' || d.st === 'hide' || d.st === 'flee' || d.st === 'escort') { d.st = 'chase'; d.stT = 0; }
       sent++;
     }
     vec.cmdSent = sent;
