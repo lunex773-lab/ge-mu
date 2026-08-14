@@ -4843,12 +4843,12 @@
           //  rest of this shader exists to draw stopped being visible at all.
           //  Everything here is deliberately dark: the creases go almost black
           //  and only the raised tissue is allowed any colour.
-          vec3 clot = vec3(0.085, 0.010, 0.016), raw = vec3(0.335, 0.040, 0.034);
-          vec3 blood = mix(clot, raw, clamp(0.20 + 0.80 * crease, 0.0, 1.0));
-          col = mix(col, blood * (uAmb + 0.72 * ndl), vTaint * 0.86);
+          vec3 clot = vec3(0.038, 0.005, 0.009), raw = vec3(0.190, 0.021, 0.019);
+          vec3 blood = mix(clot, raw, clamp(0.16 + 0.84 * crease, 0.0, 1.0));
+          col = mix(col, blood * (uAmb + 0.72 * ndl), vTaint * 0.92);
           float beat = 0.52 + 0.48 * sin(uTime * 2.3 - vL.y * 3.6 + seed * 6.3);
-          col += vec3(0.145, 0.008, 0.012) * pow(clamp(crease, 0.0, 1.0), 3.0) * beat * vTaint;
-          col += vec3(0.085, 0.005, 0.008) * rim * vTaint;
+          col += vec3(0.075, 0.004, 0.006) * pow(clamp(crease, 0.0, 1.0), 3.0) * beat * vTaint;
+          col += vec3(0.042, 0.002, 0.004) * rim * vTaint;
         }
         col += vec3(0.60, 0.10, 0.07) * uBolt * (0.30 + 0.70 * rim);
         float f = 1.0 - exp(-uFogDens * uFogDens * vFog * vFog);
@@ -6663,6 +6663,7 @@
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
       spawnD: Math.hypot(spot.x - p.x, spot.z - p.z),
       lord: null, lordSlot: -1, lordFar: 0, taint: 0, rise: 1, riseY: 0,
+      weave: Math.random() * 6.2832, burstT: 0, bursting: true, flankCd: 0,
     });
     return g;
   }
@@ -6676,6 +6677,7 @@
   function gorThink(g, dt) {
     g.stT += dt;
     g.atkCd = Math.max(0, g.atkCd - dt);
+    g.flankCd = Math.max(0, (g.flankCd || 0) - dt);
     g.stagger = Math.max(0, g.stagger - dt * 2.0);
     if (g.dead) { g.deadT += dt; g.sp = 0; g.mawWant = 0.55; return; }
     if (g.rise < 1) { g.sp = 0; g.mawWant = 1; g.crouch = 0.7; g.hd += dt * 0.6; return; }
@@ -6757,14 +6759,54 @@
         if (g.stT > 0.15 && !g.growled) { g.growled = 1; playGorGrowl(g.tdist, gorPan(g)); }
         if (g.stT > 1.0) { g.growled = 0; g.st = known ? 'chase' : 'wander'; g.stT = 0; }
         break;
+      case 'flank': {
+        //  It goes round. A predator that only ever closes on the shortest line
+        //  is a predator you shoot down the shortest line, and this one was
+        //  dying on the way in every time. It breaks off, runs out to a bearing
+        //  behind you, and comes back at your back — so holding one firing
+        //  angle stops being enough and you have to keep turning.
+        if (!known) { g.st = 'search'; g.stT = 0; break; }
+        const behind = Math.atan2(Math.sin(yaw), Math.cos(yaw));   // where you are not looking
+        const want = 22 + (g.slot % 3) * 5;
+        const bear = behind + g.strafe * (0.9 - Math.min(0.7, g.stT * 0.2));
+        const gx = g.tx + Math.sin(bear) * want, gz = g.tz + Math.cos(bear) * want;
+        if (!clearAt(gx, gz, 1.0)) g.strafe = -g.strafe;
+        gorStep(g, gx, gz, g.enraged ? 9.2 : 7.4, dt);
+        g.mawWant = 0.1;
+        lookX = g.tx; lookZ = g.tz;
+        //  and it commits the moment it is round, or the moment it runs out of
+        //  patience — circling forever is its own kind of harmless
+        const rel0 = Math.atan2(g.x - g.tx, g.z - g.tz) - behind;
+        let rr = rel0; while (rr > Math.PI) rr -= 6.2832; while (rr < -Math.PI) rr += 6.2832;
+        if (g.stT > 4.5 || dist < 13 || Math.abs(rr) < 0.55) { g.st = 'chase'; g.stT = 0; }
+        break;
+      }
       case 'chase': {
         if (!known) { g.st = 'search'; g.stT = 0; break; }
-        gorStep(g, g.tx, g.tz, g.enraged ? 9.6 : 7.8, dt);
+        //  Serpentine, and not at one speed. Both of these exist for the same
+        //  reason: a body travelling in a straight line at a constant rate is a
+        //  body you lead once and hit every time after. The weave shrinks as it
+        //  closes, so the last few metres are still a committed charge.
+        g.weave = (g.weave || 0) + dt * (1.8 + (g.slot % 4) * 0.35);
+        const wob = Math.sin(g.weave) * Math.min(1, dist / 30) * 10.5 * g.strafe;
+        const ax = g.tx - fz * wob, az = g.tz + fx * wob;
+        g.burstT = (g.burstT || 0) - dt;
+        if (g.burstT <= 0) { g.burstT = 0.55 + Math.random() * 1.0; g.bursting = !g.bursting; }
+        const base = g.enraged ? 9.6 : 7.8;
+        gorStep(g, ax, az, g.bursting || dist < 14 ? base : base * 0.42, dt);
         g.mawWant = g.enraged ? 0.45 : 0.18;
+        //  Being shot at from across the street is what sends it round the side.
+        //  Not every time — a predator that always flanks is as readable as one
+        //  that never does.
+        if (dist > 17 && g.stT > 0.9 && Math.random() < dt * 0.9) { g.st = 'flank'; g.stT = 0; break; }
         //  pick the swing that fits the distance it has arrived at
         if (g.atkCd <= 0 && g.see > 0) {
           if (dist < G_CLAW_R) {
             const r = Math.random();
+            //  and sometimes it arrives and does not swing. A predator that
+            //  attacks the instant it is in reach can be timed off the moment
+            //  it gets there; one that occasionally circles once first cannot.
+            if (!g.enraged && r < 0.18) { g.st = 'reposition'; g.stT = 0; break; }
             if (g.enraged && r < 0.30) gorStartAtk(g, 'pred');
             else if (r < (g.enraged ? 0.55 : 0.34)) gorStartAtk(g, 'dclaw');
             else gorStartAtk(g, 'claw');
@@ -6831,6 +6873,17 @@
     if (dmg > 70) { g.stagger = 1; if (g.atk) { g.atk = null; g.atkCd = 0.7; } }     // heavy: the swing is broken
     else if (dmg > 30) g.stagger = Math.max(g.stagger, 0.55);                        // medium: a real rock back
     else g.stagger = Math.max(g.stagger, 0.16);                                      // light: barely noticed
+    //  Shot from across the street. This is the exact situation it used to die
+    //  in — head down, straight up the firing line, taking every round on the
+    //  way — and the distance gate alone never caught it, because a charge at
+    //  7.8 m/s is inside any sensible gate before the timer that guards it has
+    //  run. Being hit at range *is* the signal, so it is what breaks it off.
+    if (!g.enraged && !g.atk && g.st !== 'flank' &&
+        Math.hypot(fromX - g.x, fromZ - g.z) > 19 && (g.flankCd || 0) <= 0) {
+      g.flankCd = 3.4;
+      g.strafe = Math.random() < 0.5 ? 1 : -1;
+      g.st = 'flank'; g.stT = 0;
+    }
     if (!g.enraged && g.hp <= GOR_HP * G_ENRAGE) {
       g.enraged = true; g.atk = null; g.st = 'enrage'; g.stT = 0; g.mawWant = 1;
       playGorRoar(g.tdist, gorPan(g));
@@ -7155,7 +7208,7 @@
   }
 
   // ---- network ------------------------------------------------------
-  const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage', 'escort'];
+  const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage', 'escort', 'flank'];
   function gorSnapshot() {
     const k = [];
     for (const g of gorgons) {
@@ -7238,6 +7291,13 @@
   const MF_SUMMON = 120, MF_PANIC_CD = 95;
   const MF_ESC_GOR = 2, MF_ESC_DOG = 3;
   const MF_SWIPE_R = 15.5, MF_SWIPE_DMG = 30;
+  //  §21 wanted "distance decides", and two attacks is not a decision. Each of
+  //  these punishes a different habit: the sweep punishes strafing round it,
+  //  the stomp punishes standing under it, and the lash punishes sitting at the
+  //  range where the swipe cannot reach and the throw has no car to pick up.
+  const MF_STOMP_R = 12.5, MF_STOMP_DMG = 34, MF_STOMP_OFF = 10;
+  const MF_SWEEP_R = 19.5, MF_SWEEP_DMG = 24;
+  const MF_LASH_R = 26, MF_LASH_DMG = 19;
   const MF_THROW_MIN = 17, MF_THROW_MAX = 62, MF_THROW_DMG = 34;
   const MF_PANIC = 0.30;
 
@@ -7280,13 +7340,14 @@
   //  63 bones (throat, 6 legs of 3, 22 fused bodies of 2)
   //  40 knuckles (18 joints, 22 fused hands and skulls)
   //  16 plates and horns, 36 fangs
-  const M_OVOID = 20, M_BONE = 63, M_KNUC = 40, M_SPIKE = 16, M_FANG = 36;
+  const M_OVOID = 24, M_BONE = 63, M_KNUC = 40, M_SPIKE = 16, M_FANG = 36;
   const mfOvoidI = dIM(dogOvoidGeo, mfSkinMat, MF_DRAW * M_OVOID);
   const mfBoneI = dIM(dogBoneGeo, mfShellMat, MF_DRAW * M_BONE);
   const mfKnucI = dIM(dogKnucGeo, mfShellMat, MF_DRAW * M_KNUC);
   const mfSpikeI = dIM(dogPetalGeo, mfShellMat, MF_DRAW * M_SPIKE);
   const mfFangI = dIM(dogPetalGeo, mfFangMat, MF_DRAW * M_FANG);
   const mfParts = [mfOvoidI, mfBoneI, mfKnucI, mfSpikeI, mfFangI];
+  seedTaint(mfParts);
   //  the light that comes out of it
   mfSkinMat.uniforms.uGlow.value = 1.0; mfShellMat.uniforms.uGlow.value = 0.8;
   mfSkinMat.uniforms.uGlowCol.value.setHex(0x7a3cff); mfShellMat.uniforms.uGlowCol.value.setHex(0x5a4cff);
@@ -7305,15 +7366,23 @@
     const head = dnode(neck, 0, 0, 3.3); MK.head = head;
     const maw = dnode(head, 0, -0.40, 2.10); MK.maw = maw;
 
-    dvis(core, mOvoids, 3.55, 2.75, 4.40, 0, -0.25, -2.2);              // abdomen
-    dvis(core, mOvoids, 3.10, 2.90, 3.45, 0, 0.15, 1.5);                // thorax
-    dvis(core, mOvoids, 2.05, 1.80, 2.10, 0, 1.15, 0.1);                // the raised back
-    dvis(head, mOvoids, 1.62, 1.55, 2.30, 0, 0, -0.45);                 // skull
-    dvis(head, mOvoids, 1.10, 0.95, 1.82, 0, -0.45, 1.40);              // snout
-    dvis(head, mOvoids, 1.42, 0.54, 0.74, 0, 0.84, 0.14);               // brow
+    //  Built heavier than it was. The first pass read as a tall spider — all
+    //  span and no weight — and a commander that six legs can obviously carry
+    //  is not frightening. The trunk carries a third again as much mass, and
+    //  the new pieces are all above and outboard of the hips, so the extra
+    //  reads as shoulder and haunch rather than as a fatter abdomen.
+    dvis(core, mOvoids, 4.30, 3.45, 5.10, 0, -0.30, -2.3);              // abdomen
+    dvis(core, mOvoids, 3.85, 3.70, 4.05, 0, 0.20, 1.5);                // thorax
+    dvis(core, mOvoids, 2.75, 2.45, 2.70, 0, 1.35, 0.1);                // the raised back
+    dvis(core, mOvoids, 2.30, 1.95, 2.05, 0, 1.05, -3.5);               // and the rump behind it
+    dvis(head, mOvoids, 1.90, 1.82, 2.60, 0, 0, -0.45);                 // skull
+    dvis(head, mOvoids, 1.28, 1.12, 2.00, 0, -0.45, 1.40);              // snout
+    dvis(head, mOvoids, 1.62, 0.66, 0.86, 0, 0.92, 0.14);               // brow
+    dvis(neck, mOvoids, 1.70, 1.55, 1.90, 0, -1.20, 0);                 // a thick throat root
     for (const sd of [-1, 1]) {
-      dvis(core, mOvoids, 1.30, 1.15, 1.55, 2.45 * sd, 0.35, 0.60);     // leg mounts
-      dvis(core, mOvoids, 1.15, 1.05, 1.40, 2.25 * sd, 0.12, -2.05);
+      dvis(core, mOvoids, 1.85, 1.70, 2.15, 2.70 * sd, 0.55, 0.60);     // leg mounts, deepened
+      dvis(core, mOvoids, 1.62, 1.50, 1.95, 2.55 * sd, 0.25, -2.05);
+      dvis(core, mOvoids, 1.45, 1.55, 1.50, 2.15 * sd, 1.35, -0.70);    // shoulder humps over them
     }
     dvis(neck, mBones, 1.15, 3.3, 1.15, 0, 0, 0, -Math.PI / 2);         // the throat
     //  A ridge of plates down the spine and a crown of horns on the skull —
@@ -7369,12 +7438,14 @@
       const hip = dnode(hub, 0, 0, 0); hip.rotation.order = 'YXZ';
       const knee = dnode(hip, 0, -ML1, 0);
       const ankle = dnode(knee, 0, -ML2, 0);
-      dvis(hip, mBones, 1.15, ML1, 1.15);                               // limbs with mass in them
-      dvis(knee, mBones, 0.78, ML2, 0.78);
-      dvis(ankle, mBones, 0.46, 2.1, 0.46, 0, 0, 0, 0.35);              // the tapered claw-foot
-      dvis(hip, mKnucs, 1.45, 1.30, 1.45, 0, 0.08, 0);
-      dvis(knee, mKnucs, 1.02, 0.92, 1.10, 0, 0.06, 0);
-      dvis(ankle, mKnucs, 0.58, 0.52, 0.62);
+      //  Thicker through the thigh especially: the taper from hip to foot is
+      //  what sells load-bearing, and the old limb was near enough a rod.
+      dvis(hip, mBones, 1.62, ML1, 1.62);                               // limbs with mass in them
+      dvis(knee, mBones, 1.02, ML2, 1.02);
+      dvis(ankle, mBones, 0.56, 2.1, 0.56, 0, 0, 0, 0.35);              // the tapered claw-foot
+      dvis(hip, mKnucs, 2.05, 1.85, 2.05, 0, 0.08, 0);
+      dvis(knee, mKnucs, 1.36, 1.24, 1.46, 0, 0.06, 0);
+      dvis(ankle, mKnucs, 0.70, 0.62, 0.74);
       MK.legs.push({ hub, hip, knee, ankle, az, L1: ML1, L2: ML2, tip: new THREE.Vector3() });
     }
     //  The tissue is other things. Arms, hands and skulls are set through the
@@ -7452,8 +7523,16 @@
     MK.core.scale.set(sw, sw - s.swell * 0.03, sw);
     MK.core.rotation.set(s.rear * 0.22, Math.sin(ph * 6.2832) * 0.04 * mv, 0, 'YXZ');
     //  the head hangs forward off the mass and aims on its own
-    MK.neck.rotation.set(0.34 - s.headPitch * 0.40 - s.rear * 0.25, s.headYaw * 0.45, 0, 'YXZ');
-    MK.head.rotation.set(-0.22 - s.headPitch * 0.45 + s.lunge * 0.30, s.headYaw * 0.55, s.headYaw * 0.12, 'YXZ');
+    //  The lash lives entirely in the neck and head — the legs keep walking
+    //  through it, which is exactly why it is the fast one.
+    let lashN = 0, lashH = 0;
+    if (s.atk && s.atk.kind === 'lash') {
+      const k = s.atk.phase;
+      lashN = k < 0 ? 0.55 * -k : -0.95 * Math.sin(Math.min(1, k) * 3.1416);
+      lashH = k < 0 ? 0.35 * -k : -0.70 * Math.sin(Math.min(1, k) * 3.1416);
+    }
+    MK.neck.rotation.set(0.34 - s.headPitch * 0.40 - s.rear * 0.25 + lashN, s.headYaw * 0.45, 0, 'YXZ');
+    MK.head.rotation.set(-0.22 - s.headPitch * 0.45 + s.lunge * 0.30 + lashH, s.headYaw * 0.55, s.headYaw * 0.12, 'YXZ');
     //  the jaws: the big one leads, the two in the skull work slightly out of
     //  step with it, so the front of the animal never looks like one mechanism
     for (let i = 0; i < MK.mouths.length; i++) {
@@ -7507,20 +7586,38 @@
       L.ankle.rotation.x = -(L.hip.rotation.x + L.knee.rotation.x) * 0.5 + 0.35;
       //  the swiping foreleg leaves the gait entirely
       if (s.atk && s.atk.leg === i) {
-        const k = s.atk.phase;
-        L.hip.rotation.y = Math.atan2(dx, dz) + (k < 0 ? -1.0 * -k : 1.5 * k) * s.atk.side;
-        L.hip.rotation.x = (k < 0 ? -2.5 + 0.9 * (1 + k) : -1.6 + 1.2 * k);
-        L.knee.rotation.x = (k < 0 ? 2.4 : 1.1 + 0.6 * k);
+        const k = s.atk.phase, kind = s.atk.kind;
+        if (kind === 'stomp') {
+          //  straight up, then straight down: no lateral component at all, so
+          //  it reads as weight rather than as a swing
+          L.hip.rotation.y = Math.atan2(dx, dz);
+          L.hip.rotation.x = (k < 0 ? -2.9 * (1 + k) - 0.2 : -0.35 + 0.30 * k);
+          L.knee.rotation.x = (k < 0 ? 2.7 * (1 + k) + 0.2 : 0.25);
+        } else if (kind === 'sweep') {
+          //  low and flat, travelling right the way round the front
+          L.hip.rotation.y = Math.atan2(dx, dz) + (k < 0 ? 1.5 * s.atk.side : (1.5 - 3.0 * k) * s.atk.side);
+          L.hip.rotation.x = -0.55 + (k < 0 ? -0.5 * -k : 0.1 * k);
+          L.knee.rotation.x = 0.55;
+        } else {
+          L.hip.rotation.y = Math.atan2(dx, dz) + (k < 0 ? -1.0 * -k : 1.5 * k) * s.atk.side;
+          L.hip.rotation.x = (k < 0 ? -2.5 + 0.9 * (1 + k) : -1.6 + 1.2 * k);
+          L.knee.rotation.x = (k < 0 ? 2.4 : 1.1 + 0.6 * k);
+        }
       }
     }
     MK.root.updateMatrixWorld(true);
   }
-  function writeFlayer(slot) {
+  function writeFlayer(slot, taint) {
     let k = slot * M_OVOID; for (let i = 0; i < M_OVOID; i++) mfOvoidI.setMatrixAt(k + i, mOvoids[i].matrixWorld);
+    taintI(mfOvoidI, k, M_OVOID, taint);
     k = slot * M_BONE; for (let i = 0; i < M_BONE; i++) mfBoneI.setMatrixAt(k + i, mBones[i].matrixWorld);
+    taintI(mfBoneI, k, M_BONE, taint);
     k = slot * M_KNUC; for (let i = 0; i < M_KNUC; i++) mfKnucI.setMatrixAt(k + i, mKnucs[i].matrixWorld);
+    taintI(mfKnucI, k, M_KNUC, taint);
     k = slot * M_SPIKE; for (let i = 0; i < M_SPIKE; i++) mfSpikeI.setMatrixAt(k + i, mSpikes[i].matrixWorld);
+    taintI(mfSpikeI, k, M_SPIKE, taint);
     k = slot * M_FANG; for (let i = 0; i < M_FANG; i++) mfFangI.setMatrixAt(k + i, mFangs[i].matrixWorld);
+    taintI(mfFangI, k, M_FANG, taint);
   }
 
   // ---- the population -----------------------------------------------
@@ -7565,6 +7662,7 @@
       stepBeat: -1, pulse: Math.random() * 5, fleeT: 0,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
       spawnD: Math.hypot(spot.x - p.x, spot.z - p.z), escorted: false,
+      lord: null, lordSlot: -1, lordFar: 0, taint: 0,
     });
     return m;
   }
@@ -7964,11 +8062,28 @@
         mfStep(m, m.tx - fx * 9, m.tz - fz * 9, m.panicked ? 5.4 : 4.3, dt);
         m.mawWant = 0.2;
         if (m.atkCd <= 0 && m.see > 0) {
-          if (dist < MF_SWIPE_R) mfStartAtk(m, 'swipe');
-          else if (dist > MF_THROW_MIN && dist < MF_THROW_MAX) {
+          //  Each band offers more than one answer and picks between them, and
+          //  the bands overlap. One attack per distance is a rhythm the player
+          //  learns in thirty seconds and then walks in and out of; the point
+          //  of the overlap is that standing at any particular range never
+          //  tells you which thing is about to happen.
+          const r = Math.random();
+          if (dist < MF_STOMP_R * 0.9) {
+            //  right underneath it: the two that do not need it to turn
+            mfStartAtk(m, r < 0.45 ? 'stomp' : r < 0.80 ? 'swipe' : 'sweep');
+          } else if (dist < MF_SWIPE_R) {
+            mfStartAtk(m, r < 0.40 ? 'swipe' : r < 0.72 ? 'sweep' : 'stomp');
+          } else if (dist < MF_SWEEP_R) {
+            mfStartAtk(m, r < 0.50 ? 'sweep' : 'lash');
+          } else if (dist < MF_LASH_R) {
+            mfStartAtk(m, r < 0.55 ? 'lash' : 'sweep');
+          } else if (dist > MF_THROW_MIN && dist < MF_THROW_MAX) {
             const k = mfPickWreck(m);
-            if (k >= 0) { m.holdW = k; mfStartAtk(m, 'throw'); }
-            else m.atkCd = 2.4;
+            //  and if there is nothing to pick up, it does not simply stand
+            //  there waiting for one — it closes and lashes instead
+            if (k >= 0 && r < 0.8) { m.holdW = k; mfStartAtk(m, 'throw'); }
+            else if (dist < MF_LASH_R + 6) mfStartAtk(m, 'lash');
+            else m.atkCd = 1.6;
           }
         }
         break;
@@ -8021,11 +8136,22 @@
   const MF_ATK = {
     swipe: { wind: 0.72, swing: 0.42, rec: 0.60, cd: 3.4 },
     throw: { wind: 1.25, swing: 0.30, rec: 0.75, cd: 6.0 },
+    //  slow and enormous: you are meant to see it coming and leave
+    stomp: { wind: 1.05, swing: 0.24, rec: 0.78, cd: 5.4 },
+    //  long and flat, so backing straight off does not clear it — you go round
+    sweep: { wind: 0.86, swing: 0.58, rec: 0.70, cd: 4.4 },
+    //  the one quick thing it owns, and the only reason mid range is not safe
+    lash:  { wind: 0.46, swing: 0.26, rec: 0.42, cd: 2.6 },
   };
   function mfStartAtk(m, kind) {
     const legs = [0, 3];                                   // the two forelegs do the hitting
     const leg = legs[Math.random() < 0.5 ? 0 : 1];
-    m.atk = { kind, t: 0, leg, side: leg === 0 ? 1 : -1, phase: -1, hit: 0, sfx: 0 };
+    //  The stomp commits to a spot now, not on impact. Aimed at where you are
+    //  when it starts and left there, so the wind-up is a real warning instead
+    //  of a homing animation you cannot answer.
+    const px = kind === 'stomp' ? m.x + Math.sin(m.hd) * MF_STOMP_OFF : 0;
+    const pz = kind === 'stomp' ? m.z + Math.cos(m.hd) * MF_STOMP_OFF : 0;
+    m.atk = { kind, t: 0, leg, side: leg === 0 ? 1 : -1, phase: -1, hit: 0, sfx: 0, px, pz };
     m.st = 'attack'; m.stT = 0;
     playMfWind(m.tdist, mfPan(m), kind);
   }
@@ -8057,14 +8183,66 @@
       a.phase = k;
       m.rear = Math.max(0, m.rear - dt * 3);
       if (!a.sfx && k > 0.3) { a.sfx = 1; playMfSwing(m.tdist, mfPan(m)); if (a.kind === 'throw') mfLaunch(m); }
-      if (a.kind === 'swipe' && !a.hit && k > 0.3 && !dead && m.tdist < MF_SWIPE_R && wState === WS.BACK) {
+      const live = !a.hit && !dead && wState === WS.BACK;
+      //  Knockback is shared: every one of these moves you, they only differ in
+      //  how far and from where. Pushing from the impact point rather than from
+      //  the body is what makes the stomp feel like a shockwave instead of a
+      //  shove — you are thrown off the crater, not away from the animal.
+      const shove = (kb, ox, oz) => {
+        const bx = ox === undefined ? m.x : ox, bz = oz === undefined ? m.z : oz;
+        const dx2 = p.x - bx, dz2 = p.z - bz, dd2 = Math.max(0.6, Math.hypot(dx2, dz2));
+        _mfT.set(p.x + dx2 / dd2 * kb, p.y, p.z + dz2 / dd2 * kb);
+        cityCollide(_mfT, p.y - EYE, p.y, PRAD); wreckCollide(_mfT, PRAD);
+        p.x = _mfT.x; p.z = _mfT.z;
+      };
+      if (a.kind === 'swipe' && live && k > 0.3 && m.tdist < MF_SWIPE_R) {
         a.hit = 1;
         applyDamage(MF_SWIPE_DMG, null);
         camShake = Math.max(camShake, 1.0);                // §18: it knocks you about
-        const kb = 7.5, ux = (p.x - m.x) / Math.max(1, m.tdist), uz = (p.z - m.z) / Math.max(1, m.tdist);
-        _mfT.set(p.x + ux * kb, p.y, p.z + uz * kb);
-        cityCollide(_mfT, p.y - EYE, p.y, PRAD); wreckCollide(_mfT, PRAD);
-        p.x = _mfT.x; p.z = _mfT.z;
+        shove(7.5);
+      }
+      //  A foreleg comes down on a spot in front of it. The damage falls off
+      //  from the crater, so being at the edge is survivable and being under it
+      //  is not — and it is aimed where you were when the wind-up started, so
+      //  moving at all beats moving in any particular direction.
+      if (a.kind === 'stomp' && live && k > 0.45) {
+        a.hit = 1;
+        const cx = a.px, cz = a.pz;
+        const r = Math.hypot(p.x - cx, p.z - cz);
+        if (r < MF_STOMP_R) {
+          applyDamage(Math.round(MF_STOMP_DMG * (1 - 0.55 * (r / MF_STOMP_R))), null);
+          shove(9.5 * (1 - r / MF_STOMP_R) + 2, cx, cz);
+        }
+        camShake = Math.max(camShake, 1.3 * Math.max(0.25, 1 - r / 40));
+        _mfT.set(cx, supportHeight(cx, cz, 2) + 0.5, cz); spawnImpact(_mfT);
+        playMfCrash(r, mfPan(m));
+      }
+      //  A leg goes round it at knee height. The test is angular, not radial:
+      //  it catches you anywhere in a wide arc, so the answer is to be outside
+      //  the reach or behind it, never to sidestep.
+      if (a.kind === 'sweep' && live && k > 0.22 && k < 0.9 && m.tdist < MF_SWEEP_R) {
+        const bear = Math.atan2(p.x - m.x, p.z - m.z);
+        let rel = bear - (m.hd + a.side * (1.5 - 3.0 * k));
+        while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
+        if (Math.abs(rel) < 0.30) {
+          a.hit = 1;
+          applyDamage(MF_SWEEP_DMG, null);
+          camShake = Math.max(camShake, 0.9);
+          shove(11.0);                                     // and it puts you a long way out
+        }
+      }
+      //  The neck throws the head out on the end of it. Fast, cheap, and the
+      //  only thing it has that reaches past a swipe.
+      if (a.kind === 'lash' && live && k > 0.35 && m.tdist < MF_LASH_R) {
+        const bear = Math.atan2(p.x - m.x, p.z - m.z);
+        let rel = bear - m.hd;
+        while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
+        if (Math.abs(rel) < 0.5) {
+          a.hit = 1;
+          applyDamage(MF_LASH_DMG, null);
+          camShake = Math.max(camShake, 0.6);
+          shove(4.0);
+        }
       }
     } else {
       a.phase = 1;
@@ -8113,6 +8291,34 @@
       if (!g.live || g.dead || Math.hypot(g.x - m.x, g.z - m.z) > MF_LINK) continue;
       g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
       if (g.st === 'wander' || g.st === 'search' || g.st === 'escort') { g.st = 'chase'; g.stT = 0; }
+    }
+    //  Shot from outside its own sight. There is no answer to this from where
+    //  it stands — it cannot see the shooter, it cannot reach them, and every
+    //  attack it owns is short of the range the shot came from. So it stops
+    //  being a thing that guards a district and becomes a thing that is coming:
+    //  the whole escort is sent, not just the ones that happened to be looking,
+    //  and it walks in itself rather than waiting to be whittled down. Sniping
+    //  it from a rooftop half a kilometre away should start a fight, not be one.
+    if (Math.hypot(fromX - m.x, fromZ - m.z) > MF_VIS) {
+      m.seeT = cityT;                               // it knows, sight or no sight
+      m.st = 'track'; m.stT = 0;
+      m.panicked = false;
+      for (const d of dogs) {
+        if (!d.live || d.dead || Math.hypot(d.x - m.x, d.z - m.z) > MF_SUMMON) continue;
+        d.hasT = true; d.tx = fromX; d.tz = fromZ; d.seeT = cityT;
+        d.st = 'chase'; d.stT = 0;
+      }
+      for (const g of gorgons) {
+        if (!g.live || g.dead || Math.hypot(g.x - m.x, g.z - m.z) > MF_SUMMON) continue;
+        g.hasT = true; g.tx = fromX; g.tz = fromZ; g.seeT = cityT;
+        g.st = 'chase'; g.stT = 0;
+      }
+      if (!m.farCalled || cityT - m.farCalled > 12) {
+        m.farCalled = cityT;
+        playMfRoar(m.tdist, mfPan(m));
+        if (m.tdist < 400) notify('遠くで何かが吠えた', 2800);
+      }
+      return;
     }
     if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
   }
@@ -8329,7 +8535,7 @@
       m.lod = d2 < 14400 ? 0 : d2 < 62500 ? 1 : 2;        // 120 m / 250 m
       if (!nearest || d2 < nearest.d2) nearest = { m, d2 };
       if (m.pinned) {
-        if (mfHigh < MF_DRAW) { poseFlayer(m, dt, true); writeFlayer(mfHigh++); }
+        if (mfHigh < MF_DRAW) { poseFlayer(m, dt, true); writeFlayer(mfHigh++, m.taint || 0); }
         continue;
       }
       if (mine) {
@@ -8370,15 +8576,22 @@
         if (m.pulse <= 0) { m.pulse = 4.5 + Math.random() * 4; if (m.lod === 0 && m.tdist < 90) playMfRoar(m.tdist + 60, mfPan(m)); }
       }
 
+      //  §21: an officer of his wears his colours. The bond expires the same
+      //  way a minion's does, so a flayer he has walked away from goes back to
+      //  its own hide rather than staying marked for the rest of the fight.
+      const mt2 = lordOf(m, dt) ? 1 : 0;
+      m.taint = (m.taint || 0) + (mt2 - (m.taint || 0)) * Math.min(1, dt * 1.2);
+
       if (m.lod >= 2 && !m.dead) continue;
       if (mfHigh >= MF_DRAW) continue;
       poseFlayer(m, dt, m.lod === 0);
-      writeFlayer(mfHigh++);
+      writeFlayer(mfHigh++, m.taint || 0);
     }
     mfOvoidI.count = mfHigh * M_OVOID; mfBoneI.count = mfHigh * M_BONE;
     mfKnucI.count = mfHigh * M_KNUC; mfSpikeI.count = mfHigh * M_SPIKE;
     mfFangI.count = mfHigh * M_FANG;
-    for (const q of mfParts) q.instanceMatrix.needsUpdate = true;
+    for (const q of mfParts) { q.instanceMatrix.needsUpdate = true;
+      if (q.instanceColor) q.instanceColor.needsUpdate = true; }
     const bolt = boltFlash * boltFlash;
     for (const mt of [mfSkinMat, mfShellMat, mfFangMat]) {
       mt.uniforms.uBolt.value = bolt;
@@ -8870,7 +9083,7 @@
       wx: spot.x, wz: spot.z, wanderT: 0, cmdT: 0, mentalT: 22 + Math.random() * 20,
       orbit: [], stepBeat: -1, voiceT: 6, lod: 0, awake: false,
       netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, rspd: 0, hpHold: 0,
-      dodgeX: 0, dodgeZ: 0, lastPX: p.x, lastPZ: p.z, summonCd: 18,
+      dodgeX: 0, dodgeZ: 0, lastPX: p.x, lastPZ: p.z, summonCd: 18, blinkCd: 6,
     });
     return vec;
   }
@@ -8946,6 +9159,7 @@
       if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
       m.panicked = false;                         // §53: nothing of his runs away
       if (m.st === 'flee') { m.st = 'track'; m.stT = 0; }
+      m.lord = 'vec'; m.lordSlot = -1;            // and it wears his colours from now on
       sent++;
     }
     //  §22/§65: a few, and the nearest — not the whole district. He is not
@@ -9259,6 +9473,7 @@
     vec.mentalT -= dt;
     vec.voiceT -= dt;
     vec.summonCd -= dt;
+    vec.blinkCd -= dt;
     if (vec.dead) { vec.deadT += dt; vec.sp = 0; return; }
 
     vecCommand(dt);
@@ -9607,6 +9822,62 @@
     if (vec.st === 'dormant' || vec.st === 'observe') { vec.st = 'manipulate'; vec.stT = 0; }
     //  §53: hurting him drives everything of his
     vec.cmdT = 0;
+    //  §30 says he never runs. It does not say he walks everywhere. Shot from a
+    //  distance he cannot answer — and every reach he has is short of a rifle —
+    //  he simply stops being over there. Standing off and chipping him down is
+    //  the one tactic that beats a thing that only ever walks, and the answer
+    //  to it is not to make him faster; it is to make the distance not exist.
+    //  The court comes with him: leaving it behind would turn every blink into
+    //  a way of stripping his own escort off himself.
+    if (Math.hypot(fromX - vec.x, fromZ - vec.z) > V_BLINK_MIN && vec.blinkCd <= 0) vecBlinkTo(fromX, fromZ);
+  }
+  //  §7/§45: the arrival is loud on purpose. He opens the ground where he was
+  //  and again where he lands, so it never reads as a teleport in the cheap
+  //  sense — something left, and something arrived.
+  const V_BLINK_MIN = 52, V_BLINK_CD = 13, V_BLINK_STAND = 17;
+  function vecBlinkTo(tx, tz) {
+    let spot = null;
+    for (let i = 0; i < 24 && !spot; i++) {
+      const a2 = Math.random() * 6.2832, r = V_BLINK_STAND + Math.random() * 9;
+      const x = tx + Math.sin(a2) * r, z = tz + Math.cos(a2) * r;
+      if (Math.abs(x) > WORLD * 0.44 || Math.abs(z) > WORLD * 0.44) continue;
+      if (clearAt(x, z, 3.2)) spot = { x, z };
+    }
+    if (!spot) return;
+    vec.blinkCd = V_BLINK_CD;
+    const ox = vec.x, oz = vec.z;
+    summonRift(ox, oz, 7.5, 2.6);
+    //  Everything of his moves by the same offset, so the court arrives in the
+    //  formation it was already standing in rather than stacked on one point.
+    const dx = spot.x - ox, dz = spot.z - oz;
+    const carry = (arr, tag) => {
+      for (const o of arr) {
+        if (!o.live || o.dead || o.lord !== tag) continue;
+        let nx = o.x + dx, nz = o.z + dz;
+        if (!clearAt(nx, nz, 1.2)) {
+          const a3 = Math.random() * 6.2832, rr = V_CLEAR + 4 + Math.random() * 10;
+          nx = spot.x + Math.sin(a3) * rr; nz = spot.z + Math.cos(a3) * rr;
+          if (!clearAt(nx, nz, 1.2)) continue;
+        }
+        summonRift(o.x, o.z, 2.4, 2.0);
+        o.x = o.rx = nx; o.z = o.rz = nz; o.y = supportHeight(nx, nz, 1);
+        o.hasT = true; o.tx = tx; o.tz = tz; o.seeT = cityT;
+        o.st = 'chase'; o.stT = 0; o.stuck = 0;
+        summonRift(nx, nz, 2.4, 2.4);
+      }
+    };
+    carry(dogs, 'vec'); carry(gorgons, 'vec');
+    vec.x = vec.rx = spot.x; vec.z = vec.rz = spot.z;
+    vec.y = supportHeight(spot.x, spot.z, 2);
+    vec.hd = Math.atan2(tx - spot.x, tz - spot.z);
+    vec.tx = tx; vec.tz = tz; vec.hasT = true; vec.seeT = cityT; vec.awake = true;
+    vec.st = 'hunt'; vec.stT = 0; vec.atk = null;
+    vec.atkCd = Math.max(vec.atkCd, 0.9);           // a beat to react before he swings
+    summonRift(spot.x, spot.z, 8.5, 3.2);
+    camShake = Math.max(camShake, 0.8);
+    psyOnset(0.45, 2600);
+    playVecPhase();
+    notify('すぐ後ろに立っている', 2600);
   }
   function killVecna() {
     //  §59: not a body falling over. The network goes first — everything he was
