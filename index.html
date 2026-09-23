@@ -423,7 +423,7 @@
   #dbg {
     position: absolute; left: calc(20px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom));
     display: none; color: #9fe8a0; font-size: 10px; line-height: 1.7; letter-spacing: .06em;
-    text-shadow: 0 1px 2px #000; white-space: pre;
+    text-shadow: 0 1px 2px #000; white-space: pre; pointer-events: none;   /* never in the way of the stick */
   }
   #dbg.on { display: block; }
 
@@ -2962,6 +2962,7 @@
     INTERP_MS: 120,                        // render peers this far in the past
     host: '', mobT: 0, mobPubT: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
+    txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
   gearUp(monkey, MP.id);                 // kit out our own avatar
@@ -3031,7 +3032,6 @@
     if (rift.present && !rift.restored) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10),
       Math.round(rift.ry * 1000), rift.seed, rift.owner, gateAge()];
     const payload = JSON.stringify(msg);
-    MP.txBytes += payload.length;
     try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
   }
   function onMobState(msg) {
@@ -3091,7 +3091,7 @@
     applyBzbSnapshot(msg.b);
   }
   function onMqttMessage(t, buf) {
-    MP.rxBytes += buf.length;
+    MP.rxBytes += buf.length; MP.rxMsgs++;
     let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
     if (!msg) return;
     if (t.slice(-5) === '/ping') {           // our own echo measures the round trip
@@ -3258,6 +3258,9 @@
         will: { topic: mtopic('leave'), payload: JSON.stringify({ id: MP.id }), qos: 0 },
       });
     } catch (err) { setNet('SOLO', true); return; }
+    //  every message out, whoever sends it, counted in one place (F3)
+    const publish = client.publish.bind(client);
+    client.publish = (t, pl, o, cb) => { MP.txMsgs++; MP.txBytes += String(pl).length; return publish(t, pl, o, cb); };
     MP.client = client;
     client.on('connect', () => {
       MP.connected = true;
@@ -3322,7 +3325,6 @@
     if (dead) { msg.d = 1; msg.ds = deathSeq; if (killerId) msg.kb = killerId; }
     if (cloak > 0) msg.iv = 1;                 // invisible to others while cloaked
     const payload = JSON.stringify(msg);
-    MP.txBytes += payload.length;
     MP.client.publish(mtopic('state/' + MP.id), payload);
 
     if (now - MP.lastPing > 3000) {            // round-trip to the broker and back
@@ -3335,8 +3337,8 @@
   // from how fast they are actually moving (no extra network fields needed)
   function updatePeers(dt, now) {
     if (now - MP.rateT > 1000) {             // bandwidth sampling for the overlay
-      MP.txRate = MP.txBytes; MP.rxRate = MP.rxBytes;
-      MP.txBytes = 0; MP.rxBytes = 0; MP.rateT = now;
+      MP.txRate = MP.txBytes; MP.rxRate = MP.rxBytes; MP.txMsgRate = MP.txMsgs; MP.rxMsgRate = MP.rxMsgs;
+      MP.txBytes = 0; MP.rxBytes = 0; MP.txMsgs = 0; MP.rxMsgs = 0; MP.rateT = now;
     }
     const k = 1 - Math.exp(-dt * 13);
     for (const [id, peer] of MP.peers) {
@@ -4265,19 +4267,39 @@
   }
   let dbgOn = false, dbgAcc = 0;
   let stripBrg = NaN;
+  //  The profiler (§31): F3 on a keyboard, or open the game with ?debug on a
+  //  phone, where there is no F3 — that is where the numbers matter. While it
+  //  is off it costs nothing; while it is on, three clock reads a frame.
+  const perf = { t: 0, n: 0, fn: 0, frame: 0, frameMax: 0, logic: 0, logicMax: 0, draw: 0, drawMax: 0, shown: null };
+  function perfSample(now, t0, t1, t2) {
+    const P = perf;
+    if (P.last) { const f = now - P.last; P.frame += f; P.fn++; if (f > P.frameMax) P.frameMax = f; }
+    P.last = now;
+    const lg = t1 - t0, dr = t2 - t1;
+    P.logic += lg; if (lg > P.logicMax) P.logicMax = lg;
+    P.draw += dr; if (dr > P.drawMax) P.drawMax = dr;
+    P.n++;
+    if (now - P.t >= 1000) {                         // one-second windows: mean and worst
+      P.shown = { frame: P.frame / Math.max(1, P.fn), frameMax: P.frameMax, logic: P.logic / P.n, logicMax: P.logicMax, draw: P.draw / P.n, drawMax: P.drawMax };
+      P.t = now; P.n = P.fn = 0; P.frame = P.frameMax = P.logic = P.logicMax = P.draw = P.drawMax = 0;
+    }
+  }
+  if (/[?&]debug\b/.test(location.search)) { dbgOn = true; ui.dbg.classList.add('on'); }
   function updateHud(dt) {
     if (reloading > 0) { reloading -= dt; if (reloading <= 0) { reloading = 0; finishReload(); } }
     let brg = (-yaw * 180 / Math.PI) % 360; if (brg < 0) brg += 360;
     if (brg !== stripBrg) { stripBrg = brg; ui.strip.style.transform = 'translateX(' + (-brg * (40 / 15) - 20) + 'px)'; }
     if (!dbgOn) return;
     dbgAcc += dt; if (dbgAcc < 0.25) return; dbgAcc = 0;
-    const r = renderer.info.render;
+    const r = renderer.info.render, S = perf.shown, ms = (x) => x.toFixed(1);
+    let objs = 0; scene.traverse(() => { objs++; });
+    const heap = performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + 'MB' : 'n/a';
     ui.dbg.textContent =
-      'FPS   ' + $('v-fps').textContent + '\n' +
-      'DRAW  ' + r.calls + '\n' +
-      'TRIS  ' + (r.triangles / 1000).toFixed(0) + 'k\n' +
-      'GEO   ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '\n' +
-      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s\n' +
+      'FPS   ' + $('v-fps').textContent + (S ? '  frame ' + ms(S.frame) + 'ms (worst ' + ms(S.frameMax) + ')' : '') + '\n' +
+      (S ? 'JS    logic ' + ms(S.logic) + 'ms (worst ' + ms(S.logicMax) + ')  draw ' + ms(S.draw) + 'ms (worst ' + ms(S.drawMax) + ')\n' : '') +
+      'DRAW  ' + r.calls + '  TRIS ' + (r.triangles / 1000).toFixed(0) + 'k  OBJ ' + objs + '\n' +
+      'MEM   heap ' + heap + '  GEO ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '  PROG ' + (renderer.info.programs || []).length + '\n' +
+      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  tick ' + (MP.tickRate ? MP.tickRate + 'Hz' : '—') + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
       '  TROOP ' + (mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '\n' +
@@ -14834,6 +14856,7 @@
 
   function frame(now) {
     requestAnimationFrame(frame);
+    const tFrame = dbgOn ? performance.now() : 0;
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
     if (stormStart && inGame && gateSettle === 0) doStormStart();
@@ -14975,7 +14998,9 @@
     publishState(false);
     publishMobs();
 
+    const tDraw = dbgOn ? performance.now() : 0;
     renderer.render(scene, camera);
+    if (dbgOn) perfSample(now, tFrame, tDraw, performance.now());
 
     // --- FPS readout ---
     fpsN++; fpsT += dt;
