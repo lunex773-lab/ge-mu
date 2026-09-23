@@ -564,7 +564,7 @@
   <div id="crosshair"></div>
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
-  <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">120</span></div>
+  <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">60</span></div>
   <div id="boss"><b id="boss-name">MIND FLAYER</b><i><u id="boss-hp"></u></i></div>
   <div id="psy"></div>
   <div id="reveal"><b>🧭 敵の位置</b><span id="reveal-t">30</span></div>
@@ -2233,9 +2233,9 @@
   // player run-over: if a fast car's box overlaps the player, hurt + knock back
   let carHitCd = 0, monkeyHitCd = 0, cityFrame = 0;
   // ── monkey rage ────────────────────────────────────────────────────
-  //  Hit one monkey and the whole troop turns on you for two minutes, with
+  //  Hit one monkey and the whole troop turns on you for a minute, with
   //  fresh ones popping in around you the entire time.
-  const RAGE_TIME = 120, RAGE_SPAWN = 2.5, RAGE_RESPAWN = 3.0;
+  const RAGE_TIME = 60, RAGE_SPAWN = 2.5, RAGE_RESPAWN = 3.0;
   const MONKEY_CORPSE = 10;                  // how long a body lies there
   const _mkHit = new THREE.Vector3();
   let rageT = 0, rageSpawnCd = 0;
@@ -2869,7 +2869,8 @@
     if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
     if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
-    if (rift.present) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10), Math.round(rift.ry * 1000), rift.seed];
+    if (rift.present && !rift.restored) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10),
+      Math.round(rift.ry * 1000), rift.seed, rift.owner, gateAge()];
     const payload = JSON.stringify(msg);
     MP.txBytes += payload.length;
     try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
@@ -2920,9 +2921,9 @@
     for (const c of corpses) {                             // eaten over there — clear it here too
       if (c.active && !live.has(c.cid) && c.age > 2) freeCorpse(c);
     }
-    if (msg.g && !rift.present) {                          // the tear is already open in this room
-      gateUnlocked = true;
-      placeGate(msg.g[0] / 10, msg.g[1] / 10, msg.g[2] / 10, msg.g[3] / 1000, msg.g[4]);
+    if (msg.g) {                                           // the tear this room is standing around
+      const g = msg.g;
+      hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
     }
     applyDogSnapshot(msg.k);
     applyGorSnapshot(msg.q);
@@ -2947,6 +2948,7 @@
     if (t.slice(-5) === '/gate') { onGateMsg(msg); return; }
     if (t.slice(-5) === '/bolt') { onBolt(msg); return; }
     if (t.slice(-8) === '/gatereq') { onGateReq(); return; }
+    if (t.slice(-8) === '/gateask') { onGateAsk(msg); return; }
     if (t.slice(-4) === '/mob') { onMobState(msg); return; }
     if (t.slice(-4) === '/hit') { onHitMessage(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
@@ -3117,6 +3119,8 @@
       client.subscribe(mtopic('gate'));
       client.subscribe(mtopic('bolt'));
       client.subscribe(mtopic('gatereq'));
+      client.subscribe(mtopic('gateask'));
+      askGate();                                 // is a tear already open in here?
       publishState(true); renderRoster();
     });
     client.on('reconnect', () => setNet('RECONNECTING…', true));
@@ -4253,6 +4257,7 @@
     //  to the other side for anyone who has seen the daylight city enough times.
     stormStart = MP.room === 'ストシン';
     try { localStorage.setItem('contour.nick', MP.name); localStorage.setItem('contour.room', MP.room); } catch (e) {}
+    restoreGate();                       // only now is it known which world the saved tear was in
     gate.classList.add('gone');
     hud.classList.add('live');
     document.body.classList.add('playing');
@@ -10286,8 +10291,15 @@
   const GATE_NEED = 10;
   const deathSeen = new Set();
   let myKills = 0, gateUnlocked = false, riftRetry = 0;
+  //  Everybody in a room has to be looking at the same tear — the way back is
+  //  through it, and what guards it will stand in front of it. So a tear is
+  //  never opened on the strength of this client alone: on entering a room it
+  //  first listens (GATE_LISTEN once connected, GATE_LISTEN_MAX at the outside)
+  //  for one the room already has. -1 not in a room yet, >0 listening, 0 settled.
+  const GATE_LISTEN = 2.5, GATE_LISTEN_MAX = 10, GATE_ELDER = 20000;
+  let gateSettle = -1, gateListenT = 0, gateGossip = 0, gateTxT = 0, gateClock = 0;
   const rift = {
-    state: 'LOCKED', present: false, owner: '', x: 0, y: 0, z: 0, ry: 0, seed: 0,
+    state: 'LOCKED', present: false, owner: '', born: 0, restored: false, x: 0, y: 0, z: 0, ry: 0, seed: 0,
     group: null, tear: null, fibreI: null, moteI: null, near: 0, dist: 999,
   };
 
@@ -10445,25 +10457,91 @@
     shapeGate(seed);
     saveGate();
   }
+  const gateAge = () => Math.max(0, Math.round((Date.now() - rift.born) / 1000));
+  //  `id` is the tear's owner, not the sender: anyone holding it passes it on,
+  //  and a client that predates the relaying still reads it as the owner's word.
+  //  `a` is its age rather than a timestamp, so two phones whose clocks disagree
+  //  still agree on which of two tears is the older.
   function publishGate() {
-    if (!MP.connected || !MP.client) return;
+    if (!MP.connected || !MP.client || !rift.present || rift.restored) return;
+    gateTxT = performance.now();
     try {
       MP.client.publish(mtopic('gate'), JSON.stringify({
-        id: MP.id, x: Math.round(rift.x * 10), y: Math.round(rift.y * 10),
-        z: Math.round(rift.z * 10), r: Math.round(rift.ry * 1000), s: rift.seed,
+        id: rift.owner || MP.id, x: Math.round(rift.x * 10), y: Math.round(rift.y * 10),
+        z: Math.round(rift.z * 10), r: Math.round(rift.ry * 1000), s: rift.seed, a: gateAge(),
       }));
     } catch (e) {}
   }
+  //  Two tears in one room is a disagreement to be settled the same way on
+  //  every screen. The one that has stood a good while longer keeps its place —
+  //  a newcomer who missed the room's tear must not drag it across the city —
+  //  and two opened at about the same moment go to the lower owner id.
+  function gateOutranks(owner, born) {
+    const d = born - rift.born;
+    if (d < -GATE_ELDER) return true;
+    if (d > GATE_ELDER) return false;
+    return owner < rift.owner;
+  }
+  function hearGate(owner, age, x, y, z, ry, seed) {
+    if (rift.present && rift.owner === owner && rift.seed === seed) {
+      rift.restored = false;                               // the room remembers it too
+      return;
+    }
+    const born = Date.now() - age * 1000;
+    // A tear brought back from the last visit is only a guess until the room
+    // confirms it; whatever the room actually has replaces it outright.
+    if (rift.present && !rift.restored && !gateOutranks(owner, born)) {
+      if (performance.now() - gateTxT > 1000) publishGate();   // tell them which one stands
+      return;
+    }
+    gateUnlocked = true;
+    rift.owner = owner; rift.born = born; rift.restored = false;
+    placeGate(x, y, z, ry, seed);
+  }
   function onGateMsg(msg) {
-    if (msg.id === MP.id) return;
-    // two people can cross ten at the same moment; the lower id's tear is the one
-    if (rift.present && !(msg.id < rift.owner)) return;
-    gateUnlocked = true; rift.owner = msg.id;
-    placeGate(msg.x / 10, msg.y / 10, msg.z / 10, msg.r / 1000, msg.s);
+    if (msg.id === MP.id) return;                          // my own tear, echoed back
+    hearGate(msg.id, msg.a || 0, msg.x / 10, msg.y / 10, msg.z / 10, msg.r / 1000, msg.s);
+  }
+  function askGate() {
+    if (!MP.connected || !MP.client) return;
+    try { MP.client.publish(mtopic('gateask'), JSON.stringify({ id: MP.id })); } catch (e) {}
+  }
+  function onGateAsk(msg) {
+    if (msg.id === MP.id || !rift.present || rift.restored) return;
+    // everyone holding it answers, so spread the answers out a little
+    setTimeout(() => { if (performance.now() - gateTxT > 400) publishGate(); }, Math.random() * 350);
+  }
+  function settleGate() {
+    gateSettle = 0;
+    if (rift.present && rift.restored) {                   // nobody here had one; ours stands
+      rift.restored = false;
+      if (!rift.owner) rift.owner = MP.id;
+      publishGate();
+    }
+  }
+  function updateGateSync() {
+    // Wall-clock, not frame time: this waits on the network, and frame time is
+    // clamped — on a phone crawling at 10 FPS it would stretch the wait fivefold.
+    const now = performance.now();
+    const dt = Math.min(1, (now - (gateClock || now)) / 1000);
+    gateClock = now;
+    if (gateSettle > 0) {
+      gateListenT += dt;
+      if (MP.connected || !MP.client) gateSettle -= dt;   // no client at all: solo, nobody to hear
+      if (gateSettle <= 0 || gateListenT > GATE_LISTEN_MAX) settleGate();
+      return;
+    }
+    if (gateSettle < 0) return;
+    // A single broadcast can be dropped by the broker, and the room's owner
+    // only reads the tear off other people's snapshots. Everyone holding it
+    // repeats it now and then, which is a few dozen bytes every ten seconds.
+    gateGossip -= dt;
+    if (gateGossip <= 0) { gateGossip = 10 + Math.random() * 4; publishGate(); }
   }
   function openGate() {
-    if (rift.present) return;                              // one tear per world, ever
-    rift.owner = MP.id;
+    // one tear per world, ever — and not before hearing whether the room has one
+    if (rift.present || gateSettle !== 0) return;
+    rift.owner = MP.id; rift.born = Date.now(); rift.restored = false;
     rift.state = 'SPAWNING';
     const site = findGateSite();
     if (!site) { rift.state = 'LOCKED'; return; }
@@ -10723,7 +10801,8 @@
     if (gateCool > 0) gateCool -= dt;
     saveAcc += dt;
     if (saveAcc > 20) { saveAcc = 0; saveGate(); }      // "somebody is in the world" heartbeat
-    if (gateUnlocked && !rift.present && wState === WS.NORMAL) {
+    updateGateSync();
+    if (gateUnlocked && !rift.present && wState === WS.NORMAL && gateSettle === 0) {
       riftRetry -= dt;
       if (riftRetry <= 0) { riftRetry = 4; openGate(); }   // keep trying until one stands
     }
@@ -10790,12 +10869,17 @@
   //  zero and any tear closes with it. `t` is stamped while you are actually in
   //  there, so the gap between one visit and the next is what is measured.
   const WORLD_IDLE_MS = 5 * 60 * 1000;
-  let saveAcc = 0;
+  //  The tear is saved with the room it was in. On the title screen the room
+  //  is not known yet, so a saved tear waits in `gateStash` — and the heartbeat
+  //  below writes it back untouched rather than overwriting it with nothing.
+  let saveAcc = 0, gateStash = null;
   function saveGate() {
     try {
+      const g = rift.present ? [rift.x, rift.y, rift.z, rift.ry, rift.seed, rift.owner, rift.born]
+              : gateStash ? gateStash.g : null;
       localStorage.setItem('contour.rift', JSON.stringify({
         k: myKills, u: gateUnlocked, w: wState, t: Date.now(),
-        g: rift.present ? [rift.x, rift.y, rift.z, rift.ry, rift.seed] : null,
+        r: gateStash ? gateStash.r : MP.room, g,
       }));
     } catch (e) {}
   }
@@ -10808,13 +10892,23 @@
       return;
     }
     myKills = s.k || 0; gateUnlocked = !!s.u;
-    // the same tear, in the same place — never a fresh one somewhere else
-    if (s.g) placeGate(s.g[0], s.g[1], s.g[2], s.g[3], s.g[4]);
+    // the same tear, in the same place — but only once it is known to be the
+    // same room; it used to go up here, before anyone had picked one
+    if (s.g) gateStash = { r: s.r, g: s.g };
     // the world you were standing in is recorded, but a new session always starts
     // on the normal side: waking up stranded in the backside with the tear a
     // quarter of a map away is not a good way to be handed the game back
   }
   loadGate();
+  function restoreGate() {
+    const st = gateStash; gateStash = null;
+    gateSettle = GATE_LISTEN; gateListenT = 0;
+    if (!st || !st.g || st.r !== MP.room || rift.present) return;
+    const g = st.g;
+    rift.owner = g[5] || ''; rift.born = g[6] || Date.now();
+    placeGate(g[0], g[1], g[2], g[3], g[4]);
+    rift.restored = true;                        // until the room says otherwise
+  }
 
   // ── minimap (top-left) + full-screen map ───────────────────────────
   const miniCv = $('minimap'), miniCtx = miniCv.getContext('2d');
@@ -10957,7 +11051,7 @@
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
-    if (stormStart && inGame) doStormStart();
+    if (stormStart && inGame && gateSettle === 0) doStormStart();
 
     // --- assemble move vector from keys + joystick ---
     // move relative to aim: player yaw (1st) or camera orbit (3rd)
