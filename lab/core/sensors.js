@@ -61,10 +61,11 @@ const SENSE = {
   selfCoverR: 5,       // m
   //  Rays are the whole cost of this layer, so they are budgeted per tick
   //  rather than cast whenever a question comes up — D8 cares about the
-  //  worst frame, not the average one. The game's rayCity walks every
-  //  building in the city whatever the ray's length, so "is there a wall
-  //  within 3 m" is never asked with a ray when the host can answer solid():
-  //  two footprint lookups per direction instead.
+  //  worst frame, not the average one. The game's rayCity has to at least
+  //  look at every building in the city (with max, only a bounds check for
+  //  the ones the segment misses), so "is there a wall within 3 m" is never
+  //  asked with a ray when the host can answer solid(): two footprint
+  //  lookups per direction instead.
   coverRays: 4,        // of the 16 cover directions (8 around it, 8 around the player), checked per tick
   losQuota: 2,         // sight rays per tick for players other than the one it is attending to
   losEvery: 0.3,       // s — how stale another player's sighting may get

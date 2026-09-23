@@ -34,7 +34,8 @@
 //    G.hp(), G.HP_MAX   the local player's health, as their HP bar shows it
 //    G.dead(), G.cloak(), G.world()
 //    G.MP               .id and .peers (cur, yaw, hp, dead, inv, w)
-//    G.rayCity(ro, rd)  and optionally G.rayWrecks, G.WS_BACK
+//    G.rayCity(ro, rd, max)  (max: nothing past it matters), and optionally
+//                       G.rayWrecks, G.WS_BACK
 //    G.clearAt(x, z, m) the game's footprint lookup, for "a wall close by"
 //    G.Vec3             a constructor for the ray origin/direction (THREE.Vector3)
 
@@ -61,7 +62,7 @@ function makeGameAdapter(G) {
   //  asking, so the answer is capped rather than computed further.
   function probe(ox, oy, oz, dx, dy, dz, max) {
     ro.x = ox; ro.y = oy; ro.z = oz; rd.x = dx; rd.y = dy; rd.z = dz;
-    let d = G.rayCity(ro, rd);
+    let d = G.rayCity(ro, rd, max);
     if (G.rayWrecks && selfWorld === G.WS_BACK) d = Math.min(d, G.rayWrecks(ro, rd));
     return d < max ? d : Infinity;
   }

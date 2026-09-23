@@ -84,7 +84,7 @@ const HOOK = `
     get rageT() { return rageT; }, RAGE_TIME,
     monkeyPeds, dogs,
     creditMyKill, openGate, saveGate, publishGate, start,
-    noRender() { renderer.render = () => {}; },
+    noRender() { renderer.realRender = renderer.render; renderer.render = () => {}; },
     //  a direct eval inside the game's closure: tests can read and set any of
     //  its variables without the game shipping a single debug hook
     ev(src) { return eval(src); },

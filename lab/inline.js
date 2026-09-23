@@ -88,8 +88,18 @@ function block() {
     '    return req;',
     '  })();',
     '  const NC_GRAPH = ' + JSON.stringify(packed) + ';',
+    //  the readout trained in the lab (Phase 10), if there is one — the core
+    //  refuses it unless it was trained on exactly this graph and seed
+    '  const NC_READOUT = ' + readout() + ';',
     END);
   return parts.join('\n');
+}
+
+function readout() {
+  const f = path.join(__dirname, 'learn', 'readout.json');
+  if (!fs.existsSync(f)) return 'null';
+  const r = JSON.parse(fs.readFileSync(f, 'utf8'));
+  return JSON.stringify({ v: r.v, graph: r.graph, seed: r.seed, w: r.w, b: r.b });
 }
 
 function current(html) {

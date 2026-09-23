@@ -151,6 +151,7 @@ class NeuralCore {
       }
     }
     this.mStart[ACTIONS.length] = k;
+    this.mBias = new Float32Array(ACTIONS.length);    // zero until a readout is trained (Phase 10)
 
     //  ---- modulatory pathway -----------------------------------------
     //  A separate CSR over edges whose source is a sign-0 neuron. Those edges
@@ -320,7 +321,7 @@ class NeuralCore {
       let acc = 0;
       for (let i = s; i < e; i++) acc += this.act[this.mFlat[i]] * this.mSign[i];
       //  scaled by sqrt(n), which is what keeps the variance size-independent
-      const mean = e > s ? acc / Math.sqrt(e - s) : 0;
+      const mean = (e > s ? acc / Math.sqrt(e - s) : 0) + this.mBias[a];
       raw[ACTIONS[a]] = mean;
       //  tanh already bounds activation to (-1, 1); shifting to 0..1 keeps the
       //  scores comparable with the utility terms the Tactical Brain adds in
@@ -358,6 +359,28 @@ class NeuralCore {
     const out = {};
     for (const c of Object.keys(CLASS)) out[c] = cnt[c] ? +(acc[c] / cnt[c]).toFixed(4) : 0;
     return out;
+  }
+
+  //  ---- Phase 10: a trained readout ----------------------------------
+  //  The connectome itself is never trained — it stays the fixed, recurrent
+  //  "reservoir" the mock was built to be. What is learned, offline in the
+  //  lab (§20), is how the motor neurons are read: one weight per motor
+  //  neuron in place of its random sign, and a bias per action. Same shape,
+  //  same cost per tick. It is only valid for the graph and seed it was
+  //  trained on, so it carries both and is refused on anything else.
+  getReadout() {
+    return { v: 1, graph: this.g.fingerprint ? this.g.fingerprint() : null, seed: this.o.seed,
+             w: Array.from(this.mSign, (x) => +x.toFixed(5)), b: Array.from(this.mBias, (x) => +x.toFixed(5)) };
+  }
+  setReadout(p) {
+    if (!p || p.v !== 1 || !Array.isArray(p.w) || !Array.isArray(p.b)) return false;
+    if (p.w.length !== this.mSign.length || p.b.length !== ACTIONS.length) return false;
+    if (!p.w.every(Number.isFinite) || !p.b.every(Number.isFinite)) return false;
+    if (p.seed !== undefined && p.seed !== this.o.seed) return false;
+    if (p.graph && this.g.fingerprint && p.graph !== this.g.fingerprint()) return false;
+    this.mSign = Float32Array.from(p.w);
+    this.mBias = Float32Array.from(p.b);
+    return true;
   }
 
   //  A compact snapshot for the replay system (§31). Rounded hard on purpose:
