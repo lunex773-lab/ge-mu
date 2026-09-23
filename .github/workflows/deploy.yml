@@ -1,0 +1,33 @@
+# Deploys CONTOUR (the game and its room server) to Cloudflare.
+#
+# Runs on every push to the working branch, and by hand from the Actions
+# tab ("Run workflow"). It needs two repository secrets — see SETUP.md:
+#   CLOUDFLARE_API_TOKEN   an API token made from the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account to deploy to
+# Until they are set it does nothing (and does not fail).
+name: Deploy to Cloudflare
+on:
+  push:
+    branches: [claude/multiplayer-login-c9n7dk]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      READY: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - name: Not set up yet
+        if: env.READY != 'true'
+        run: echo "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set; nothing to deploy (see SETUP.md)."
+      - uses: actions/checkout@v6
+        if: env.READY == 'true'
+      - name: Test the room server
+        if: env.READY == 'true'
+        run: npm ci && npm run test:server
+      - name: Deploy
+        if: env.READY == 'true'
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
