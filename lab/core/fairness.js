@@ -161,7 +161,10 @@ class FairnessController {
       this.stats.corrupted++;
     }
     this.stats.passed++;
-    return { action: best, weight: this.mind.prediction_strength * pred.confidence };
+    //  a wrong read keeps the displacement of what it wrongly believes, or
+    //  none at all — never the right answer smuggled through
+    const move = pred.move && best === pred.best ? pred.move : null;
+    return { action: best, weight: this.mind.prediction_strength * pred.confidence, move };
   }
 
   //  Where to swing at: from where the target is toward where it is expected

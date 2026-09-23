@@ -308,6 +308,7 @@ class SensorLayer {
       const lateral = vz * nx - vx * nz;
       v[F.has_target] = 1;
       v[F.player_distance] = dist;
+      v[F.target_x] = tr.bx; v[F.target_z] = tr.bz;
       v[F.player_bearing] = -a;              // atan2(dx,dz) grows to the left; + is to its right
       v[F.player_height_diff] = tr.by - sy;
       v[F.player_speed] = Math.hypot(vx, vz);
@@ -339,6 +340,8 @@ class SensorLayer {
     v[F.self_state] = self.state | 0;
     v[F.time_since_self_attack] = this.lastSwingT > -Infinity ? t - this.lastSwingT : NEVER;
     v[F.self_cover] = this.selfCover;
+    v[F.self_x] = sx; v[F.self_z] = sz;
+    { let h = shd; while (h > Math.PI) h -= 2 * Math.PI; while (h < -Math.PI) h += 2 * Math.PI; v[F.self_heading] = h; }
     let near = 0, known = 0;
     for (const k of this.tracks.values()) {
       if (!k.alive || !k.have) continue;

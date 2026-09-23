@@ -230,6 +230,43 @@ test('D7: one model per player name, the least recently seen forgotten first', (
   assert.strictEqual(back.models.size, 3);
 });
 
+// ================================================================ the response model
+//  The boss winds up; the player (believed at target_x/z) answers. `move`
+//  is how the player moves once they have seen it: (radial, lateral) m/s.
+function answer(m, t0, kind, move, strafe) {
+  // the boss at the origin, the player 15 m out along +z
+  let x = 0, z = 15;
+  const view = (t) => { const w = wsFor(t, 'wait'); w.v[F.target_x] = x; w.v[F.target_z] = z; w.v[F.self_x] = 0; w.v[F.self_z] = 0; return w; };
+  m.noteBossWindup(kind, view(t0));
+  for (let t = t0 + 0.05; t <= t0 + 1.25; t += 0.05) {
+    const after = t - t0 > 0.3;
+    // lateral + is the boss's right: it faces +z, so its right is -x
+    const vr = after ? move[0] : 0, vl = after ? move[1] : strafe;
+    z += vr * 0.05; x -= vl * 0.05;
+    m.observe(view(t));
+  }
+  return t0 + 1.3;
+}
+test('response model: "when I lunge, you go right" is learned — despite strafing either way before', () => {
+  const m = new PlayerModel(MIND.NORMAL);
+  let t = 1;
+  for (let k = 0; k < 20; k++) t = answer(m, t, 'dash', [1, 9], k % 2 ? 7 : -7);   // strafing both ways, always breaks right
+  const p = m.predictResponse('dash');
+  assert.strictEqual(p.best, 'right');
+  assert.ok(p.confidence > MIND.NORMAL.prediction_threshold, 'confidence ' + p.confidence.toFixed(3));
+  near(p.move[1], 9, 0.8, 'lateral speed'); near(p.move[0], 1, 0.8, 'radial speed');
+  assert.strictEqual(m.predictResponse('reap').confidence, 0, 'and it knows nothing about the reap yet');
+});
+test('response model: survives a reload', () => {
+  const m = new PlayerModel(MIND.NORMAL);
+  let t = 1;
+  for (let k = 0; k < 12; k++) t = answer(m, t, 'reap', [8, 0], 0);
+  const r = new PlayerModel(MIND.NORMAL);
+  assert.ok(r.restore(JSON.parse(JSON.stringify(m.serialize()))));
+  const a = m.predictResponse('reap'), b = r.predictResponse('reap');
+  assert.strictEqual(b.best, 'away'); near(b.confidence, a.confidence, 0.01); near(b.move[0], a.move[0], 0.05);
+});
+
 // ================================================================ memory (§19)
 test('§19 working memory: means and trends over the last seconds', () => {
   const wm = new WorkingMemory({ seconds: 30, hz: 2 });

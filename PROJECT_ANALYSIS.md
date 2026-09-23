@@ -275,7 +275,7 @@ index.html の区画       ← 生成されたコピー（マーカーで囲っ�
 | 3 | WorldState 境界 / Sensor 詰め替え | なし（読むだけ） | 既存AIが変わらないこと | 完了（下記） |
 | 4 | **FairnessController（前倒し）** | なし | 難易度別の挙動 | 完了 |
 | 5 | Player Model（行動分類・n-gram・予測） | なし | 予測精度 | 完了 |
-| 6 | Tactical Brain / Action Selector | なし | Ablation A/B/C/D |
+| 6 | Tactical Brain / Action Selector | なし | Ablation A/B/C/D | 完了（戦闘シムを前倒しで作成） |
 | 7 | 新規モブの身体・アニメ・音 | **ここから追加のみ** | スクリーンショット |
 | 8 | Debug UI / Replay | 追加のみ | §30 の可視化 |
 | 9 | Boss AI Lab（ヘッドレス戦闘シム） | なし | 勝率・生存時間 |

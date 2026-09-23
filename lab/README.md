@@ -14,6 +14,9 @@ node lab/test/phase2.test.js          # Phase 2: Neural Core
 node lab/test/phase3.test.js          # Phase 3: WorldState / Sensor Layer / Game Adapter
 node lab/test/phase4.test.js          # Phase 4: FairnessController
 node lab/test/phase5.test.js          # Phase 5: Player Model / Memory
+node lab/test/phase6.test.js          # Phase 6: Tactical Brain / 本体 / 戦闘シム（約1分）
+node lab/bench/ablation.js 20         # §25 アブレーション（A/B/C/D + 対照 C0/D0、約2分）
+node lab/bench/memory_effect.js 100 D0 HARD DODGER,RANDOM   # 「覚えている」効果の対照実験
 node lab/bench/phase1.bench.js        # ノード数別の実測と戦略比較
 node lab/bench/phase2.bench.js        # Neural Core のノード数別コスト
 node --expose-gc lab/bench/phase3.bench.js   # センサーのコスト（プレイヤー数別）
@@ -44,7 +47,13 @@ lab/core/worldstate.js     WorldState — ゲームとAIの境界。スキーマ
 lab/core/sensors.js        Sensor Layer — 観測 → WorldState。信念を持つ     (§11, §17)
 lab/core/fairness.js       反応遅延・先読みの閾値・連撃防止・難易度        (§17, §18)
 lab/core/memory.js         作業記憶（直近30秒）とエピソード記憶              (§19)
-lab/core/player_model.js   行動の分類・n-gram・予測・パターン・プロファイル  (§13–§15)
+lab/core/player_model.js   行動の分類・n-gram・予測・パターン・攻撃への応じ方・プロファイル  (§13–§15)
+lab/core/tactics.js        Tactical Brain（効用の合成）・Action Selector・SafeBrain（§32）  (§16, §30, §32)
+lab/core/fsm_brain.js      素朴なFSM — アブレーションの基準（A/B）で、AI停止時の代役（§32）
+lab/core/boss_body.js      ヴェルゼブブの体: 歩行・飛行・4種の攻撃・当たり判定（ゲームと共用）
+lab/sim/arena.js           Boss AI Lab の街区（箱の建物と実3D視線）                        (§22)
+lab/sim/player_bot.js      6種のプレイヤーボット                                          (§23)
+lab/sim/fight.js           1戦ぶん: 全スタックを本番と同じ周期で回し、§24 の指標と §21 の報酬、§31 のリプレイ
 lab/adapter/game_adapter.js  ゲーム本体を「読むだけ」の唯一の窓口          (§4 game_adapter)
 lab/test/                  テスト                                          (§33)
 lab/test/harness/          本物のゲームを動かすテスト基盤
@@ -112,3 +121,36 @@ index.html の変数 ──▶ game_adapter ──▶ 観測(obs) ──▶ Sens
 - **忘れ方は難易度の記憶長で決まります。** 癖を変えたプレイヤーに追いつくまで: EASY 20周 / NORMAL 48周 / HARD 96周 / NIGHTMARE 141周。
   高難易度ほど安定した癖をよく読みますが、癖を切り替えられると追いつくのが遅い — これが「学習すれば攻略できる」の一つの形です。
 - プロファイルはプレイヤー名ごとに端末内へ保存（最大8人、D4・D7）。5000行動分でも 16KB 未満です。
+
+### Phase 6 の戦術と、アブレーションの結果（§16, §25）
+
+戦術は §16 の式そのものです:
+`効用 = ルール + w·Neural Core + 予測 + 位置 + 脅威 − 危険 − クールダウン`。
+ルールは行動ごとに1本の式（if の山ではない）、Neural Core は「傾ける」だけで不可能な行動を可能にはできません。
+選択は softmax（温度は難易度）＋ 継続ボーナス ＋ 最低保持時間で、迷い続けません。探索（§17 の戦術的ランダム性）は1.2秒に1回まで。
+判断ごとに候補3つと内訳が残ります（§30）。脳が例外・NaN・時間超過を起こすと FSM に10秒切り替わります（§32）。
+
+**アブレーション（20キャンペーン×5戦、NORMAL）** — 全体の勝率はどの構成も 60% 前後で、**差はこの標本数では見えません**。
+- **Neural Core は今のところ何も足していません**（C≒C0、D≒D0）。読み出しが未学習なので予想どおりです。Phase 10 で読み出しを学習させて、ここを測り直します。
+- 「最初の対戦」と「後の対戦」の比較は、**記憶を持たない C0 ですら 22 ポイント“向上”する**ほど戦闘ごとのばらつきが大きく、記憶の効果の証拠にはなりません。
+
+**記憶の効果（対照実験：同じ戦闘を、覚えている場合と白紙の場合で2回）** — `lab/bench/memory_effect.js`、各100キャンペーン:
+
+| 難易度 | 相手 | 命中率 白紙→記憶 | 差 [95%区間] | ボスの勝率 白紙→記憶 | 差 [95%区間] |
+|---|---|---|---|---|---|
+| NORMAL | DODGER（右へ避ける癖） | 17.1% → 17.5% | +0.4 [−2.3, +2.8] | 43% → 52% | +9 [−3, +22] |
+| NORMAL | RANDOM（対照） | 54.4% → 53.1% | −1.3 [−3.9, +1.2] | 93% → 93% | 0 [−4, +4] |
+| **HARD** | **DODGER** | **14.3% → 22.9%** | **+8.7 [+5.8, +11.6]** | **63% → 91%** | **+28 [+17, +38]** |
+| HARD | RANDOM（対照） | 56.1% → 56.6% | +0.5 [−2.8, +3.9] | 95% → 95% | 0 [−4, +4] |
+
+- **HARD では「覚えている」がはっきり効きます。** NORMAL では公平性の制約（予測を信じる強さ 0.6・確信度の下限 0.62）が効果を統計的に見えないところまで抑えています。
+  既定の ADAPTIVE は、プレイヤーが楽に勝っているときだけ HARD 側へ上がるので、**上手い人ほど読まれる**という設計どおりの振る舞いです。
+- 癖の無い相手（RANDOM）では差はゼロ — 覚えることが無いものを覚えたふりはしません。
+
+途中で見つかった設計上の問題と修正:
+- 行動の n-gram だけでは、ダッジャーの次の一手を 60% 当てても命中は1発も増えませんでした。
+  **ダッジはボスの予備動作への「応じ方」**で、プレイヤー自身の行動の流れからは予測できないためです。→ 攻撃ごとの応じ方モデルを追加。
+- 応じ方を「予備動作後の最初の行動」や「ウィンドウ内の総移動量」で測ると、もともとの横移動（7 m/s）に3 mのダッジが埋もれて雑音を学習しました。
+  → **反応が済んだ後の速度**（予備動作から 0.55〜1.1 秒）で測るように変更。
+- 飛翔斬の最後の一撃を160°の扇のままにすると、30 m 踏み込んだ先では横に避けても逃げられないことが計算で分かったので、±46°に絞りました。
+- 飛行は 13 m/s・6秒では距離を取る相手に追いつけなかった（RANGED に永遠に引き撃ちされた）ので、16 m/s・8秒に。

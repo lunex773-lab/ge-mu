@@ -42,6 +42,28 @@
 //     threshold and is simply never anticipated — the FairnessController
 //     gate does the rest.
 //
+//  4. A response model — added after the Phase 6 ablation showed the n-gram
+//     alone could predict a dodger's next move ~60% of the time and still
+//     not help the boss land a single extra blow. A dodge is not the next
+//     step of the player's own routine; it is an answer to the boss's
+//     wind-up, and the n-gram never saw the question. So: for each of the
+//     boss's attacks, what does this player do in the second after it starts
+//     winding up? That is "you always go right when I lunge", which is the
+//     sentence §40 is really about.
+//
+//     It is measured, not named: the player's velocity in the boss's frame
+//     once a person would have reacted — over 0.55-1.1 s of the (delayed)
+//     view after the wind-up started — classed as left, right, away, toward
+//     or stayed, with the mean velocity of each class kept for aiming.
+//     Two earlier versions learned noise, and why is worth keeping:
+//       - the first behaviour *token* after the wind-up: a player already
+//         strafing right who dodges right shows no sudden change to call a
+//         dodge, and one who never stops shooting reads as "attack";
+//       - the total displacement over the window: a 7 m/s strafe covers
+//         8 m in that time and buried a 3 m dodge under it.
+//     What they were already doing is not their answer; what they do after
+//     they have seen it coming is.
+//
 //  Forgetting is by half-life in behaviours (the difficulty's memory_length):
 //  every new behaviour counts a little more than the last, which is the same
 //  as every old one fading, without touching the old ones. A player who
@@ -189,6 +211,14 @@ class NGram {
 //  3. the model: tracker + n-gram + per-behaviour statistics + prediction
 // ======================================================================
 const OUTCOME_WINDOW = 1.5;      // s after a behaviour in which what happened is credited to it
+const RESPONSE_FROM = 0.55;      // s after the wind-up starts (view time): they have seen it by now…
+const RESPONSE_WINDOW = 1.1;     // …and this is how they moved until here
+const RESPONSES = ['left', 'right', 'away', 'toward', 'stay'];   // in the boss's frame
+const REACT = 0.3;               // s — about when a person has seen a wind-up and started to answer it
+const NR = RESPONSES.length;
+const ATTACK_KINDS = ['reap', 'whirl', 'dash', 'dive'];
+//  a response table row: per class [weight, sum radial m/s, sum lateral m/s], then the total weight
+const RROW = NR * 3 + 1;
 
 class PlayerModel {
   constructor(opts) {
@@ -202,6 +232,11 @@ class PlayerModel {
     // prediction bookkeeping, for §24's "prediction accuracy"
     this.pending = -1; this.hits = 0; this.tries = 0; this.confidentHits = 0; this.confidentTries = 0;
     this.lastPred = null;
+    // the response model: per boss attack, weights over RESPONSES + a total
+    this.resp = {}; for (const k of ATTACK_KINDS) this.resp[k] = new Float64Array(RROW);
+    this.respG = 1;
+    this.pendingResp = null;                        // { kind, t, x, z, nx, nz, guess }
+    this.respHits = 0; this.respTries = 0;
   }
   tune(mind) {
     this.ngram.setHalfLife(mind.memory_length);
@@ -212,6 +247,11 @@ class PlayerModel {
   //  just started, or null.
   observe(ws) {
     const b = this.tracker.observe(ws);
+    const pr0 = this.pendingResp;
+    if (pr0 && !pr0.mid && ws.t - pr0.t >= RESPONSE_FROM && ws.v[F.has_target] > 0.5) {
+      pr0.mid = true; pr0.mx = ws.v[F.target_x]; pr0.mz = ws.v[F.target_z]; pr0.mt = ws.t;
+    }
+    if (pr0 && ws.t - pr0.t >= RESPONSE_WINDOW) { this.closeResponse(ws); }
     if (b < 0) return null;
     // score the prediction that was standing when this behaviour started
     if (this.pending >= 0) {
@@ -227,6 +267,56 @@ class PlayerModel {
     const pr = this.predict();
     this.pending = pr.bestIndex;
     return BEHAVIORS[b];
+  }
+
+  //  The boss has just started winding up `kind`, standing at (bx, bz) and
+  //  seeing the player (in this view) at target_x/z. Where they are after
+  //  RESPONSE_WINDOW is their answer to it.
+  noteBossWindup(kind, ws) {
+    if (!this.resp[kind] || !ws || ws.v[F.has_target] < 0.5) return;
+    if (this.pendingResp) this.closeResponse(ws);
+    const v = ws.v, x = v[F.target_x], z = v[F.target_z];
+    const dx = x - v[F.self_x], dz = z - v[F.self_z], d = Math.hypot(dx, dz) || 1;
+    const p = this.predictResponse(kind);
+    this.pendingResp = { kind, t: ws.t, x, z, nx: dx / d, nz: dz / d, guess: p.bestIndex, mid: false, mx: 0, mz: 0, mt: 0 };
+  }
+  closeResponse(ws) {
+    const pr = this.pendingResp; this.pendingResp = null;
+    if (!pr || !pr.mid) return;                       // never saw them over the window: no answer to record
+    const v = ws.v;
+    if (v[F.has_target] < 0.5 || ws.t - pr.mt < 0.2) return;
+    const dt = ws.t - pr.mt;
+    const ex = (v[F.target_x] - pr.mx) / dt, ez = (v[F.target_z] - pr.mz) / dt;
+    const rad = ex * pr.nx + ez * pr.nz;              // m/s, + away from the boss
+    const lat = ex * -pr.nz + ez * pr.nx;             // m/s, + toward the boss's right
+    let c;
+    if (Math.max(Math.abs(rad), Math.abs(lat)) < 2) c = 4;                   // stay
+    else if (Math.abs(lat) >= 0.5 * Math.abs(rad)) c = lat > 0 ? 1 : 0;     // right / left
+    else c = rad > 0 ? 2 : 3;                                                // away / toward
+    this.respTries++; if (pr.guess === c) this.respHits++;
+    const r = this.resp[pr.kind], g = this.respG;
+    r[c * 3] += g; r[c * 3 + 1] += g * rad; r[c * 3 + 2] += g * lat; r[RROW - 1] += g;
+    this.respG *= this.ngram.growth;
+    if (this.respG > 1e120) { for (const k of ATTACK_KINDS) for (let i = 0; i < RROW; i++) this.resp[k][i] /= this.respG; this.respG = 1; }
+  }
+  //  { probs: {left,right,away,toward,stay}, best, bestIndex, confidence,
+  //    evidence, move: [radial, lateral] m/s — how the best-guess class moves }
+  predictResponse(kind) {
+    const r = this.resp[kind];
+    const probs = {};
+    if (!r) return { probs, best: 'stay', bestIndex: 4, confidence: 0, evidence: 0, move: [0, 0] };
+    const unit = this.respG / this.ngram.growth;
+    const tot = r[RROW - 1] / unit;
+    const beta = this.ngram.beta;
+    let bi = 4, bp = -1;
+    for (let i = 0; i < NR; i++) {
+      const p = (r[i * 3] / unit + beta / NR) / (tot + beta);
+      probs[RESPONSES[i]] = p;
+      if (p > bp) { bp = p; bi = i; }
+    }
+    const w = r[bi * 3];
+    const move = w > 0 ? [r[bi * 3 + 1] / w, r[bi * 3 + 2] / w] : [0, 0];
+    return { probs, best: RESPONSES[bi], bestIndex: bi, confidence: bp * (1 - Math.exp(-tot / 4)), evidence: tot, move };
   }
 
   //  What happened after the behaviour — did it work for the player?
@@ -309,6 +399,7 @@ class PlayerModel {
 
   accuracy() {
     return {
+      response: this.respTries ? this.respHits / this.respTries : NaN, responseTries: this.respTries,
       overall: this.tries ? this.hits / this.tries : NaN, tries: this.tries,
       confident: this.confidentTries ? this.confidentHits / this.confidentTries : NaN, confidentTries: this.confidentTries,
     };
@@ -329,6 +420,8 @@ class PlayerModel {
       v: 1, vocab: BEHAVIORS.join(','), halfLife: this.ngram.halfLife,
       ctx, band: this.ngram.bandTable.map((r) => Array.from(r, r2)),
       stats: this.stats.map((s) => [s.count, s.success, s.fail, s.bands[0], s.bands[1], s.bands[2]]),
+      resp: Object.fromEntries(ATTACK_KINDS.map((k) => [k, Array.from(this.resp[k], (x) => Math.round(x / (this.respG / this.ngram.growth) * 100) / 100)])),
+      rv: 3,
     };
   }
   restore(o) {
@@ -345,6 +438,13 @@ class PlayerModel {
     }
     o.band.forEach((a, i) => ng.bandTable[i].set(a));
     ng.g = ng.growth;                                // the next event weighs one "recent behaviour"
+    if (o.resp && typeof o.resp === 'object') {
+      for (const k of ATTACK_KINDS) {
+        const a = o.resp[k];
+        if (o.rv === 3 && Array.isArray(a) && a.length === RROW && a.every(Number.isFinite)) this.resp[k].set(a);
+      }
+      this.respG = this.ngram.growth;
+    }
     if (Array.isArray(o.stats) && o.stats.length === V) {
       o.stats.forEach((a, i) => {
         if (!Array.isArray(a) || a.length !== 6 || !a.every(Number.isFinite)) return;
@@ -394,5 +494,5 @@ class PlayerModelBank {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { PlayerModel, PlayerModelBank, BehaviorTracker, NGram, classify,
-                     BEHAVIORS, B, MOTION, UNAVAILABLE_BEHAVIORS, OUTCOME_WINDOW };
+                     BEHAVIORS, B, MOTION, UNAVAILABLE_BEHAVIORS, OUTCOME_WINDOW, RESPONSES, ATTACK_KINDS, REACT };
 }

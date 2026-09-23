@@ -54,6 +54,13 @@ const FIELDS = [
   ['player_noise',            0,    1, 'frac', 'player', 'loudness of the last thing heard from them, decaying'],
   ['player_cover',            0,    1, 'frac', 'player', 'line of sight broken, and walls close around where they are believed to be'],
   ['los_blocked',             0,    1, 'bool', 'player', 'in range and in front, but something is in the way'],
+  //  Where it believes the player is, in world metres. The Neural Core never
+  //  sees these (toChannels ignores them); they are for the tactics, which
+  //  must work out the geometry from a *delayed* belief and the boss's
+  //  *current* pose — distance and bearing above were measured from where
+  //  the boss stood and faced back then.
+  ['target_x',            -5000, 5000, 'm',    'player', 'believed position'],
+  ['target_z',            -5000, 5000, 'm',    'player', ''],
 
   // ---- the boss itself ----
   ['self_health',             0,    1, 'frac', 'self',   ''],
@@ -63,6 +70,9 @@ const FIELDS = [
   ['self_state',              0,   15, 'enum', 'self',   'the body state the engine reports'],
   ['time_since_self_attack',  0,  600, 's',    'self',   ''],
   ['self_cover',              0,    1, 'frac', 'self',   'walls close around the boss'],
+  ['self_x',              -5000, 5000, 'm',    'self',   ''],
+  ['self_z',              -5000, 5000, 'm',    'self',   ''],
+  ['self_heading',       -3.1416, 3.1416, 'rad', 'self', 'facing; 0 looks down +z'],
 
   // ---- the surroundings ----
   ['players_near',            0,   16, 'count', 'env',   'living players known within 30 m'],
