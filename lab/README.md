@@ -9,19 +9,60 @@ BOSS NEURAL CORE 仕様書 (v1.0) の実装ラボ。**ここは出荷されま�
 依存関係はありません。node だけで動きます。
 
 ```sh
-node lab/test/phase1.test.js      # テスト
-node lab/bench/phase1.bench.js    # ノード数別の実測と戦略比較
+node lab/test/phase1.test.js          # Phase 1: Mock Connectome / 圧縮
+node lab/test/phase2.test.js          # Phase 2: Neural Core
+node lab/test/phase3.test.js          # Phase 3: WorldState / Sensor Layer / Game Adapter
+node lab/bench/phase1.bench.js        # ノード数別の実測と戦略比較
+node lab/bench/phase2.bench.js        # Neural Core のノード数別コスト
+node --expose-gc lab/bench/phase3.bench.js   # センサーのコスト（プレイヤー数別）
 ```
+
+### 本物のゲームに対するテスト
+
+`*.game.test.js` は `index.html` を headless Chromium で実際に動かします（Playwright が必要）。
+複数のブラウザコンテキスト＝別々のスマホとして同じルームに入れ、MQTT はテストプロセス経由で中継します。
+
+```sh
+node lab/test/phase3.game.test.js     # アダプタが本物のゲームを「読むだけ」であることの検証
+node lab/test/gatesync.game.test.js   # ルーム全員が同じゲートを見ること（約3分）
+```
+
+`lab/test/harness/page.js` が `lab/.cache/game.html` を生成します（three.js は初回に `npm pack` で取得、
+`.cache` は gitignore）。ゲーム本体に加える変更は3つだけです: ライブラリの読み込み先、MQTT の代役、
+メインループ直前に置くテスト用フック `window.__t`。
 
 ## 構成
 
 ```
-lab/core/rng.js          決定論的乱数。全ての確率的選択はここを通る
-lab/core/connectome.js   Neuron / Synapse / Graph / Mock生成 / 指標  (§5–§7)
-lab/core/compress.js     圧縮戦略5種と比較                           (§8)
-lab/test/                テスト                                      (§33)
-lab/bench/               性能と戦略の実測                            (§8, §33)
+lab/core/rng.js            決定論的乱数。全ての確率的選択はここを通る
+lab/core/connectome.js     Neuron / Synapse / Graph / Mock生成 / 指標      (§5–§7)
+lab/core/compress.js       圧縮戦略5種と比較                               (§8)
+lab/core/neural.js         Neural Core（漏れ積分・抑制・再帰・調節）       (§9, §10)
+lab/core/worldstate.js     WorldState — ゲームとAIの境界。スキーマと正規化 (§12)
+lab/core/sensors.js        Sensor Layer — 観測 → WorldState。信念を持つ     (§11, §17)
+lab/adapter/game_adapter.js  ゲーム本体を「読むだけ」の唯一の窓口          (§4 game_adapter)
+lab/test/                  テスト                                          (§33)
+lab/test/harness/          本物のゲームを動かすテスト基盤
+lab/bench/                 性能と戦略の実測                                (§8, §28, §33)
 ```
+
+### Phase 3 の境界（§11, §12, §17）
+
+```
+index.html の変数 ──▶ game_adapter ──▶ 観測(obs) ──▶ SensorLayer ──▶ WorldState ──▶ toChannels ──▶ NeuralCore
+ (p, MP.peers,         読むだけ          見える/聞こえる    信念を持つ         生の単位(m, s)    0..1 へ
+  rayCity, clearAt)    乱数を引かない     ものだけ          壁越しに追わない    36 項目
+```
+
+- **入力は読みません。** 観測に `keys` / `joystick` / `wantFire` などが入っていれば strict モードで例外、
+  非 strict でも一切参照しません（テストで「入れても出力が1ビットも変わらない」ことを確認）。
+- **見えないものは知りません。** 壁の向こうに消えたプレイヤーは、最後の速度で 1.2 秒だけ推測して止まります。
+  銃声が聞こえれば、その付近（距離の6%程度の誤差）に信念を戻します。
+- **§11 のうちこのゲームに無いもの**（スタミナ・防御・スキル状態・環境ハザード）は、
+  定数で埋めずに `UNAVAILABLE` として理由付きで宣言しています。
+- **光線は1ティックあたり上限つき**（注視中の相手1本＋他の相手に2本まで）。
+  「近くに壁があるか」は光線ではなくゲームの足場判定 `clearAt` で答えます
+  （`rayCity` は長さに関係なく街中の全建物を調べるため）。
 
 ## データについて (§27)
 
