@@ -13,6 +13,8 @@
 //      has been here longest has the lowest id and runs the creatures), and
 //      stamps the sender on everything — nobody can speak as someone else,
 //      or pick an id that makes them the host
+//    - the pickups are the room's: whoever reaches one first gets it, and the
+//      room says when it is back
 //    - health, deaths and kills are the room's. A player's game says "I hit
 //      so-and-so"; the room checks it could have happened (combat.js: the gun
 //      ready, the target in reach, a clear line through the city) and only
@@ -30,6 +32,7 @@
 //    room → client   { s: kind, p: payload, f: sender id }   (f absent from the room itself)
 
 import RULES from '../shared/rules.js';
+import ITEMS from '../shared/items.js';
 import { remember, whyNot } from './combat.js';
 
 export const DMG = RULES.DMG;
@@ -64,15 +67,21 @@ const KINDS = {
     return null;
   }],
   //  what a player reports against itself: hurt by the city (a car, a
-  //  creature), healed by a banana, back on its feet
+  //  creature), back on its feet
   hurt: [20, 40, (p, from, room, now) => {
     const d = Math.max(0, Math.min(RULES.HP_MAX, +p.d || 0));
     if (d > 0) room.damage(from, d, null, now);
     return null;
   }],
-  heal: [0.5, 2, (p, from, room) => {
-    const me = room.players.get(from);
-    if (!me.dead) { me.hp = Math.min(RULES.HP_MAX, me.hp + Math.max(0, Math.min(RULES.BANANA_HEAL, +p.d || 0))); room.dirty.add(from); room.send(from, 'hp', { hp: me.hp }); }
+  //  "let me have pickup i": the first one there, alive, on its side of the
+  //  tear, gets it; the room heals them (a banana) and tells everyone it is gone
+  take: [4, 8, (p, from, room, now) => {
+    const items = room.items(), i = int(p.i), it = items[i], me = room.players.get(from);
+    if (!it || !it.active || me.dead || me.w !== it.w || !room.near(me, it, now)) return null;
+    it.active = false; it.until = now + ITEMS.RESPAWN[it.k] * 1000;
+    if (it.k === 'compass') room.send(from, 'took', { i });
+    else { me.hp = Math.min(RULES.HP_MAX, me.hp + RULES.BANANA_HEAL); room.dirty.add(from); room.send(from, 'took', { i, hp: me.hp }); }
+    room.send('all', 'item', { i, a: 0 });
     return null;
   }],
   spawn: [1, 3, (p, from, room) => {
@@ -112,6 +121,24 @@ export class Relay {
     this.out = [];
     this.refused = 0; this.lastRefusal = '';
     this.dirty = new Set();            // players whose health or score changed (the room saves them)
+    this.pickups = null;               // shared/items.js, and which are lying there (items())
+  }
+  items() {
+    if (!this.pickups) this.pickups = ITEMS.layout().map((it) => ({ k: it.k, w: it.w, x: it.x, z: it.z, active: true, until: 0 }));
+    return this.pickups;
+  }
+  itemState() { return this.items().map((it) => (it.active ? 1 : 0)); }
+  //  pickups whose time has come back, announced — checked on every message,
+  //  which arrive many times a second while anyone is playing
+  tickItems(now) {
+    if (!this.pickups) return;
+    this.pickups.forEach((it, i) => { if (!it.active && now >= it.until) { it.active = true; this.send('all', 'item', { i, a: 1 }); } });
+  }
+  //  was this player within reach of it lately (their last half second)?
+  near(me, it, now) {
+    const h = me.hist, r = ITEMS.REACH + 1.0;
+    for (let i = h.length - 4; i >= 0 && h[i] >= now - 600; i -= 4) if (Math.hypot(h[i + 1] - it.x, h[i + 3] - it.z) <= r) return true;
+    return false;
   }
   has(id) { return this.players.has(id); }
   host() { let h = null; for (const id of this.players.keys()) if (h === null || id < h) h = id; return h; }
@@ -150,6 +177,7 @@ export class Relay {
   //  (to: 'others', 'self', 'all' or an id), and why nothing, if nothing.
   handle(from, raw, now) {
     this.out = [];
+    this.tickItems(now);
     const me = this.players.get(from);
     if (!me) return { out: [], drop: 'unknown sender' };
     if (typeof raw !== 'string') return { out: [], drop: 'binary' };

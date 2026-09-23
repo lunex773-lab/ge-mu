@@ -13,6 +13,7 @@
 //      the room — not the players — decides the death and whose kill it is
 //    - a dropped connection comes back by itself, under a new name, and the
 //      other player sees the old one leave
+//    - the same bananas for everyone; the first one there gets it, for everyone
 //    - when the host leaves, the other player takes over the creatures
 //
 //    node lab/test/server.game.test.js     (about two minutes)
@@ -95,6 +96,22 @@ async function until(P, src, secs) {
       yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(pr.cur.y + 1.1 - p.y, Math.hypot(dx, dz)); fireCd = 0; reloading = 0; ammo = Math.max(ammo, 5); fire(); return 1; })()`);
     const shotLanded = await until(A, 'hp === 80', 4);
     check('a real shot — aimed at what the game draws, fired — lands on the room\'s word', shotLanded, 'hp ' + (await ev(A, 'hp')));
+
+    // ---- the pickups are the room's -----------------------------------------
+    const where = (P) => ev(P, 'JSON.stringify(bananas.map((b) => [Math.round(b.x * 10), Math.round(b.z * 10)]))');
+    check('everyone sees the same bananas in the same places', (await where(A)) === (await where(B)), await where(A));
+    await ev(A, 'applyDamage(50, null); 1');                       // hungry, on the room's account too
+    await sleep(500);
+    const before = await ev(A, 'hp');
+    const b0 = JSON.parse(await ev(A, 'JSON.stringify({ x: bananas[0].x, z: bananas[0].z })'));
+    await ev(A, 'p.set(' + b0.x + ', EYE, ' + b0.z + '); publishState(true); 1');
+    const ate = await until(A, '!bananas[0].active && hp === ' + Math.min(100, before + 40), 5);
+    const goneForB = await until(B, '!bananas[0].active && !bananas[0].mesh.visible', 5);
+    check('the first one to reach a banana gets it — the room heals them — and it is gone for everyone', ate && goneForB,
+      'A hp ' + before + ' → ' + (await ev(A, 'hp')) + ', B sees it ' + ((await ev(B, 'bananas[0].active')) ? 'still there' : 'gone'));
+    await ev(B, 'applyDamage(30, null); p.set(' + b0.x + ', EYE, ' + b0.z + '); publishState(true); 1');
+    await sleep(1500);
+    check('and the next one there finds nothing', (await ev(B, 'hp')) === 70 && !(await ev(B, 'bananas[0].active')), 'B hp ' + (await ev(B, 'hp')));
 
     // ---- the connection drops, and comes back --------------------------------
     await ev(B, 'SRV.ws.close(); 1');
