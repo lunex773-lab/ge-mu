@@ -4165,11 +4165,15 @@
     if (dead || !isPlaying() || cloak > 0 || cloakCd > 0) return;
     cloak = CLOAK_DUR; setSelfCloak(true); publishState(true); updateCloakBtn();
   }
+  //  called every frame; the DOM is touched only when what it shows changes
+  //  (once a second while it counts), since rewriting it makes the page lay out again
+  let cloakShown = '';
   function updateCloakBtn() {
     if (!cloakBtn) return;
-    if (cloak > 0) cloakBtn.className = 'on', cloakBtn.innerHTML = '透明<b>' + Math.ceil(cloak) + '</b>';
-    else if (cloakCd > 0) cloakBtn.className = 'cool', cloakBtn.innerHTML = '透明<b>' + Math.ceil(cloakCd) + '</b>';
-    else cloakBtn.className = '', cloakBtn.innerHTML = '透明<b>OK</b>';
+    const cls = cloak > 0 ? 'on' : cloakCd > 0 ? 'cool' : '', txt = cloak > 0 ? Math.ceil(cloak) : cloakCd > 0 ? Math.ceil(cloakCd) : 'OK';
+    if (cloakShown === cls + txt) return;
+    cloakShown = cls + txt;
+    cloakBtn.className = cls; cloakBtn.innerHTML = '透明<b>' + txt + '</b>';
   }
 
   function updateCombat(dt) {
@@ -4260,10 +4264,11 @@
     clearTimeout(ui.noteT); ui.noteT = setTimeout(() => ui.note.classList.remove('show'), ms);
   }
   let dbgOn = false, dbgAcc = 0;
+  let stripBrg = NaN;
   function updateHud(dt) {
     if (reloading > 0) { reloading -= dt; if (reloading <= 0) { reloading = 0; finishReload(); } }
     let brg = (-yaw * 180 / Math.PI) % 360; if (brg < 0) brg += 360;
-    ui.strip.style.transform = 'translateX(' + (-brg * (40 / 15) - 20) + 'px)';
+    if (brg !== stripBrg) { stripBrg = brg; ui.strip.style.transform = 'translateX(' + (-brg * (40 / 15) - 20) + 'px)'; }
     if (!dbgOn) return;
     dbgAcc += dt; if (dbgAcc < 0.25) return; dbgAcc = 0;
     const r = renderer.info.render;
