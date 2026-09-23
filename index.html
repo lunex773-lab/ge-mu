@@ -1533,6 +1533,40 @@
   const setInst = (inst, k, x, y, z, ry, sx, sy, sz, rz) => {
     _d.position.set(x, y, z); _d.rotation.set(0, ry || 0, rz || 0, 'YXZ'); _d.scale.set(sx, sy, sz); _d.updateMatrix(); inst.setMatrixAt(k, _d.matrix);
   };
+  //  The same matrix, written straight into the instance buffer from the
+  //  yaw's and the roll's cosine and sine — no Euler → quaternion → matrix trip,
+  //  and a car's parts share one pair of each. The traffic writes some 400 of
+  //  these a frame; lab/test/phase12.test.js checks them against Object3D.
+  function putTRS(inst, k, x, y, z, cy, sy, cr, sr, scx, scy, scz) {
+    const e = inst.instanceMatrix.array, o = k * 16;
+    e[o] = cy * cr * scx; e[o + 1] = sr * scx; e[o + 2] = -sy * cr * scx; e[o + 3] = 0;
+    e[o + 4] = -cy * sr * scy; e[o + 5] = cr * scy; e[o + 6] = sy * sr * scy; e[o + 7] = 0;
+    e[o + 8] = sy * scz; e[o + 9] = 0; e[o + 10] = cy * scz; e[o + 11] = 0;
+    e[o + 12] = x; e[o + 13] = y; e[o + 14] = z; e[o + 15] = 1;
+  }
+  //  A frame is 12 numbers: three axis columns and the origin. A walker's
+  //  joints each turn only about their own x axis, so a child frame is its
+  //  parent's, moved by an offset and turned about x.
+  function frameRoot(f, x, y, z, cy, sy, cr, sr) {
+    f[0] = cy * cr; f[1] = sr; f[2] = -sy * cr; f[3] = -cy * sr; f[4] = cr; f[5] = sy * sr;
+    f[6] = sy; f[7] = 0; f[8] = cy; f[9] = x; f[10] = y; f[11] = z;
+  }
+  function frameJoint(p, f, px, py, pz, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    f[9] = p[9] + p[0] * px + p[3] * py + p[6] * pz;
+    f[10] = p[10] + p[1] * px + p[4] * py + p[7] * pz;
+    f[11] = p[11] + p[2] * px + p[5] * py + p[8] * pz;
+    f[0] = p[0]; f[1] = p[1]; f[2] = p[2];
+    f[3] = c * p[3] + s * p[6]; f[4] = c * p[4] + s * p[7]; f[5] = c * p[5] + s * p[8];
+    f[6] = c * p[6] - s * p[3]; f[7] = c * p[7] - s * p[4]; f[8] = c * p[8] - s * p[5];
+  }
+  function putFrame(inst, k, f) {
+    const e = inst.instanceMatrix.array, o = k * 16;
+    e[o] = f[0]; e[o + 1] = f[1]; e[o + 2] = f[2]; e[o + 3] = 0;
+    e[o + 4] = f[3]; e[o + 5] = f[4]; e[o + 6] = f[5]; e[o + 7] = 0;
+    e[o + 8] = f[6]; e[o + 9] = f[7]; e[o + 10] = f[8]; e[o + 11] = 0;
+    e[o + 12] = f[9]; e[o + 13] = f[10]; e[o + 14] = f[11]; e[o + 15] = 1;
+  }
   const near = (v) => Math.abs(v - PITCH * Math.round(v / PITCH)) < RW + 4;   // near an intersection?
 
   // trees line the avenues, street lights the cross-streets
@@ -2411,10 +2445,21 @@
   }
   // nearest vehicle ahead on the same edge+direction — cars AND Ferraris, so
   // neither clips into the other (Ferraris fall in behind slower traffic).
+  //  Every car used to check every other car — 140 × 140 a frame. Each lane
+  //  (a road edge and a direction) keeps its own list instead, moved along
+  //  as a car turns onto the next, so the check sees exactly the same cars.
+  const lanes = new Map();
+  const laneOf = (a) => (((a.i + 16) * 64 + (a.j + 16)) * 4) + (a.di === 1 ? 0 : a.di === -1 ? 1 : a.dj === 1 ? 2 : 3);
+  function laneMove(a, nl) {
+    if (a.lane !== undefined) { const o = lanes.get(a.lane); if (o) { const i = o.indexOf(a); if (i >= 0) o.splice(i, 1); } }
+    let l = lanes.get(nl); if (!l) lanes.set(nl, l = []);
+    l.push(a); a.lane = nl;
+  }
   function gapAhead(a) {
     let ahead = Infinity;
-    for (const o of cars) { if (o !== a && o.i === a.i && o.j === a.j && o.di === a.di && o.dj === a.dj && o.s > a.s) ahead = Math.min(ahead, (o.s - a.s) * PITCH); }
-    for (const o of ferraris) { if (o !== a && o.i === a.i && o.j === a.j && o.di === a.di && o.dj === a.dj && o.s > a.s) ahead = Math.min(ahead, (o.s - a.s) * PITCH); }
+    const nl = laneOf(a);
+    if (nl !== a.lane) laneMove(a, nl);
+    for (const o of lanes.get(nl)) { if (o !== a && o.s > a.s) ahead = Math.min(ahead, (o.s - a.s) * PITCH); }
     return ahead;
   }
   function updateCar(car, dt, k) {
@@ -2427,24 +2472,30 @@
     const bx = car.rx, bz = car.rz;
     const roll = w * 0.030, steer = Math.max(-0.5, Math.min(0.5, w * 0.42));
     const W = car.W, H = car.H, L = car.L;
-    _d.position.set(bx, CWY + H / 2, bz); _d.rotation.set(0, heading, roll, 'YXZ'); _d.scale.set(W, H, L); _d.updateMatrix(); carBodyI.setMatrixAt(k, _d.matrix);
-    if (car.cabL > 0) setPart(carCabI, k, bx, bz, di, dj, heading, 0, CWY + H + car.cabH / 2 - 0.04, car.cabZ, W * 0.86, car.cabH, car.cabL, roll);
-    else setPart(carCabI, k, bx, bz, di, dj, heading, 0, -50, 0, 0.0001, 0.0001, 0.0001);   // vans have no greenhouse
-    const wxo = W / 2 - 0.02, wzo = L / 2 - 0.95;
-    setPart(carWheelI, k * 4 + 0, bx, bz, di, dj, heading + steer, -wxo, CWY, wzo, 1, 1, 1);
-    setPart(carWheelI, k * 4 + 1, bx, bz, di, dj, heading + steer, wxo, CWY, wzo, 1, 1, 1);
-    setPart(carWheelI, k * 4 + 2, bx, bz, di, dj, heading, -wxo, CWY, -wzo, 1, 1, 1);
-    setPart(carWheelI, k * 4 + 3, bx, bz, di, dj, heading, wxo, CWY, -wzo, 1, 1, 1);
-    setPart(carHeadI, k, bx, bz, di, dj, heading, 0, CWY + 0.32, L / 2, W * 0.72, 0.14, 0.08, roll);
-    setPart(carTailI, k, bx, bz, di, dj, heading, 0, CWY + 0.30, -L / 2, W * 0.72, 0.12, 0.08, roll);
-    setPart(carBeamI, k, bx, bz, di, dj, heading, 0, CWY + 0.30, L / 2, 1, 0.5, 1);   // kept current so dusk never flashes stale beams
-    if (car.taxi) setPart(carSignI, k, bx, bz, di, dj, heading, 0, CWY + H + car.cabH + 0.12, car.cabZ, 1, 1, 1, roll);
+    //  a part at (lx, ly, lz) in the car's own frame sits at
+    //  (bx + lx·dj + lz·di, ly, bz − lx·di + lz·dj); rolled parts share cr/sr
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+    putTRS(carBodyI, k, bx, CWY + H / 2, bz, dj, di, cr, sr, W, H, L);
+    if (car.cabL > 0) putTRS(carCabI, k, bx + car.cabZ * di, CWY + H + car.cabH / 2 - 0.04, bz + car.cabZ * dj, dj, di, cr, sr, W * 0.86, car.cabH, car.cabL);
+    else putTRS(carCabI, k, bx, -50, bz, dj, di, 1, 0, 0.0001, 0.0001, 0.0001);   // vans have no greenhouse
+    const wxo = W / 2 - 0.02, wzo = L / 2 - 0.95, cs = Math.cos(heading + steer), ss = Math.sin(heading + steer);
+    putTRS(carWheelI, k * 4 + 0, bx - wxo * dj + wzo * di, CWY, bz + wxo * di + wzo * dj, cs, ss, 1, 0, 1, 1, 1);
+    putTRS(carWheelI, k * 4 + 1, bx + wxo * dj + wzo * di, CWY, bz - wxo * di + wzo * dj, cs, ss, 1, 0, 1, 1, 1);
+    putTRS(carWheelI, k * 4 + 2, bx - wxo * dj - wzo * di, CWY, bz + wxo * di - wzo * dj, dj, di, 1, 0, 1, 1, 1);
+    putTRS(carWheelI, k * 4 + 3, bx + wxo * dj - wzo * di, CWY, bz - wxo * di - wzo * dj, dj, di, 1, 0, 1, 1, 1);
+    putTRS(carHeadI, k, bx + L / 2 * di, CWY + 0.32, bz + L / 2 * dj, dj, di, cr, sr, W * 0.72, 0.14, 0.08);
+    putTRS(carTailI, k, bx - L / 2 * di, CWY + 0.30, bz - L / 2 * dj, dj, di, cr, sr, W * 0.72, 0.12, 0.08);
+    putTRS(carBeamI, k, bx + L / 2 * di, CWY + 0.30, bz + L / 2 * dj, dj, di, 1, 0, 1, 0.5, 1);   // kept current so dusk never flashes stale beams
+    if (car.taxi) putTRS(carSignI, k, bx + car.cabZ * di, CWY + H + car.cabH + 0.12, bz + car.cabZ * dj, dj, di, cr, sr, 1, 1, 1);
+    const nl = laneOf(car);
+    if (nl !== car.lane) laneMove(car, nl);
     car._x = bx; car._z = bz;
     runOver(bx, bz, heading, car.halfW, car.halfL, car.speed, 32);
   }
   function updateFerraris(dt) {
     for (const a of ferraris) {
       if (driveAgent(a, dt, gapAhead(a), 7)) a.drift = 0.9;    // follow traffic, drift out of every corner
+      { const nl = laneOf(a); if (nl !== a.lane) laneMove(a, nl); }
       const gx = (a.i + a.s * a.di) * PITCH + a.dj * LANE, gz = (a.j + a.s * a.dj) * PITCH - a.di * LANE;
       const w = easePose(a, gx, gz, Math.atan2(a.di, a.dj), dt, 9, 46, 6, 3.4);
       const heading = a.hd, bx = a.rx, bz = a.rz;
@@ -2546,46 +2597,66 @@
     ped.phase += dt * spd * (run ? 3.4 : 5.0);
     const sw = Math.sin(ped.phase), swc = Math.cos(ped.phase), amp = run ? 1.35 : 1;
     const bob = Math.abs(sw) * 0.03 * walk, k = ped.hidx;
-    setInst(torsoI, k, bx, bob, bz, heading, 1, 1, 1, lean);
-    setInst(hipI, k, bx, bob, bz, heading, 1, 1, 1, lean);
-    setInst(headI, k, bx, bob, bz, heading, 1, 1, 1, lean);
-    setInst(hairI, k, bx, bob, bz, heading, 1, 1, 1, lean);
     const la = 0.72 * walk * amp, aa = 0.5 * walk * amp;
-    _sk.position.set(bx, bob, bz); _sk.rotation.set(0, heading, lean, 'YXZ');
-    _legLu.rotation.x = sw * la; _legLl.rotation.x = Math.max(0, -swc) * 0.85 * walk;
-    _legRu.rotation.x = -sw * la; _legRl.rotation.x = Math.max(0, swc) * 0.85 * walk;
-    _armLu.rotation.x = -sw * aa; _armLl.rotation.x = 0.28;
-    _armRu.rotation.x = sw * aa; _armRl.rotation.x = 0.28;
-    _sk.updateMatrixWorld(true);
-    legLuI.setMatrixAt(k, _legLu.matrixWorld); legLlI.setMatrixAt(k, _legLl.matrixWorld); footLI.setMatrixAt(k, _footLn.matrixWorld);
-    legRuI.setMatrixAt(k, _legRu.matrixWorld); legRlI.setMatrixAt(k, _legRl.matrixWorld); footRI.setMatrixAt(k, _footRn.matrixWorld);
-    armLuI.setMatrixAt(k, _armLu.matrixWorld); armLlI.setMatrixAt(k, _armLl.matrixWorld);
-    armRuI.setMatrixAt(k, _armRu.matrixWorld); armRlI.setMatrixAt(k, _armRl.matrixWorld);
+    //  the same joints as the _sk rig (hips at ±0.1, 0.9; knee 0.44 below; ankle
+    //  0.42 below that; shoulders at ±0.25, 1.44; elbow 0.30 below), solved
+    //  directly — the rig is still what lays out the dead (placeCorpse)
+    const R = _wf[0], A = _wf[1], B = _wf[2];
+    frameRoot(R, bx, bob, bz, Math.cos(heading), Math.sin(heading), Math.cos(lean), Math.sin(lean));
+    putFrame(torsoI, k, R); putFrame(hipI, k, R); putFrame(headI, k, R); putFrame(hairI, k, R);
+    frameJoint(R, A, -0.1, 0.9, 0, sw * la); putFrame(legLuI, k, A);
+    frameJoint(A, B, 0, -0.44, 0, Math.max(0, -swc) * 0.85 * walk); putFrame(legLlI, k, B);
+    frameJoint(B, A, 0, -0.42, 0, 0); putFrame(footLI, k, A);
+    frameJoint(R, A, 0.1, 0.9, 0, -sw * la); putFrame(legRuI, k, A);
+    frameJoint(A, B, 0, -0.44, 0, Math.max(0, swc) * 0.85 * walk); putFrame(legRlI, k, B);
+    frameJoint(B, A, 0, -0.42, 0, 0); putFrame(footRI, k, A);
+    frameJoint(R, A, -0.25, 1.44, 0, -sw * aa); putFrame(armLuI, k, A);
+    frameJoint(A, B, 0, -0.30, 0, 0.28); putFrame(armLlI, k, B);
+    frameJoint(R, A, 0.25, 1.44, 0, sw * aa); putFrame(armRuI, k, A);
+    frameJoint(A, B, 0, -0.30, 0, 0.28); putFrame(armRlI, k, B);
   }
+  const _wf = [new Float64Array(12), new Float64Array(12), new Float64Array(12)];
   function updateCity(dt) {
     cityT += dt;
     if (carHitCd > 0) carHitCd -= dt;
     updateSignalLenses();
-    // Distant traffic runs on every third frame with a tripled step — identical
-    // motion, a third of the matrix writes. Anything near the camera still
-    // updates every frame, so nothing you can actually see stutters.
+    // Distant traffic (90 m+) moves on every third frame, and traffic behind
+    // the camera — out of view whichever way the screen is held — on every
+    // fourth. Anything near and in view still updates every frame, so nothing
+    // you can actually see stutters. Each one is moved by the time since *it*
+    // last moved, so going from one rate to another never gains or loses a
+    // step.
     cityFrame++;
     const FAR2 = 90 * 90;
+    const ay = view === 'third' ? orbitYaw : yaw, fx = -Math.sin(ay), fz = -Math.cos(ay);
+    const ox = camera.position.x, oz = camera.position.z;
+    const rate = (x, z, walker) => {
+      const dx = x - p.x, dz = z - p.z, d2 = dx * dx + dz * dz;
+      if (d2 > FAR2) return 3;
+      const vx = x - ox, vz = z - oz, v2 = vx * vx + vz * vz;
+      if (v2 > 64 && vx * fx + vz * fz < -0.5 * Math.sqrt(v2)) return 4;
+      //  a walker 30 m off moves 5 cm between two frames — under a pixel on a
+      //  phone — so in view from there out they step every other frame. Cars
+      //  are six times faster and stay on every frame.
+      return walker && d2 > 900 ? 2 : 1;
+    };
     const drive = wState !== WS.BACK;               // the traffic died where it stood
     if (drive) for (let k = 0; k < cars.length; k++) {
       const c = cars[k];
-      if (c._x !== undefined) {
-        const dx = c._x - p.x, dz = c._z - p.z;
-        if (dx * dx + dz * dz > FAR2) { if ((cityFrame + k) % 3) continue; updateCar(c, dt * 3, k); continue; }
-      }
-      updateCar(c, dt, k);
+      if (c._x !== undefined) { const n = rate(c._x, c._z); if (n > 1 && (cityFrame + k) % n) continue; }
+      updateCar(c, Math.min(0.25, cityT - (c.tu === undefined ? cityT - dt : c.tu)), k);
+      c.tu = cityT;
     }
     if (drive) updateFerraris(dt);
     for (let k = 0; k < peds.length; k++) {
       const e = peds[k];
-      const dx = e.wx - p.x, dz = e.wz - p.z;
-      if (dx * dx + dz * dz > FAR2) { if ((cityFrame + k) % 3) continue; updatePed(e, dt * 3); continue; }
-      updatePed(e, dt);
+      //  the troop is not scenery: monkeys behind you still chase and swipe every frame
+      //  and the crowd is not over there at all: it waits where it was until you come back
+      if (!e.isMonkey && !drive) continue;
+      const n = e.isMonkey ? (((e.wx - p.x) ** 2 + (e.wz - p.z) ** 2) > FAR2 ? 3 : 1) : rate(e.wx, e.wz, true);
+      if (n > 1 && (cityFrame + k) % n) continue;
+      updatePed(e, Math.min(0.25, cityT - (e.tu === undefined ? cityT - dt : e.tu)));
+      e.tu = cityT;
     }
     if (drive) {
       carBodyI.instanceMatrix.needsUpdate = carCabI.instanceMatrix.needsUpdate = carWheelI.instanceMatrix.needsUpdate = true;

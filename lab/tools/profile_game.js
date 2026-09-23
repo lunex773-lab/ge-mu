@@ -107,7 +107,7 @@ function show(r) {
   const room = await openRoom();
   const res = {};
   try {
-    const A = await room.player({ room: 'profile', nick: 'Aki' });
+    const A = await room.player({ room: 'profile', nick: 'Aki', seed: 4242 });
     await A.join(); await sleep(4000);
     await ev(A, INSTRUMENT);
     res.normal = await phase(A, 'NORMAL world, solo');
