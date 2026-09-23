@@ -1359,16 +1359,37 @@
   }
 
   // ---- interior queries: support (floors/stairs), wall push-out, shot blocking ----
-  const _near = [];
-  function cityNear(x, z) {
-    _near.length = 0;
-    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
-    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
-      const a = cBucket.get((bi + oi) + ',' + (bj + oj));
-      if (a) for (let i = 0; i < a.length; i++) _near.push(a[i]);
+  //  Every cell's 3×3 neighbourhood, listed once, in the order the lookup
+  //  always gave them. It used to build nine string keys and copy the lists
+  //  into a scratch array on every call, and the creatures on the other side
+  //  of the tear call it some twenty times a frame. The lists are shared:
+  //  callers read them and never change them.
+  const NEAR_R = N + 3, NEAR_W = 2 * NEAR_R + 1, NEAR_NONE = [];
+  let nearTable = null;
+  function buildNearTable() {
+    nearTable = [];
+    for (let i = -NEAR_R; i <= NEAR_R; i++) for (let j = -NEAR_R; j <= NEAR_R; j++) {
+      const list = [];
+      for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+        const a = cBucket.get((i + oi) + ',' + (j + oj));
+        if (a) for (let k = 0; k < a.length; k++) list.push(a[k]);
+      }
+      nearTable[(i + NEAR_R) * NEAR_W + (j + NEAR_R)] = list;
     }
-    return _near;
+    //  and each building's walls, all together, so a body nowhere near them
+    //  skips the lot with four compares
+    for (const r of cityB) {
+      r.wx0 = r.wz0 = Infinity; r.wx1 = r.wz1 = -Infinity;
+      for (const b of r.walls) { r.wx0 = Math.min(r.wx0, b.x0); r.wx1 = Math.max(r.wx1, b.x1); r.wz0 = Math.min(r.wz0, b.z0); r.wz1 = Math.max(r.wz1, b.z1); }
+    }
   }
+  function cityNear(x, z) {
+    if (!nearTable) buildNearTable();
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+    if (bi < -NEAR_R || bi > NEAR_R || bj < -NEAR_R || bj > NEAR_R) return NEAR_NONE;   // nothing out there
+    return nearTable[(bi + NEAR_R) * NEAR_W + (bj + NEAR_R)];
+  }
+  buildNearTable();                          // the city is complete by here
   // highest walkable surface at (x,z) no more than a small step above the feet
   function supportHeight(x, z, feetY) {
     let s = 0; const step = 0.62, near = cityNear(x, z);
@@ -1389,7 +1410,9 @@
     for (let pass = 0; pass < 2; pass++) {
       const near = cityNear(pos.x, pos.z);
       for (let i = 0; i < near.length; i++) {
-        const walls = near[i].walls;
+        const r = near[i];
+        if (pos.x <= r.wx0 - rad || pos.x >= r.wx1 + rad || pos.z <= r.wz0 - rad || pos.z >= r.wz1 + rad) continue;
+        const walls = r.walls;
         for (let j = 0; j < walls.length; j++) {
           const b = walls[j];
           if (headY <= b.y0 || feetY >= b.y1) continue;
