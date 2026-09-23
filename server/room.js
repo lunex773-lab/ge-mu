@@ -52,10 +52,15 @@ export class GameRoom extends DurableObject {
     if (!a) return;
     const r = this.relay.handle(a.id, raw, Date.now());
     if (r.back) ws.send(r.back);
-    else if (r.all) this.broadcast(r.all, a.id);
+    if (r.all) this.broadcast(r.all, a.id);
   }
 
-  async webSocketClose(ws) { this.gone(ws); }
+  //  answer the close (newer runtimes do it themselves; doing it too is safe)
+  //  or the player's side waits on it and never learns the socket is gone
+  async webSocketClose(ws, code, reason) {
+    this.gone(ws);
+    try { ws.close(code === 1005 ? 1000 : code, reason); } catch (e) {}
+  }
   async webSocketError(ws) { this.gone(ws); }
 
   gone(ws) {

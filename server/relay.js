@@ -3,7 +3,8 @@
 //  ============================================================
 //  The room is the only way players reach each other, so it decides what a
 //  message may say. Plain JavaScript, no Cloudflare APIs: the GameRoom
-//  Durable Object feeds it, and server/test/relay.test.js runs it in node.
+//  Durable Object feeds it (server/test/room.test.js runs both on a local
+//  workerd; lab/test/server.game.test.js runs the real game against them).
 //
 //  What it enforces today (the game's messages, from the MQTT days, carried
 //  over the room's WebSocket):
@@ -73,7 +74,7 @@ export class Relay {
 
   //  One message from `from`. Returns what to do with it:
   //    { all: text }       send to everyone else in the room
-  //    { back: text }      send to the sender only
+  //    { back: text }      send to the sender (both, for a chat line)
   //    { drop: reason }
   handle(from, raw, now) {
     const me = this.players.get(from);
@@ -89,7 +90,9 @@ export class Relay {
     const p = rule[2](msg.p, from, this);
     if (!p) return { drop: 'refused ' + msg.s };
     const out = JSON.stringify({ s: msg.s, p, f: from });
-    return msg.s === 'ping' ? { back: out } : { all: out };
+    //  a ping is for the sender; a chat line goes to everyone *including* the
+    //  sender, who shows it when it comes back (as it did from the broker)
+    return msg.s === 'ping' ? { back: out } : msg.s === 'chat' ? { all: out, back: out } : { all: out };
   }
 
   //  a token bucket per player per kind

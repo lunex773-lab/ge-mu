@@ -2813,6 +2813,13 @@
     { coat: 0x1f4a4a, gear: 0x3d5f5c },   // teal
   ];
   const hashId = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) | 0; return Math.abs(h); };
+  //  the kit's colours come from the player's id; the room server hands out
+  //  ids, so our own avatar is re-dyed to match what everyone else sees
+  function rekit(mk, id) {
+    const K = mk.userData && mk.userData.kit; if (!K) return;
+    const U = UNIFORMS[hashId(id || 'x') % UNIFORMS.length];
+    K.coat.color.setHex(U.coat); K.gear.color.setHex(U.gear);
+  }
   function gearUp(mk, id) {
     const P = mk.userData;
     if (!P || P.geared) return mk;
@@ -2822,6 +2829,7 @@
     const U = UNIFORMS[hashId(id || 'x') % UNIFORMS.length];
     const coat  = new THREE.MeshStandardMaterial({ color: U.coat, roughness: 0.74, metalness: 0.06, flatShading: true });
     const gear  = new THREE.MeshStandardMaterial({ color: U.gear, roughness: 0.92, metalness: 0.04, flatShading: true });
+    P.kit = { coat, gear };
     const strap = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.82, metalness: 0.1 });
     const visorM = new THREE.MeshStandardMaterial({ color: 0x8fd0ff, roughness: 0.10, metalness: 0.9, emissive: 0x24506f });
     const box = (w, h, d, m) => keep(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m));
@@ -2965,6 +2973,7 @@
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
     BROKER: 'wss://broker.emqx.io:8084/mqtt',
   };
+  const SRV = { ws: null, tries: 0, everUp: false, timer: 0, retry: 0 };   // the room server's connection (connectServer)
   gearUp(monkey, MP.id);                 // kit out our own avatar
   monkeyPeds.forEach((m, k) => gearUp(m.group, 'mob' + k));   // mobs wear the same kit
   for (let k = 0; k < 10; k++) {         // reserve troop, woken during a rage
@@ -3091,8 +3100,12 @@
     applyBzbSnapshot(msg.b);
   }
   function onMqttMessage(t, buf) {
-    MP.rxBytes += buf.length; MP.rxMsgs++;
     let msg; try { msg = JSON.parse(buf.toString()); } catch (e) { return; }
+    onNet(t, msg, buf.length);
+  }
+  //  one message, whichever way it came (the room server or the broker)
+  function onNet(t, msg, bytes) {
+    MP.rxBytes += bytes; MP.rxMsgs++;
     if (!msg) return;
     if (t.slice(-5) === '/ping') {           // our own echo measures the round trip
       if (msg.id === MP.id) MP.rtt = Math.max(0, Math.round(performance.now() - msg.t));
@@ -3201,7 +3214,8 @@
     const rows = ['<div class="me">' + crown(kingId === MP.id) + escHtml(MP.name || '—') + ' (you) · ' + kills + '</div>'];
     for (const [pid, peer] of MP.peers) rows.push('<div>' + crown(kingId === pid) + escHtml(peer.name || '匿名') + ' · ' + (peer.kills || 0) + '</div>');
     netList.innerHTML = rows.join('');
-    setNet((MP.connected ? 'ONLINE' : 'SOLO') + ' · ' + (MP.peers.size + 1) + (MP.connected && MP.rtt ? ' · ' + MP.rtt + 'ms' : ''), !MP.connected);
+    const state = MP.connected ? 'ONLINE' : SRV.everUp ? (SRV.tries > 5 ? '接続が切れました' : 'RECONNECTING…') : 'SOLO';
+    setNet(state + ' · ' + (MP.peers.size + 1) + (MP.connected && MP.rtt ? ' · ' + MP.rtt + 'ms' : ''), !MP.connected);
   }
 
   function upsertPeer(s) {
@@ -3247,8 +3261,76 @@
     MP.peers.delete(id); recomputeKing(); recomputeHost();
   }
 
+  //  Where to meet the room, in order of preference:
+  //    1. the room server this page was served from (Cloudflare: /ws on the
+  //       same origin) — it names the players and checks what they say
+  //    2. the public MQTT broker, for a copy served from anywhere else
+  //    3. nobody: play alone
   function connectMP() {
     if (MP.started) return; MP.started = true; renderRoster();
+    setNet('CONNECTING…', true);
+    if (/^https?:$/.test(location.protocol)) connectServer(true);
+    else connectBroker();
+  }
+  //  The room server, behind the same interface the game already talks to
+  //  (on / subscribe / publish / end), so nothing else has to know which it is.
+  function connectServer(first) {
+    let ws;
+    try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws?room=' + encodeURIComponent(MP.room) + '&name=' + encodeURIComponent(MP.name || '')); }
+    catch (e) { if (first) connectBroker(); return; }
+    SRV.ws = ws; SRV.tries++;
+    const prefix = mtopic('');
+    const handlers = {};
+    const emit = (ev, a, b) => { for (const f of handlers[ev] || []) f(a, b); };
+    const client = {
+      server: true,
+      on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return client; },
+      subscribe() {},                                   // the room sends what concerns it
+      publish(topic, payload) {
+        if (ws.readyState !== 1) return;
+        let kind = topic.slice(prefix.length);
+        if (kind.slice(0, 6) === 'state/') kind = 'state';
+        if (kind === 'leave') return;                    // the room says it when the socket closes
+        const out = '{"s":' + JSON.stringify(kind) + ',"p":' + payload + '}';
+        MP.txMsgs++; MP.txBytes += out.length;
+        ws.send(out);
+      },
+      end() { try { ws.close(); } catch (e) {} },
+    };
+    //  a server that never answers is not there (a copy served from a plain
+    //  static host has no /ws): fall back to the broker, once
+    clearTimeout(SRV.timer);
+    if (first) SRV.timer = setTimeout(() => { if (!MP.connected && ws.readyState !== 1) { ws.onclose = null; try { ws.close(); } catch (e) {} connectBroker(); } }, 5000);
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.s === '_welcome') {
+        clearTimeout(SRV.timer);
+        const was = SRV.everUp;
+        MP.id = m.p.id; rekit(monkey, MP.id);            // the room decides who we are
+        MP.serverT0 = m.p.t - performance.now();
+        MP.client = client; MP.connected = true; SRV.everUp = true; SRV.tries = 0;
+        recomputeHost();
+        askGate(); publishState(true); renderRoster();
+        if (was) notify('再接続しました', 1800);
+        return;
+      }
+      onNet(m.s === 'state' ? prefix + 'state/' + m.f : prefix + m.s, m.p, ev.data.length);
+    };
+    ws.onclose = () => {
+      clearTimeout(SRV.timer);
+      if (!SRV.everUp) { if (first) connectBroker(); return; }   // never reached it: not a server page
+      MP.connected = false;
+      //  keep playing, and keep knocking: 1, 2, 4, 8 s … then every 15 s
+      const wait = Math.min(15000, 1000 * Math.pow(2, Math.min(4, SRV.tries)));
+      renderRosterSoon();
+      SRV.retry = setTimeout(() => connectServer(false), wait);
+    };
+    ws.onerror = () => {};
+    addEventListener('beforeunload', () => { try { ws.onclose = null; ws.close(); } catch (e) {} });
+  }
+  let rosterT = 0;
+  function renderRosterSoon() { clearTimeout(rosterT); rosterT = setTimeout(renderRoster, 50); }
+  function connectBroker() {
     if (typeof mqtt === 'undefined') { setNet('SOLO', true); return; }   // CDN blocked -> solo
     setNet('CONNECTING…', true);
     let client;

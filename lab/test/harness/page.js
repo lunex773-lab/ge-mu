@@ -151,7 +151,7 @@ async function openRoom() {
   const pages = new Set();
   const relay = (m) => { for (const pg of pages) pg.evaluate((mm) => window.__recv && window.__recv(mm), m).catch(() => {}); };
 
-  async function player({ room, id, nick, save, render, seed } = {}) {
+  async function player({ room, id, nick, save, render, seed, url } = {}) {
     const ctx = await browser.newContext({ viewport: { width: 480, height: 320 } });
     await ctx.route(ORIGIN + '/**', (route) => {
       const f = path.join(CACHE, new URL(route.request().url()).pathname.slice(1));
@@ -167,7 +167,9 @@ async function openRoom() {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.exposeFunction('__relay', relay);
-    await page.goto(ORIGIN + '/game.html', { timeout: 120000 });
+    //  url: the same page served from somewhere else — the room server under
+    //  wrangler dev, say — instead of the harness's own origin
+    await page.goto(url || ORIGIN + '/game.html', { timeout: 120000 });
     await page.waitForFunction(() => window.__t, null, { timeout: 60000 });
     if (!render) await page.evaluate(() => window.__t.noRender());
     pages.add(page);
