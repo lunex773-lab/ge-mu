@@ -4131,7 +4131,7 @@
                  '  share ' + f.share + '/s  summon in ' + f.summon + 's' +
                  (f.panic ? '  PANIC' : '') + (f.thrown ? '  THROWN' : '') + '\n'; })(); })() : '') +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
-      '  NIGHT ' + nightF.toFixed(2);
+      '  NIGHT ' + nightF.toFixed(2) + '\n' + (wState === WS.NORMAL ? bzbDebugText() : '');
   }
   ui.reloadBtn.addEventListener('touchstart', (e) => { if (editLayout) return; e.preventDefault(); startReload(); }, { passive: false });
   ui.reloadBtn.addEventListener('click', () => { if (editLayout) return; startReload(); });
@@ -4297,6 +4297,7 @@
     if (ev.code === 'KeyQ' && !ev.repeat) toggleCloak();      // stealth cloak
     if (ev.code === 'KeyR' && !ev.repeat) startReload();
     if (ev.code === 'F3' && !ev.repeat) { dbgOn = !dbgOn; ui.dbg.classList.toggle('on', dbgOn); ev.preventDefault(); }
+    if (ev.code === 'F4' && !ev.repeat && dbgOn) { bzbExportReplay(); ev.preventDefault(); }
   });
   addEventListener('keyup', (ev) => { if (typing()) return; keys[ev.code] = false; });
 
@@ -13864,7 +13865,10 @@
         }
       }
     }
-    if (ai.thinkAcc >= 0.1 && ai.view && !sensed) {
+    //  …unless the frame rate is so low that sensing is due every frame, when
+    //  a decision that is overdue goes ahead anyway: a slow phone must not
+    //  get a boss that has stopped thinking
+    if (ai.thinkAcc >= 0.1 && ai.view && (!sensed || ai.thinkAcc >= 0.2)) {
       ai.thinkAcc = 0;
       const t0 = performance.now();
       ai.core.step(ai.toChannels(ai.view, ai.ch), 0.1);
@@ -13877,6 +13881,7 @@
         respond: (k) => ai.resp[k] || null });
       ai.dec = dec;
       bzbApply(ai, b, dec);
+      bzbRecord(ai, dec);
       ai.thinkUs += (performance.now() - t0) * 1000; ai.thinks++;
     }
     if (ai.adaptAcc >= 1) { ai.fair.adapt(cityT, ai.adaptAcc); ai.adaptAcc = 0; }
@@ -14119,6 +14124,72 @@
       level: ai ? +ai.fair.level.toFixed(3) : null, target: ai && ai.sensor.target ? bzbNameOf(ai.sensor.target.id) : null,
       thinkUs: ai && ai.thinks ? Math.round(ai.thinkUs / ai.thinks) : 0,
     };
+  }
+
+
+  // ---- §30: what he is thinking, on the F3 overlay ---------------------------
+  const BZ_BAR = (x) => '█'.repeat(Math.max(0, Math.min(16, Math.round(x * 16)))).padEnd(16, '·');
+  const BZ_CLS = [['SENSORY', 'SEN'], ['INTEGRATION', 'INT'], ['MEMORY_RELATED', 'MEM'], ['DECISION_RELATED', 'DEC'], ['MOTOR', 'MOT'], ['MODULATORY', 'MOD']];
+  function bzbDebugText() {
+    if (!bzb.live) return '';
+    const ai = bzbAI, own = !!(ai && ai.body), f2 = (x) => (x >= 0 ? '' : '-') + Math.abs(x).toFixed(2).replace(/^0/, '');
+    let s = '── BOSS NEURAL DEBUG ─────────────\n' +
+      'BZB   ' + Math.round(bzb.hp) + '/' + Math.round(bzb.hpMax) + '  ' + bzb.mode + (bzb.atkKind ? ' ' + bzb.atkKind + '/' + bzb.atkPhase : '') +
+      '  ' + Math.round(bzb.tdist) + 'm  ' + (own ? 'OWN' : 'net') + (bzb.slain ? '  SLAIN' : '') + '\n';
+    if (!own || !ai.view) return s;
+    const v = ai.view, d = ai.dec, r = d && d.reason;
+    s += 'SEES  ' + (ai.sensor.target ? bzbNameOf(ai.sensor.target.id) : '—') + '  vis ' + f2(v.get('player_visible')) + ' conf ' + f2(v.get('player_confidence')) +
+      '  threat ' + f2(v.get('threat')) + '\n';
+    s += 'MIND  ADAPTIVE ' + f2(ai.fair.level) + '  react ' + ai.fair.mind.reaction.toFixed(2) + 's  gate ' + f2(ai.fair.mind.prediction_threshold) + '\n';
+    if (ai.pm && ai.pm.lastPred) {
+      const pr = ai.pm.lastPred, top = Object.entries(pr.probs).sort((a, b) => b[1] - a[1]).slice(0, 4);
+      s += 'PRED  ' + top.map(([k, x]) => k + ' ' + f2(x)).join('  ') + '  conf ' + f2(pr.confidence) + (ai.gated ? ' USED' : ' held') + '\n';
+      s += 'ANS   ' + BZ_KINDS.map((k) => { const q = ai.pm.predictResponse(k); return k + ':' + (q.evidence < 1 ? '—' : q.best + ' ' + f2(q.confidence)) + (ai.resp[k] ? '*' : ''); }).join('  ') + '\n';
+    }
+    if (r) {
+      s += 'ACT   ' + String(r.selected || d.action).toUpperCase() + (d.attack ? ' (' + d.attack + ')' : '') + (r.leashed ? '  LEASHED' : '') + '\n';
+      if (r.candidates) for (const c of r.candidates) {
+        s += '  ' + c.action.padEnd(10) + ' ' + f2(c.utility) + '  rule ' + f2(c.rule) + ' nn ' + f2(c.neural) + ' pred ' + f2(c.prediction) +
+          ' pos ' + f2(c.position) + ' thr ' + f2(c.threat) + ' risk ' + f2(c.risk) + (c.commit ? ' +keep' : '') + '\n';
+      }
+    }
+    const a = ai.core.activity();
+    s += 'NEUR  ' + BZ_CLS.slice(0, 3).map(([c, n]) => n + ' ' + BZ_BAR(a[c] * 3)).join(' ') + '\n';
+    s += '      ' + BZ_CLS.slice(3).map(([c, n]) => n + ' ' + BZ_BAR(a[c] * 3)).join(' ') + '\n';
+    const ep = ai.memory.episodic;
+    s += 'MEM   landed ' + ep.count_('boss_attack_landed', 60, cityT) + '  missed ' + ep.count_('boss_attack_failed', 60, cityT) +
+      '  countered ' + ep.count_('player_countered', 60, cityT) + '  (60s)\n';
+    s += 'SAFE  ' + (d && d.faulted ? 'FSM — ' + ai.brain.lastError : 'brain') + '  faults ' + ai.brain.faults +
+      '  ' + (ai.thinks ? Math.round(ai.thinkUs / ai.thinks) : 0) + 'µs/decision  F4: save replay\n';
+    return s;
+  }
+
+  // ---- §31: the last minute of decisions, kept, and saved on request --------
+  //  Compact on purpose: the WorldState as its raw floats, the decision, its
+  //  three best alternatives, the prediction, and both health bars. 600
+  //  entries is a minute at 10 Hz and well under a megabyte.
+  const BZ_REC = 600;
+  const bzbRec = [];
+  let bzbRecHead = 0;
+  function bzbRecord(ai, d) {
+    const r = { t: +cityT.toFixed(2), ws: Array.from(ai.view.v, (x) => +x.toFixed(3)), action: d.action, attack: d.attack || null,
+      cand: d.reason && d.reason.candidates ? d.reason.candidates.map((c) => [c.action, c.utility]) : null,
+      pred: ai.pm && ai.pm.lastPred ? [ai.pm.lastPred.best, +ai.pm.lastPred.confidence.toFixed(3), !!ai.gated] : null,
+      bossHp: Math.round(bzb.hp), playerHp: Math.round(hp), faulted: !!d.faulted, lvl: +ai.fair.level.toFixed(3) };
+    if (bzbRec.length < BZ_REC) bzbRec.push(r); else { bzbRec[bzbRecHead] = r; bzbRecHead = (bzbRecHead + 1) % BZ_REC; }
+  }
+  function bzbExportReplay() {
+    if (!bzbRec.length) { notify('記録がまだありません', 1800); return; }
+    const recs = bzbRec.slice(bzbRecHead).concat(bzbRec.slice(0, bzbRecHead));
+    const out = { v: 1, what: 'Beelzebub decisions, oldest first (spec 31)', fields: NC('worldstate.js').FIELDS.map((f) => f[0]),
+      actions: NC('neural.js').ACTIONS, records: recs };
+    try {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], { type: 'application/json' }));
+      a.download = 'beelzebub-replay-' + Date.now() + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      notify('リプレイを保存しました（' + recs.length + '件）', 2200);
+    } catch (e) {}
   }
 
   //  built with the rest of the city, so the tear opening never waits on it:

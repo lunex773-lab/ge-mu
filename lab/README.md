@@ -30,6 +30,20 @@ node --expose-gc lab/bench/phase3.bench.js   # センサーのコスト（プレ
 ```sh
 node lab/test/phase3.game.test.js     # アダプタが本物のゲームを「読むだけ」であることの検証
 node lab/test/gatesync.game.test.js   # ルーム全員が同じゲートを見ること（約3分）
+node lab/test/phase7.game.test.js     # ヴェルゼブブ: 出現・思考・両プレイヤーへの攻撃・被弾・死亡・F3/F4（約3分）
+```
+
+### ゲームの中で彼の頭の中を見る（§30, §31）
+
+- **F3** の開発用表示に **BOSS NEURAL DEBUG** が出ます（彼を動かしている端末のみ）:
+  見ている相手と確信度、ADAPTIVE の位置、次の行動の予測（と、それを使ったか）、攻撃ごとの「あなたの避け方」、
+  選んだ行動と上位3候補の内訳（ルール・Neural Core・予測・位置・脅威・危険）、ニューロン群の活動量、FSM への切り替えの有無。
+- **F3 表示中に F4** で、直近1分間の判断を JSON で保存します。読み方:
+
+```sh
+node lab/tools/replay.js beelzebub-replay-XXXX.json            # 行動が変わった所だけの時系列
+node lab/tools/replay.js beelzebub-replay-XXXX.json --attacks  # 全ての攻撃と、そのとき信じていたこと
+node lab/tools/replay.js beelzebub-replay-XXXX.json --at 123.4 # その瞬間の判断を全部
 ```
 
 `lab/test/harness/page.js` が `lab/.cache/game.html` を生成します（three.js は初回に `npm pack` で取得、
@@ -57,6 +71,8 @@ lab/sim/fight.js           1戦ぶん: 全スタックを本番と同じ周期�
 lab/adapter/game_adapter.js  ゲーム本体を「読むだけ」の唯一の窓口          (§4 game_adapter)
 lab/test/                  テスト                                          (§33)
 lab/test/harness/          本物のゲームを動かすテスト基盤
+lab/tools/replay.js        ゲームから保存した判断の記録を読む                              (§31)
+lab/inline.js              lab/ の脳を index.html に書き込む（D1）。--check で差分検査
 lab/bench/                 性能と戦略の実測                                (§8, §28, §33)
 ```
 

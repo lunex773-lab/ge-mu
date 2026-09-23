@@ -277,7 +277,7 @@ index.html の区画       ← 生成されたコピー（マーカーで囲っ�
 | 5 | Player Model（行動分類・n-gram・予測） | なし | 予測精度 | 完了 |
 | 6 | Tactical Brain / Action Selector | なし | Ablation A/B/C/D | 完了（戦闘シムを前倒しで作成） |
 | 7 | 新規モブの身体・アニメ・音 | **ここから追加のみ** | スクリーンショット | 完了（ヴェルゼブブ。実ゲームで2人テスト13/13） |
-| 8 | Debug UI / Replay | 追加のみ | §30 の可視化 |
+| 8 | Debug UI / Replay | 追加のみ | §30 の可視化 | 完了（F3 表示・F4 保存・lab/tools/replay.js） |
 | 9 | Boss AI Lab（ヘッドレス戦闘シム） | なし | 勝率・生存時間 |
 | 10 | 強化学習（オフライン） | なし | Ablation E |
 | 11 | 本編統合・最適化 | 統合 | FPS影響実測 |

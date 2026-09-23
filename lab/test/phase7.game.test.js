@@ -61,6 +61,23 @@ async function until(P, src, secs) {
     const hurtB = await until(B, 'hp < HP_MAX', 45);
     check('his blade hurts a player who does not own him (each judges it for itself)', hurtB, 'hp now ' + await ev(B, 'Math.round(hp)'));
 
+    // ---- §30/§31: the overlay shows his mind; the replay can be saved ------
+    await ev(A, 'dbgOn = true; dbgAcc = 1; updateHud(0.3);');
+    const dbgText = await ev(A, "document.getElementById('dbg').textContent");
+    check('§30: F3 shows what he sees, predicts and chose, and why',
+      /BOSS NEURAL DEBUG/.test(dbgText) && /SEES/.test(dbgText) && /ACT/.test(dbgText) && /NEUR/.test(dbgText) && /rule/.test(dbgText),
+      dbgText.split('\n').filter((l) => /BZB|SEES|MIND|PRED|ACT/.test(l)).join(' | '));
+    const [dl] = await Promise.all([A.page.waitForEvent('download', { timeout: 10000 }).catch(() => null), ev(A, 'bzbExportReplay()')]);
+    let rep = null;
+    if (dl) { const fp = await dl.path(); rep = require('../tools/replay.js').load(fp); require('fs').copyFileSync(fp, require('path').join(require('../test/harness/page.js').CACHE, 'last-replay.json')); }
+    //  two headless pages and the relay run the game at a few frames a second,
+    //  which is the point: he must still decide at close to 10 Hz of game time
+    const rate = rep && rep.records.length > 2 ? (rep.records.length - 1) / (rep.records[rep.records.length - 1].t - rep.records[0].t) : 0;
+    check('§31: F4 saves the last minute of decisions, and the lab can read it back',
+      rep && rep.records.length > 20 && rep.fields.length > 30 && rep.records.every((q) => q.action),
+      rep ? rep.records.length + ' decisions; the last: ' + require('../tools/replay.js').line(rep, rep.records[rep.records.length - 1]).trim() : 'no download');
+    check('a slow frame rate does not starve his thinking', rate > 6, rate.toFixed(1) + ' decisions a second at the harness frame rate');
+
     // ---- shots hurt him, from either side --------------------------------
     const h0 = await ev(A, 'bzb.hp');
     await ev(A, 'bzbHurt(DMG, p.x, p.z, MP.id);');
