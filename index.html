@@ -13880,6 +13880,12 @@
       ai.thinkUs += (performance.now() - t0) * 1000; ai.thinks++;
     }
     if (ai.adaptAcc >= 1) { ai.fair.adapt(cityT, ai.adaptAcc); ai.adaptAcc = 0; }
+    //  B11: left alone, the guardian mends. Nobody to fight for 20 s and he
+    //  recovers 4% a second — otherwise dying and walking back would win
+    //  any fight by attrition, which is not a way of learning him.
+    if (ai.view && ai.view.get('has_target') > 0.5 && ai.view.get('player_confidence') > 0.1) ai.aloneT = 0;
+    else ai.aloneT = (ai.aloneT || 0) + dt;
+    if (ai.aloneT > 20 && b.hp < b.hpMax && b.alive) b.hp = Math.min(b.hpMax, b.hp + b.hpMax * 0.04 * dt);
     if (ai.saveAcc >= 30) { ai.saveAcc = 0; bzbSaveMind(); }
     // what everyone else is told, and what the body looks like
     bzb.x = b.x; bzb.z = b.z; bzb.alt = b.alt; bzb.hd = b.hd; bzb.vx = b.vx; bzb.vz = b.vz;
