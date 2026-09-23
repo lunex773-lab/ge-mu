@@ -13657,7 +13657,7 @@
   //  The brain is lab/ (inlined above): Sensor → Fairness → Player Model →
   //  Neural Core → Tactical Brain, behind SafeBrain, which drops to the plain
   //  FSM if anything in it throws, goes NaN, or runs over budget (§32).
-  const BZ_HP = 4000;                  // per player, roughly; Phase 9 tunes it
+  const BZ_HP = 4000;                  // per player; Phase 9 chose it (lab/bench/balance.js, B8)
   const BZ_VIEW = 260;                 // m — past this he is not drawn
   const BZ_SAVE = 'contour.bzb';       // { seed, slain } — B7 survives a reload
   const BZ_MIND = 'contour.bzb.mind';  // what he has learned about the people he has fought (D4)
