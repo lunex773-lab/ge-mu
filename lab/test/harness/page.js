@@ -85,6 +85,9 @@ const HOOK = `
     monkeyPeds, dogs,
     creditMyKill, openGate, saveGate, publishGate, start,
     noRender() { renderer.render = () => {}; },
+    //  a direct eval inside the game's closure: tests can read and set any of
+    //  its variables without the game shipping a single debug hook
+    ev(src) { return eval(src); },
   };
   document.getElementById('loading').remove();
   requestAnimationFrame(frame);

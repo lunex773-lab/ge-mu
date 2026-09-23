@@ -13,6 +13,9 @@
 //
 //    world.blocked(x, z, r)   is a body of radius r standing here inside something?
 //    world.ground(x, z)       the height of the floor
+//    world.roof(x, z)         optional: the top of whatever stands here (0 in the
+//                             street). Flight climbs over it rather than through it,
+//                             and never comes down onto it.
 //
 //  Attack numbers come from BEELZEBUB.md B2. Every wind-up goes through the
 //  FairnessController's telegraph() so no difficulty can make one unreadable.
@@ -64,6 +67,7 @@ class BossBody {
     this.cd = {}; for (const k of ATTACK_NAMES) this.cd[k] = 0;
     this.flyT = 0; this.flyCd = 0; this.guardT = 0;
     this.goal = null;              // { x, z, speed (0..1), fly }
+    this.stuckT = 0; this.flyHold = 0;  // wings are the way out of a dead end
     this.face = null;              // { x, z } to turn toward
     this.stats = { swings: 0, landed: 0, byKind: {} };
   }
@@ -112,7 +116,8 @@ class BossBody {
     return true;
   }
   takeOff() { if (!this.busy && this.flyCd <= 0 && this.alt < 0.5) { this.mode = 'fly'; this.flyT = 0; return true; } return false; }
-  land() { if (this.mode === 'fly') this.mode = 'ground'; }
+  land() { if (this.mode === 'fly' && this.flyHold <= 0 && this.roofAt(this.x, this.z) <= 0) this.mode = 'ground'; }
+  roofAt(x, z) { return this.world.roof ? this.world.roof(x, z) : 0; }
 
   //  A hit on the body. From the front while guarding, it is blunted.
   hurt(dmg, fromX, fromZ) {
@@ -194,12 +199,20 @@ class BossBody {
     } else {
       // walking or flying toward the goal
       const flying = this.mode === 'fly';
+      if (this.flyHold > 0) this.flyHold -= dt;
       if (flying) {
         this.flyT += dt;
-        this.alt = Math.min(BODY.flyAlt, this.alt + BODY.climb * dt);
-        if (this.flyT > BODY.flyMax || (this.goal && !this.goal.fly && this.alt > 0)) {
-          this.mode = 'ground'; this.flyCd = BODY.flyCd;
+        //  high enough for whatever is under it and just ahead, and no higher
+        let roof = this.roofAt(this.x, this.z);
+        if (this.goal) {
+          const gx = this.goal.x - this.x, gz = this.goal.z - this.z, gd = Math.hypot(gx, gz) || 1;
+          roof = Math.max(roof, this.roofAt(this.x + gx / gd * 6, this.z + gz / gd * 6));
         }
+        const want = Math.max(BODY.flyAlt, roof + 3);
+        this.alt += Math.max(-BODY.climb * dt, Math.min(BODY.climb * dt, want - this.alt));
+        const over = this.roofAt(this.x, this.z) > 0;
+        const done = this.flyT > BODY.flyMax || (this.goal && !this.goal.fly && this.flyHold <= 0);
+        if (done && !over) { this.mode = 'ground'; this.flyCd = BODY.flyCd; }
       } else if (this.alt > 0) this.alt = Math.max(0, this.alt - BODY.climb * dt);
       if (this.goal) {
         const dx = this.goal.x - this.x, dz = this.goal.z - this.z, d = Math.hypot(dx, dz);
@@ -210,8 +223,17 @@ class BossBody {
         }
       } else if (this.face) this.turnToward(this.face.x, this.face.z, dt);
       const nx = this.x + tvx * dt, nz = this.z + tvz * dt;
-      if (this.mode === 'fly' && this.alt > 3) { this.x = nx; this.z = nz; }
-      else this.steer(nx, nz, tvx * dt, tvz * dt);
+      if (this.mode === 'fly') {
+        // over the top, but only once it is actually above it
+        if (this.alt > this.roofAt(nx, nz) + 1 && this.alt > 3) { this.x = nx; this.z = nz; }
+      } else {
+        const bx = this.x, bz = this.z;
+        this.steer(nx, nz, tvx * dt, tvz * dt);
+        //  walking into a wall it cannot slide round: take to the air
+        const want = Math.hypot(tvx, tvz) * dt, got = Math.hypot(this.x - bx, this.z - bz);
+        this.stuckT = want > 0.05 && got < want * 0.3 ? this.stuckT + dt : Math.max(0, this.stuckT - dt);
+        if (this.stuckT > 0.8 && this.flyCd <= 0 && this.alt < 0.5) { this.stuckT = 0; this.mode = 'fly'; this.flyT = 0; this.flyHold = 2.5; }
+      }
     }
     this.vx = (this.x - (this.px === undefined ? this.x : this.px)) / Math.max(dt, 1e-3);
     this.vz = (this.z - (this.pz === undefined ? this.z : this.pz)) / Math.max(dt, 1e-3);

@@ -283,8 +283,10 @@ test('§40: meeting the same dodger again, what it remembers makes it land more 
 });
 
 test('§40 control: a player with no habits gives it nothing to remember', () => {
+  //  (RANDOM dodges in any direction at all; at 100 campaigns the paired
+  //  difference is +0.3 [-2.8, +3.2]. 30 campaigns carry about +/-5.5 of noise.)
   let sum = 0;
-  const N = 20, cfg = { neural: false, difficulty: 'HARD', maxT: 120, graph };
+  const N = 30, cfg = { neural: false, difficulty: 'HARD', maxT: 120, graph };
   for (let s = 1; s <= N; s++) {
     let profile = null;
     for (let f = 1; f <= 4; f++) profile = runFight(Object.assign({ bot: 'RANDOM', seed: s * 7919 + f * 104729, profile }, cfg)).profile;
@@ -293,7 +295,8 @@ test('§40 control: a player with no habits gives it nothing to remember', () =>
     const b = runFight(Object.assign({ bot: 'RANDOM', seed, profile }, cfg));
     sum += (b.swings ? b.landed / b.swings : 0) - (a.swings ? a.landed / a.swings : 0);
   }
-  assert.ok(Math.abs(sum / N) < 0.04, 'a phantom effect of ' + (sum / N).toFixed(3));
+  assert.ok(Math.abs(sum / N) < 0.055, 'a phantom effect of ' + (sum / N).toFixed(3));
+  results.push('         (control: ' + (100 * sum / N >= 0 ? '+' : '') + (100 * sum / N).toFixed(1) + ' points)');
 });
 
 test('cost: a tactical decision is well inside a phone\'s budget', () => {

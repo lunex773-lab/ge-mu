@@ -10,7 +10,12 @@
 //    RANGED      40-60 m, backs off whenever the boss comes on
 //    DODGER      12-20 m, dodges nearly everything — and nearly always to the
 //                same side. That habit is the thing a player model can learn.
-//    RANDOM      no plan at all; new intention every second or so
+//    RANDOM      no plan at all; new intention every second or so, and a dodge
+//                in any direction whatever — even toward the blade. It is the
+//                control for "does remembering help": a player with nothing
+//                consistent about them gives memory nothing to find. (It used
+//                to dodge away from the reap like everyone else, and memory
+//                duly found that: +4.8 points of hit rate, [+1.6, +7.8].)
 //    ADAPTIVE    tries the other styles and keeps whichever is working, the
 //                way a person does
 //
@@ -130,6 +135,12 @@ class PlayerBot {
   //  in the boss's frame: +1 is the boss's right.
   dodge(kind, nx, nz) {
     const st = this.style;
+    if (this.type === 'RANDOM') {
+      const a = this.rng.next() * Math.PI * 2;
+      this.ddx = Math.sin(a); this.ddz = Math.cos(a); this.dodgeT = DODGE_T;
+      if (this.ddx * nz - this.ddz * nx > 0) this.dodges.right++; else this.dodges.left++;
+      return;
+    }
     let side = this.rng.next() < 0.5 ? -1 : 1;
     if (st.habit && this.rng.next() < st.habit) side = st.side;
     const rx = nz, rz = -nx;                                  // the boss's right (see step)

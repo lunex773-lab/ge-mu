@@ -54,6 +54,11 @@ class Arena {
     return false;
   }
   ground() { return 0; }
+  roof(x, z) {
+    let h = 0;
+    for (const b of this.boxes) if (x > b[0] - 1 && x < b[1] + 1 && z > b[4] - 1 && z < b[5] + 1 && b[3] > h) h = b[3];
+    return h;
+  }
   //  the Sensor Layer's world
   solid(x, y, z) {
     for (const b of this.boxes) if (x > b[0] && x < b[1] && z > b[4] && z < b[5] && y < b[3]) return true;

@@ -460,6 +460,58 @@ function sensoryToMotorReach(g) {
   return +(hit / motor.length).toFixed(3);
 }
 
+//  ======================================================================
+//  Packing — so the game can carry a built graph instead of building one
+//  ======================================================================
+//  Building and compressing the mock takes ~75 ms here and several times
+//  that on a phone: a stall, at the moment the boss appears, that D8 does
+//  not allow. So lab/inline.js builds it once and embeds it in index.html
+//  as base64: node classes, regions and transmitters as short strings,
+//  edges as Uint16 endpoints and Float32 weights. Unpacking is a copy.
+const B64 = typeof Buffer !== 'undefined'
+  ? { enc: (u8) => Buffer.from(u8).toString('base64'), dec: (s) => new Uint8Array(Buffer.from(s, 'base64')) }
+  : { enc: (u8) => { let t = ''; for (let i = 0; i < u8.length; i++) t += String.fromCharCode(u8[i]); return btoa(t); },
+      dec: (s) => { const t = atob(s), u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u; } };
+const REGION_NAMES = () => REGIONS.map((r) => r.name);
+function packGraph(g) {
+  if (g.n > 65535) throw new Error('packGraph: more than 65535 nodes');
+  const rn = REGION_NAMES(), nn = Object.keys(NT);
+  const src = new Uint16Array(g.m), dst = new Uint16Array(g.m), w = new Float32Array(g.m), ty = new Uint8Array(g.m);
+  const types = [];
+  g.edges.forEach((e, i) => {
+    src[i] = e.src; dst[i] = e.dst; w[i] = e.w;
+    let t = types.indexOf(e.type); if (t < 0) { t = types.length; types.push(e.type); } ty[i] = t;
+  });
+  const code = (list, x) => String.fromCharCode(65 + list.indexOf(x));
+  return {
+    v: 1, n: g.n, m: g.m, types,
+    cls: g.nodes.map((nd) => code(CLASS_LIST, nd.cls)).join(''),
+    region: g.nodes.map((nd) => code(rn, nd.region)).join(''),
+    nt: g.nodes.map((nd) => code(nn, nd.nt)).join(''),
+    src: B64.enc(new Uint8Array(src.buffer)), dst: B64.enc(new Uint8Array(dst.buffer)),
+    w: B64.enc(new Uint8Array(w.buffer)), ty: B64.enc(ty),
+    meta: g.meta || {},
+  };
+}
+function unpackGraph(p) {
+  if (!p || p.v !== 1) throw new Error('unpackGraph: not a packed graph');
+  const rn = REGION_NAMES(), nn = Object.keys(NT);
+  const u16 = (s) => { const b = B64.dec(s); return new Uint16Array(b.buffer, b.byteOffset, b.byteLength / 2); };
+  const f32 = (s) => { const b = B64.dec(s); const c = new Uint8Array(b); return new Float32Array(c.buffer, 0, c.byteLength / 4); };
+  const src = u16(p.src), dst = u16(p.dst), w = f32(p.w), ty = B64.dec(p.ty);
+  const nodes = [];
+  for (let i = 0; i < p.n; i++) {
+    const nt = nn[p.nt.charCodeAt(i) - 65];
+    const reg = REGIONS[p.region.charCodeAt(i) - 65];
+    nodes.push({ id: i, region: reg.name, depth: reg.depth,
+                 cls: CLASS_LIST[p.cls.charCodeAt(i) - 65], nt, sign: NT[nt].sign, meta: null });
+  }
+  const edges = [];
+  for (let i = 0; i < p.m; i++) edges.push({ src: src[i], dst: dst[i], w: w[i], type: p.types[ty[i]], conf: 1 });
+  return new Graph(nodes, edges, p.meta);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { CLASS, CLASS_LIST, NT, NT_MIX, REGIONS, MAX_DEPTH, Graph, buildMockConnectome, analyse, sensoryToMotorReach };
+  module.exports = { CLASS, CLASS_LIST, NT, NT_MIX, REGIONS, MAX_DEPTH, Graph, buildMockConnectome, analyse, sensoryToMotorReach,
+                     packGraph, unpackGraph };
 }
