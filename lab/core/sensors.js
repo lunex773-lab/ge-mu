@@ -304,7 +304,8 @@ class SensorLayer {
       const fresh = t - tr.seenT < o.memory;                 // velocity is only worth anything while fresh
       const vx = fresh ? tr.vx : 0, vz = fresh ? tr.vz : 0, vy = fresh ? tr.vy : 0;
       const radial = vx * nx + vz * nz;
-      const lateral = Math.abs(vx * nz - vz * nx);
+      // the boss looks along n; its right is (-nz, nx) in this Y-up world
+      const lateral = vz * nx - vx * nz;
       v[F.has_target] = 1;
       v[F.player_distance] = dist;
       v[F.player_bearing] = -a;              // atan2(dx,dz) grows to the left; + is to its right

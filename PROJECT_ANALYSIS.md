@@ -274,7 +274,7 @@ index.html の区画       ← 生成されたコピー（マーカーで囲っ�
 | 2 | Neural Core（活性・抑制・減衰・再帰） | なし | NaN耐性、ノード数別実測表 | 完了 |
 | 3 | WorldState 境界 / Sensor 詰め替え | なし（読むだけ） | 既存AIが変わらないこと | 完了（下記） |
 | 4 | **FairnessController（前倒し）** | なし | 難易度別の挙動 | 完了 |
-| 5 | Player Model（行動分類・n-gram・予測） | なし | 予測精度 |
+| 5 | Player Model（行動分類・n-gram・予測） | なし | 予測精度 | 完了 |
 | 6 | Tactical Brain / Action Selector | なし | Ablation A/B/C/D |
 | 7 | 新規モブの身体・アニメ・音 | **ここから追加のみ** | スクリーンショット |
 | 8 | Debug UI / Replay | 追加のみ | §30 の可視化 |

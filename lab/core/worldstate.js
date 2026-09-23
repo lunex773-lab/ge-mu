@@ -38,7 +38,7 @@ const FIELDS = [
   ['player_height_diff',    -60,   60, 'm',    'player', 'player above (+) or below the boss'],
   ['player_speed',            0,   30, 'm/s',  'player', 'estimated from seen positions'],
   ['player_radial_speed',   -30,   30, 'm/s',  'player', '+ moving away from the boss'],
-  ['player_lateral_speed',    0,   30, 'm/s',  'player', 'across the line to the boss'],
+  ['player_lateral_speed',  -30,   30, 'm/s',  'player', 'across the line to the boss; + toward the boss\'s right'],
   ['player_vertical_speed', -30,   30, 'm/s',  'player', 'jumping / falling'],
   ['player_health',           0,    1, 'frac', 'player', 'as the HP bar over their head shows it'],
   ['player_visible',          0,    1, 'frac', 'player', 'seen this tick; a cloak only shows up close, and faintly'],

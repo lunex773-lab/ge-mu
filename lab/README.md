@@ -13,6 +13,7 @@ node lab/test/phase1.test.js          # Phase 1: Mock Connectome / 圧縮
 node lab/test/phase2.test.js          # Phase 2: Neural Core
 node lab/test/phase3.test.js          # Phase 3: WorldState / Sensor Layer / Game Adapter
 node lab/test/phase4.test.js          # Phase 4: FairnessController
+node lab/test/phase5.test.js          # Phase 5: Player Model / Memory
 node lab/bench/phase1.bench.js        # ノード数別の実測と戦略比較
 node lab/bench/phase2.bench.js        # Neural Core のノード数別コスト
 node --expose-gc lab/bench/phase3.bench.js   # センサーのコスト（プレイヤー数別）
@@ -42,6 +43,8 @@ lab/core/neural.js         Neural Core（漏れ積分・抑制・再帰・調節
 lab/core/worldstate.js     WorldState — ゲームとAIの境界。スキーマと正規化 (§12)
 lab/core/sensors.js        Sensor Layer — 観測 → WorldState。信念を持つ     (§11, §17)
 lab/core/fairness.js       反応遅延・先読みの閾値・連撃防止・難易度        (§17, §18)
+lab/core/memory.js         作業記憶（直近30秒）とエピソード記憶              (§19)
+lab/core/player_model.js   行動の分類・n-gram・予測・パターン・プロファイル  (§13–§15)
 lab/adapter/game_adapter.js  ゲーム本体を「読むだけ」の唯一の窓口          (§4 game_adapter)
 lab/test/                  テスト                                          (§33)
 lab/test/harness/          本物のゲームを動かすテスト基盤
@@ -95,3 +98,17 @@ index.html の変数 ──▶ game_adapter ──▶ 観測(obs) ──▶ Sens
 - どの難易度でも**予備動作は 0.40 秒未満になりません**。
 - ADAPTIVE は EASY〜HARD の間を動きます（NIGHTMARE には自動で上がりません）。プレイヤーが一方的に勝っていれば読みが鋭くなり、
   倒され続けていれば鈍くなります。互角なら動きません。落ち着いた位置は保存されます（D4）。
+
+### Phase 5 のプレイヤーモデル（§13–§15, §19）
+
+ボスが見聞きできたこと（WorldState）だけから、プレイヤーの行動を10種類に分類します:
+攻撃・左/右へのダッジ・接近・後退・左/右への横移動・隠れる・ジャンプ・待機（左右はボスから見た向き）。
+スキルと回復はこのゲームに無い（透明化は「隠れる」としてしか観測できない）ので、宣言だけしてあります。
+
+- **n-gram**（直前2つ → 直前1つ → 「この距離でこの人は何をするか」の順に後退）で次の行動を予測します。
+- **確信度** = 最有力の確率 × 証拠の量。癖の無いプレイヤーは確信度が低いままで、どの難易度でも先読みされません
+  （実測: 完全ランダムのプレイヤーに対して、NIGHTMARE でも先読みが発動した割合 0.0%）。
+- **70%の癖があるプレイヤー**に対する予測精度は約 0.72（理論上の上限付近）。
+- **忘れ方は難易度の記憶長で決まります。** 癖を変えたプレイヤーに追いつくまで: EASY 20周 / NORMAL 48周 / HARD 96周 / NIGHTMARE 141周。
+  高難易度ほど安定した癖をよく読みますが、癖を切り替えられると追いつくのが遅い — これが「学習すれば攻略できる」の一つの形です。
+- プロファイルはプレイヤー名ごとに端末内へ保存（最大8人、D4・D7）。5000行動分でも 16KB 未満です。
