@@ -1,0 +1,26 @@
+{
+  // CONTOUR on Cloudflare: one Worker serves the game (index.html, as a
+  // static asset) and routes /ws to a GameRoom Durable Object per room.
+  // See SETUP.md for creating the account and deploying.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "contour",
+  "main": "server/worker.js",
+  "compatibility_date": "2026-09-01",
+  // The game stays one file at the root of the repository. Before `wrangler
+  // dev` or `wrangler deploy`, server/build.js copies it into dist/public —
+  // the only thing that is published — so nothing else in the repository
+  // (the server's source, the lab, the docs) ever reaches the web.
+  "build": { "command": "node server/build.js", "watch_dir": "server" },
+  "assets": { "directory": "dist/public" },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "GameRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  "vars": {
+    // where a new room is created: near the players (best effort)
+    "LOCATION_HINT": "apac",
+    // other pages allowed to connect (comma separated), e.g. a GitHub Pages copy
+    "ALLOWED_ORIGINS": ""
+  },
+  "observability": { "enabled": true }
+}

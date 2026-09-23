@@ -1,0 +1,13 @@
+{
+  "name": "contour",
+  "private": true,
+  "description": "CONTOUR — 市街戦. The game is index.html; this is only for its Cloudflare server.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test:server": "node server/test/room.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.137.0"
+  }
+}

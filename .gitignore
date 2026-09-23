@@ -1,2 +1,6 @@
 lab/data/
 lab/.cache/
+node_modules/
+.wrangler/
+.dev.vars
+dist/
