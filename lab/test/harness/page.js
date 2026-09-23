@@ -129,7 +129,9 @@ function labBundle() {
 
 function build() {
   ensureThree();
-  let s = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  //  LAB_GAME=<file> runs another copy of the game (an A/B comparison against
+  //  the version before a change); the default is the repository's index.html
+  let s = fs.readFileSync(process.env.LAB_GAME || path.join(ROOT, 'index.html'), 'utf8');
   const three = '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>';
   const mq = '<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>';
   if (!s.includes(three) || !s.includes(mq)) throw new Error('harness: the library <script> tags have changed');
@@ -149,13 +151,17 @@ async function openRoom() {
   const pages = new Set();
   const relay = (m) => { for (const pg of pages) pg.evaluate((mm) => window.__recv && window.__recv(mm), m).catch(() => {}); };
 
-  async function player({ room, id, nick, save, render } = {}) {
+  async function player({ room, id, nick, save, render, seed } = {}) {
     const ctx = await browser.newContext({ viewport: { width: 480, height: 320 } });
     await ctx.route(ORIGIN + '/**', (route) => {
       const f = path.join(CACHE, new URL(route.request().url()).pathname.slice(1));
       if (!fs.existsSync(f)) return route.fulfill({ status: 404, body: '' });
       route.fulfill({ status: 200, contentType: f.endsWith('.js') ? 'text/javascript' : 'text/html', body: fs.readFileSync(f) });
     });
+    //  seed: Math.random becomes a fixed sequence, so two copies of the game
+    //  put the same traffic and the same crowd in the same places (A/B runs)
+    if (seed) await ctx.addInitScript((sd) => { let a = sd | 0;
+      Math.random = () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }, seed);
     if (save) await ctx.addInitScript((s) => { try { localStorage.setItem('contour.rift', s); } catch (e) {} }, JSON.stringify(save));
     const page = await ctx.newPage();
     const errors = [];
