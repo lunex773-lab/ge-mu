@@ -5,7 +5,7 @@
 //  rayAabb and aabbTouch were rewritten not to allocate. They sit under
 //  every mob's line of sight and every bullet, so "the same answers" is
 //  checked exactly, not approximately: the originals (kept verbatim in
-//  fixtures/ray_original.js) against the versions now in index.html, a
+//  fixtures/ray_original.js) against the versions now in shared/city.js, a
 //  million random rays against random boxes, including rays parallel to a
 //  face and rays starting inside. rayCity also learned to skip buildings
 //  past the caller's max: whatever it returns below max must be exactly what
@@ -15,14 +15,10 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-function extract(src) {
-  const a = src.indexOf('  //  Slab tests, unrolled'), b = src.indexOf('  //  max (optional): the caller');
-  const c = src.indexOf('  function rayCity(ro, rd, max) {'), d = src.indexOf('\n  }\n', c);
-  if (a < 0 || b < 0 || c < 0 || d < 0) throw new Error('could not find the slab tests and rayCity in index.html');
-  return src.slice(a, b) + src.slice(c, d + 4);
-}
-const html = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
-const NEW = new Function('cityB', extract(html) + '\nreturn { rayAabb, aabbTouch, rayCity };');
+//  the slab tests and rayCity now live in shared/city.js (the game and the
+//  room server both use them); the originals stay in fixtures/ray_original.js
+const C = require('../../shared/city.js');
+const NEW = (cityB) => ({ rayAabb: C.rayAabb, aabbTouch: C.aabbTouch, rayCity: (ro, rd, max) => C.rayCity(cityB, ro, rd, max) });
 const OLD = new Function(fs.readFileSync(path.join(__dirname, 'fixtures', 'ray_original.js'), 'utf8') + '\nreturn { rayAabb, aabbTouch };')();
 
 let pass = 0, fail = 0;
