@@ -9,7 +9,8 @@
 //    - the page finds the server on its own origin and uses it (not the broker)
 //    - the room names the players; the first one in runs the creatures
 //    - they see each other, the creatures reach the second player, chat works
-//    - a forged hit claiming 99999 damage does the gun's 20
+//    - a forged hit claiming 99999 damage does the gun's 20; five kill, and
+//      the room — not the players — decides the death and whose kill it is
 //    - a dropped connection comes back by itself, under a new name, and the
 //      other player sees the old one leave
 //    - when the host leaves, the other player takes over the creatures
@@ -70,12 +71,30 @@ async function until(P, src, secs) {
     const chat = (await until(A, "document.getElementById('chat-log').textContent.includes('やあ')", 5)) && (await until(B, "document.getElementById('chat-log').textContent.includes('やあ')", 5));
     check('chat reaches everyone, the sender included', chat);
 
-    // ---- a forged hit ----------------------------------------------------
+    // ---- shots between players are the room's to judge ----------------------
+    //  both on the pavement of one street, in plain view of each other (and
+    //  out of the traffic's way: no car gets a say in these numbers)
+    const stand = (P, z) => ev(P, 'carHitCd = 1e9; p.set(11, EYE, ' + z + '); vy = 0; publishState(true); 1');
+    await stand(A, 10); await stand(B, 40);
     await ev(A, 'hp = HP_MAX; updateHpUI(); 1');
+    await sleep(800);
     await ev(B, 'MP.client.publish(mtopic("hit"), JSON.stringify({ by: "p000000", t: ' + JSON.stringify(ids.a) + ', d: 99999 })); 1');
-    await sleep(1000);
+    await sleep(800);
     const hpA = await ev(A, 'hp');
-    check('a hit claiming 99999 damage does the gun\'s 20', hpA === 80, 'hp ' + hpA);
+    check('a hit claiming 99999 damage does the gun\'s 20, and the room says so', hpA === 80, 'hp ' + hpA);
+    for (let i = 0; i < 4; i++) { await ev(B, 'MP.client.publish(mtopic("hit"), JSON.stringify({ t: ' + JSON.stringify(ids.a) + ' })); 1'); await sleep(350); }
+    const downA = await until(A, 'dead && hp === 0', 5);
+    const killsB = await until(B, 'kills === 1', 5);
+    check('five hits: the room decides the death, and whose kill it is', downA && killsB, 'A dead ' + downA + ', B kills ' + (await ev(B, 'kills')));
+    await ev(A, 'doContinue(); 1');
+    await sleep(600);
+    check('getting back up is the room\'s full health too', (await ev(A, '!dead && hp === HP_MAX')));
+    //  and a real shot: the game aims at what it draws, fires, and the room agrees
+    await stand(A, 10); await sleep(1500);
+    await ev(B, `(() => { mode = 'mobile'; const pr = MP.peers.get(${JSON.stringify(ids.a)}); const dx = pr.cur.x - p.x, dz = pr.cur.z - p.z;
+      yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(pr.cur.y + 1.1 - p.y, Math.hypot(dx, dz)); fireCd = 0; reloading = 0; ammo = Math.max(ammo, 5); fire(); return 1; })()`);
+    const shotLanded = await until(A, 'hp === 80', 4);
+    check('a real shot — aimed at what the game draws, fired — lands on the room\'s word', shotLanded, 'hp ' + (await ev(A, 'hp')));
 
     // ---- the connection drops, and comes back --------------------------------
     await ev(B, 'SRV.ws.close(); 1');

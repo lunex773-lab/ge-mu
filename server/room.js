@@ -2,7 +2,8 @@
 //  CONTOUR — GameRoom, one Durable Object per room
 //  ============================================================
 //  Holds the room's WebSockets and passes messages between them through
-//  the Relay (relay.js), which decides what may be said. It uses the
+//  the Relay (relay.js), which decides what may be said and keeps the
+//  room's account of each player's health, deaths and kills. It uses the
 //  WebSocket Hibernation API: while nobody is sending anything, the object
 //  can leave memory without dropping anyone, and costs nothing; the first
 //  message wakes it and the constructor puts the room back together from
@@ -31,7 +32,7 @@ export class GameRoom extends DurableObject {
   }
 
   adopt(ws, a) {
-    this.who.set(ws, a); this.sockets.set(a.id, ws); this.relay.join(a.id, a.name);
+    this.who.set(ws, a); this.sockets.set(a.id, ws); this.relay.join(a.id, a.name, a.keep);
   }
 
   async fetch(request) {
@@ -43,7 +44,7 @@ export class GameRoom extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(a);
     this.adopt(server, a);
-    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now() } }));
+    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp } }));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -51,8 +52,19 @@ export class GameRoom extends DurableObject {
     const a = this.who.get(ws);
     if (!a) return;
     const r = this.relay.handle(a.id, raw, Date.now());
-    if (r.back) ws.send(r.back);
-    if (r.all) this.broadcast(r.all, a.id);
+    //  health and score ride on the sockets' attachments, so a room that
+    //  sleeps while everyone is idle wakes up remembering them
+    for (const id of this.relay.dirty) {
+      const s = this.sockets.get(id), w = s && this.who.get(s);
+      if (w) { w.keep = this.relay.saved(id); try { s.serializeAttachment(w); } catch (e) {} }
+    }
+    this.relay.dirty.clear();
+    for (const [to, text] of r.out) {
+      if (to === 'others') this.broadcast(text, a.id);
+      else if (to === 'all') this.broadcast(text, null);
+      else if (to === 'self') ws.send(text);
+      else { const s = this.sockets.get(to); if (s) try { s.send(text); } catch (e) {} }
+    }
   }
 
   //  answer the close (newer runtimes do it themselves; doing it too is safe)

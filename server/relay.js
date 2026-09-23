@@ -1,20 +1,25 @@
 //  ============================================================
-//  CONTOUR — what a room lets through  (brief §6, §20, §22)
+//  CONTOUR — what a room lets through, and what it decides  (brief §6, §20, §22)
 //  ============================================================
 //  The room is the only way players reach each other, so it decides what a
-//  message may say. Plain JavaScript, no Cloudflare APIs: the GameRoom
-//  Durable Object feeds it (server/test/room.test.js runs both on a local
-//  workerd; lab/test/server.game.test.js runs the real game against them).
+//  message may say — and, for what matters between players, what is true.
+//  Plain JavaScript, no Cloudflare APIs: the GameRoom Durable Object feeds
+//  it (server/test/room.test.js runs both on a local workerd;
+//  lab/test/server.game.test.js runs the real game against them).
 //
-//  What it enforces today (the game's messages, from the MQTT days, carried
-//  over the room's WebSocket):
+//  What it enforces:
 //
 //    - who you are: the room names every player (join order, so the one who
 //      has been here longest has the lowest id and runs the creatures), and
 //      stamps the sender on everything — nobody can speak as someone else,
 //      or pick an id that makes them the host
-//    - what a shot does: damage is the gun's, never what the message claims
-//      (a hit used to carry its own damage, so {"d": 99999} killed anyone)
+//    - health, deaths and kills are the room's. A player's game says "I hit
+//      so-and-so"; the room checks it could have happened (combat.js: the gun
+//      ready, the target in reach, a clear line through the city) and only
+//      then takes the gun's damage off the target, tells the target, and
+//      decides the death and whose kill it is. What a player reports about
+//      itself (a car, a monkey, a banana, coming back to life) it may only
+//      report against itself.
 //    - who runs the creatures: only the host's snapshots and kill reports
 //      are passed on
 //    - how much: a size limit on every message and a rate limit per kind,
@@ -24,22 +29,60 @@
 //    client → room   { s: kind, p: payload }
 //    room → client   { s: kind, p: payload, f: sender id }   (f absent from the room itself)
 
-export const DMG = 20;                 // the gun's damage per shot (index.html DMG)
-export const MAX_BYTES = 16384;        // one message
-const ID_RE = /^p[0-9a-z]{6}$/;
+import RULES from '../shared/rules.js';
+import { remember, whyNot } from './combat.js';
 
-//  per kind: tokens a second, burst, and how to clean the payload
-//  (return null to drop it). `from` is the sender's id; `room` the Relay.
+export const DMG = RULES.DMG;
+export const MAX_BYTES = 16384;        // one message
+
+//  per kind: tokens a second, burst, and what to do with it — return the
+//  payload to pass on to the others, or null to pass nothing on (the kind
+//  may have answered through room.send). `from` is the sender's id.
 const KINDS = {
-  state: [30, 40, (p, from) => {
+  state: [30, 40, (p, from, room, now) => {
     if (!num(p.x) || !num(p.y) || !num(p.z) || Math.abs(p.x) > 2000 || Math.abs(p.z) > 2000) return null;
+    const me = room.players.get(from);
+    remember(me, now, p.x, p.y, p.z);
+    me.w = p.w === undefined ? 0 : int(p.w);
     p.id = from;
     if (p.n !== undefined) p.n = text(p.n, 20);
+    //  what the others are told about my health and my score is the room's
+    p.hp = Math.round(me.hp); p.k = me.kills;
+    if (me.dead) { p.d = 1; p.ds = me.ds; if (me.killer) p.kb = me.killer; else delete p.kb; }
+    else { delete p.d; delete p.ds; delete p.kb; }
     return p;
   }],
   shot: [12, 16, (p, from) => ({ id: from })],
-  hit: [6, 8, (p, from, room) => (room.has(p.t) && p.t !== from ? { by: from, t: p.t, d: DMG } : null)],
-  kill: [3, 6, (p, from) => (typeof p.by === 'string' && ID_RE.test(p.by) && p.by !== from ? { by: p.by, v: from, ds: int(p.ds) } : null)],
+  //  "I hit t": checked, and if it stands the room does the damage (below)
+  hit: [6, 8, (p, from, room, now) => {
+    const me = room.players.get(from), v = room.players.get(p.t);
+    if (!v || p.t === from) return null;
+    const why = whyNot(me, v, now);
+    if (why) { room.refused++; room.lastRefusal = why; return null; }
+    me.lastHitT = now;
+    room.damage(p.t, DMG, from, now);
+    return null;
+  }],
+  //  what a player reports against itself: hurt by the city (a car, a
+  //  creature), healed by a banana, back on its feet
+  hurt: [20, 40, (p, from, room, now) => {
+    const d = Math.max(0, Math.min(RULES.HP_MAX, +p.d || 0));
+    if (d > 0) room.damage(from, d, null, now);
+    return null;
+  }],
+  heal: [0.5, 2, (p, from, room) => {
+    const me = room.players.get(from);
+    if (!me.dead) { me.hp = Math.min(RULES.HP_MAX, me.hp + Math.max(0, Math.min(RULES.BANANA_HEAL, +p.d || 0))); room.dirty.add(from); room.send(from, 'hp', { hp: me.hp }); }
+    return null;
+  }],
+  spawn: [1, 3, (p, from, room) => {
+    const me = room.players.get(from);
+    if (me.dead) { me.dead = false; me.hp = RULES.HP_MAX; me.killer = null; me.lastBy = null; room.dirty.add(from); }
+    room.send(from, 'hp', { hp: me.hp });
+    return null;
+  }],
+  //  deaths and kills are decided here now; a player's own claim is ignored
+  kill: [3, 6, () => null],
   chat: [1, 4, (p, from) => { const m = text(p.m, 120); return m ? { id: from, n: text(p.n, 20), m } : null; }],
   mob: [10, 12, (p, from, room) => (room.host() === from ? Object.assign(p, { id: from }) : null)],
   mdeath: [8, 16, (p, from, room) => (room.host() === from ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
@@ -65,34 +108,65 @@ function text(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
 
 export class Relay {
   constructor() {
-    this.players = new Map();          // id → { name, buckets }
+    this.players = new Map();          // id → the room's view of that player
+    this.out = [];
+    this.refused = 0; this.lastRefusal = '';
+    this.dirty = new Set();            // players whose health or score changed (the room saves them)
   }
   has(id) { return this.players.has(id); }
   host() { let h = null; for (const id of this.players.keys()) if (h === null || id < h) h = id; return h; }
-  join(id, name) { this.players.set(id, { name: text(name, 20), buckets: {} }); }
+  //  saved: what was kept of this player while the room slept (saved())
+  join(id, name, saved) {
+    const k = saved || {};
+    this.players.set(id, { name: text(name, 20), buckets: {}, hp: num(k.hp) ? k.hp : RULES.HP_MAX, dead: !!k.dead, ds: int(k.ds), kills: int(k.kills), deaths: int(k.deaths),
+      killer: k.killer || null, lastBy: null, lastByT: 0, lastHitT: -1e9, w: 0, hist: [] });
+  }
+  saved(id) { const v = this.players.get(id); return v && { hp: v.hp, dead: v.dead, ds: v.ds, kills: v.kills, deaths: v.deaths, killer: v.killer }; }
   leave(id) { this.players.delete(id); }
 
-  //  One message from `from`. Returns what to do with it:
-  //    { all: text }       send to everyone else in the room
-  //    { back: text }      send to the sender (both, for a chat line)
-  //    { drop: reason }
+  //  queue a message from the room: to 'others' (than the sender), 'self',
+  //  'all', or one player's id
+  send(to, s, p, f) { this.out.push([to, JSON.stringify(f ? { s, p, f } : { s, p })]); }
+
+  //  d damage to player id, by another player (by) or by the city (null)
+  damage(id, d, by, now) {
+    const v = this.players.get(id);
+    if (!v || v.dead) return;
+    v.hp = Math.max(0, v.hp - d); this.dirty.add(id);
+    if (by) { v.lastBy = by; v.lastByT = now; this.send(id, 'hurt', { d, by, hp: v.hp }); }
+    else this.send(id, 'hp', { hp: v.hp });
+    if (v.hp <= 0) this.die(id, now);
+  }
+  //  a death, and whose kill it is: whoever shot them in the last 12 s
+  die(id, now) {
+    const v = this.players.get(id);
+    v.dead = true; v.hp = 0; v.ds++; v.deaths++;
+    const k = v.lastBy && v.lastBy !== id && now - v.lastByT < RULES.KILL_CREDIT_MS && this.players.has(v.lastBy) ? v.lastBy : null;
+    v.killer = k;
+    if (k) { this.players.get(k).kills++; this.dirty.add(k); this.send('all', 'kill', { by: k, v: id, ds: v.ds }); }
+  }
+
+  //  One message from `from`. Returns what to send, as [to, text] pairs
+  //  (to: 'others', 'self', 'all' or an id), and why nothing, if nothing.
   handle(from, raw, now) {
+    this.out = [];
     const me = this.players.get(from);
-    if (!me) return { drop: 'unknown sender' };
-    if (typeof raw !== 'string') return { drop: 'binary' };
-    if (raw.length > MAX_BYTES) return { drop: 'too large' };
+    if (!me) return { out: [], drop: 'unknown sender' };
+    if (typeof raw !== 'string') return { out: [], drop: 'binary' };
+    if (raw.length > MAX_BYTES) return { out: [], drop: 'too large' };
     let msg;
-    try { msg = JSON.parse(raw); } catch (e) { return { drop: 'not JSON' }; }
-    if (!msg || typeof msg !== 'object' || typeof msg.s !== 'string' || !msg.p || typeof msg.p !== 'object') return { drop: 'malformed' };
+    try { msg = JSON.parse(raw); } catch (e) { return { out: [], drop: 'not JSON' }; }
+    if (!msg || typeof msg !== 'object' || typeof msg.s !== 'string' || !msg.p || typeof msg.p !== 'object') return { out: [], drop: 'malformed' };
     const rule = KINDS[msg.s];
-    if (!rule) return { drop: 'unknown kind ' + msg.s };
-    if (!this.take(me, msg.s, rule[0], rule[1], now)) return { drop: 'rate ' + msg.s };
-    const p = rule[2](msg.p, from, this);
-    if (!p) return { drop: 'refused ' + msg.s };
-    const out = JSON.stringify({ s: msg.s, p, f: from });
-    //  a ping is for the sender; a chat line goes to everyone *including* the
-    //  sender, who shows it when it comes back (as it did from the broker)
-    return msg.s === 'ping' ? { back: out } : msg.s === 'chat' ? { all: out, back: out } : { all: out };
+    if (!rule) return { out: [], drop: 'unknown kind ' + msg.s };
+    if (!this.take(me, msg.s, rule[0], rule[1], now)) return { out: [], drop: 'rate ' + msg.s };
+    const p = rule[2](msg.p, from, this, now);
+    if (p) {
+      //  a ping is for the sender; a chat line goes to everyone *including* the
+      //  sender, who shows it when it comes back (as it did from the broker)
+      this.send(msg.s === 'ping' ? 'self' : msg.s === 'chat' ? 'all' : 'others', msg.s, p, from);
+    }
+    return { out: this.out, drop: p || this.out.length ? null : 'refused ' + msg.s };
   }
 
   //  a token bucket per player per kind
