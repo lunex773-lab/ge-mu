@@ -16,4 +16,5 @@ module.exports = {
   KILL_CREDIT_MS: 12000,    // a death goes to whoever shot you in the last 12 s
   RUN: 10.2,                // m/s, running (the fastest anyone moves on their own feet)
   WORLD: 700,               // m across; the game keeps everyone within ±WORLD × 0.48
+  BZB_HP: 4000,             // Beelzebub's health for one player; +60% for each more (Phase 9 chose it)
 };
