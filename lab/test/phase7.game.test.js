@@ -86,7 +86,7 @@ async function until(P, src, secs) {
     const h1 = await ev(A, 'bzb.hp');
     check("the owner's shot and the follower's shot both land", h0 - h1 >= 39, h0 + ' -> ' + h1);
     const bar = await ev(B, "document.getElementById('boss').classList.contains('on') && document.getElementById('boss-name').textContent");
-    check('the follower, close and fighting him, sees his bar', bar === 'ヴェルゼブブ', String(bar));
+    check('the follower, close and fighting him, sees his bar', bar === 'BEELZEBUB', String(bar));
 
     // ---- B7: he falls, and stays down for this tear ----------------------
     await ev(A, 'bzbAI.body.hp = 30; bzbHurt(DMG, p.x, p.z, MP.id); bzbHurt(DMG, p.x, p.z, MP.id);');

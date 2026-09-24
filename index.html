@@ -14451,7 +14451,7 @@
     bzbSaveSlain();
     if (bzbAI) bzbSaveMind();
     playBzbDeath(bzb.tdist);
-    if (bzb.tdist < 300) notify('ヴェルゼブブが斃れた', 4200);
+    if (bzb.tdist < 300) notify('BEELZEBUB が斃れた', 4200);
   }
 
   // ---- being hit --------------------------------------------------------
@@ -14618,7 +14618,7 @@
     if (bzb.barOwns && bzb.hp === bzb.barHp && cityT - bzb.barT < 0.25 && cityT >= bzb.barT) return;
     bzb.barHp = bzb.hp; bzb.barT = cityT;
     bossEl.classList.add('on', 'king'); bossEl.classList.remove('rage');
-    const nm = $('boss-name'); if (nm && nm.textContent !== 'ヴェルゼブブ') nm.textContent = 'ヴェルゼブブ';
+    const nm = $('boss-name'); if (nm && nm.textContent !== 'BEELZEBUB') nm.textContent = 'BEELZEBUB';   // in capitals, as MIND FLAYER is
     if (bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, bzb.hp / bzb.hpMax).toFixed(3) + ')';
     bzb.barOwns = true;
   }
