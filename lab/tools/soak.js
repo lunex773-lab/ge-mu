@@ -25,7 +25,7 @@ const SAMPLE = `(() => { const geo = new Set(), mat = new Set(), tex = new Set()
   const room = await openRoom();
   const rows = [];
   try {
-    const A = await room.player({ room: 'soak', nick: 'Aki', id: 'paaaaaa' });
+    const A = await room.player({ room: 'soak', nick: 'Aki' });
     await A.join(); await sleep(3000);
     await ev(A, "mode = 'mobile'; fireHeld = true; ammo = 1e9; { const f = fire; fire = function () { window.__shots = (window.__shots || 0) + 1; return f.apply(this, arguments); }; } 1");
     const cdp = await A.page.context().newCDPSession(A.page);

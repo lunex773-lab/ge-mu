@@ -5,16 +5,22 @@
 //
 //  Runs the real game in headless Chromium, several players at once, with no
 //  network. It builds lab/.cache/game.html from ../../index.html and changes
-//  exactly three things on the way:
+//  exactly two things on the way:
 //
 //    three.js     loaded from lab/.cache (fetched once with `npm pack`), since
 //                 the CDN is not always reachable from where tests run
-//    mqtt         a stand-in whose publish() goes through this process to
-//                 every open page — separate browser contexts, so separate
-//                 localStorage, exactly like separate phones
 //    window.__t   a handle into the game's closure, added just before the
 //                 main loop starts, so a test can read state and call the
 //                 game's own functions
+//
+//  The room server is played here, in this process, by the real room rules
+//  (server/relay.js): each page's WebSocket to /ws is routed to it
+//  (Playwright's routeWebSocket), and it does what GameRoom does on
+//  Cloudflare — names players in join order, welcomes them, passes every
+//  message through Relay.handle, and says when someone leaves. Separate
+//  browser contexts, so separate localStorage, exactly like separate phones.
+//  (The real GameRoom, on workerd, is server/test/room.test.js and
+//  lab/test/server.game.test.js.)
 //
 //  and it inlines the lab modules as window.__lab.require(name), so a test
 //  can run the Neural Core's adapter against the live game objects.
@@ -25,6 +31,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { pathToFileURL } = require('url');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const CACHE = path.join(ROOT, 'lab', '.cache');
@@ -47,28 +54,6 @@ function ensureThree() {
   fs.rmSync(path.join(CACHE, 'three-0.128.0.tgz'), { force: true });
 }
 
-const FAKE_MQTT = `<script>
-window.mqtt = { connect(url, opts) {
-  const handlers = {}, subs = [];
-  const match = (pat, t) => { const a = pat.split('/'), b = t.split('/');
-    return a.length === b.length && a.every((x, i) => x === '+' || x === b[i]); };
-  const client = {
-    on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return client; },
-    subscribe(t) { subs.push(t); },
-    publish(t, p) { if (window.__relay) window.__relay({ t, p: String(p) }); },
-    end() { client.dead = true; },
-  };
-  window.__recv = (m) => {
-    if (client.dead) return;
-    if (window.__drop && window.__drop(m.t, m.p)) return;
-    if (!subs.some((x) => match(x, m.t))) return;
-    const buf = { toString: () => m.p, length: m.p.length };
-    for (const fn of handlers.message || []) fn(m.t, buf);
-  };
-  setTimeout(() => { for (const fn of handlers.connect || []) fn(); }, window.__connectDelay || 300);
-  return client;
-} };
-</script>`;
 
 const HOOK = `
   window.__t = {
@@ -133,25 +118,60 @@ function build() {
   //  the version before a change); the default is the repository's index.html
   let s = fs.readFileSync(process.env.LAB_GAME || path.join(ROOT, 'index.html'), 'utf8');
   const three = '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>';
-  const mq = '<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>';
-  if (!s.includes(three) || !s.includes(mq)) throw new Error('harness: the library <script> tags have changed');
+  const mq = '<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>';   // in copies from before it went
+  if (!s.includes(three)) throw new Error('harness: the three.js <script> tag has changed');
   if (!s.includes(TAIL)) throw new Error('harness: the end of the main script has changed');
-  s = s.replace(three, '<script src="three.min.js"></script>');
-  s = s.replace(mq, FAKE_MQTT + labBundle());
+  s = s.replace(three, '<script src="three.min.js"></script>' + labBundle());
+  s = s.replace(mq, '');
   s = s.replace(TAIL, HOOK);
   fs.writeFileSync(path.join(CACHE, 'game.html'), s);
 }
 
+//  The room server, as GameRoom (server/room.js) runs it, minus what only
+//  Cloudflare has (hibernation, storage): one Relay per room name.
+async function roomServer() {
+  const { Relay, idFor } = await import(pathToFileURL(path.join(ROOT, 'server', 'relay.js')).href);
+  const rooms = new Map();                       // name → { relay, next, sockets: Map(id → { ws, who }) }
+  const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
+  return function connect(ws, who) {
+    const u = new URL(ws.url());
+    const raw = String(u.searchParams.get('room') || '').trim();
+    const name = /^[\p{L}\p{N}_\-. ]{1,32}$/u.test(raw) ? raw : 'lobby';   // as server/worker.js
+    let R = rooms.get(name);
+    if (!R) rooms.set(name, R = { relay: new Relay(), next: 0, sockets: new Map() });
+    const id = idFor(R.next++);
+    R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
+    R.sockets.set(id, { ws, who });
+    //  who.drop: kinds this player does not hear (setDrop — packets lost)
+    const deliver = (to, text) => { const t = R.sockets.get(to); if (t && !(t.who.drop && t.who.drop.test(kindOf(text)))) t.ws.send(text); };
+    ws.send(JSON.stringify({ s: '_welcome', p: { id, host: R.relay.host(), players: [...R.sockets.keys()], t: Date.now(), hp: R.relay.players.get(id).hp, items: R.relay.itemState() } }));
+    ws.onMessage((m) => {
+      if (!R.sockets.has(id)) return;
+      const r = R.relay.handle(id, String(m), Date.now());
+      R.relay.dirty.clear();
+      for (const [to, text] of r.out) {
+        if (to === 'others' || to === 'all') { for (const other of [...R.sockets.keys()]) if (to === 'all' || other !== id) deliver(other, text); }
+        else deliver(to === 'self' ? id : to, text);
+      }
+    });
+    ws.onClose(() => {
+      try { ws.close(); } catch (e) {}           // answer it, as GameRoom does
+      if (!R.sockets.delete(id)) return;
+      R.relay.leave(id);
+      for (const other of R.sockets.keys()) deliver(other, JSON.stringify({ s: 'leave', p: { id } }));
+    });
+  };
+}
+
 //  A room of players. Each is a separate browser context — its own
-//  localStorage, its own MP.id — and every publish reaches every page.
+//  localStorage — and all of them meet in the room server above.
 async function openRoom() {
   build();
   const { chromium } = playwright();
   const browser = await chromium.launch({ args: ['--disable-gpu', '--mute-audio'] });
-  const pages = new Set();
-  const relay = (m) => { for (const pg of pages) pg.evaluate((mm) => window.__recv && window.__recv(mm), m).catch(() => {}); };
+  const connect = await roomServer();
 
-  async function player({ room, id, nick, save, render, seed, url, viewport } = {}) {
+  async function player({ room, nick, save, render, seed, url, viewport } = {}) {
     const ctx = await browser.newContext({ viewport: viewport || { width: 480, height: 320 } });
     await ctx.route(ORIGIN + '/**', (route) => {
       const f = path.join(CACHE, new URL(route.request().url()).pathname.slice(1));
@@ -166,24 +186,28 @@ async function openRoom() {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.exposeFunction('__relay', relay);
+    const who = { drop: null, down: false };
+    //  who.down: the room server is not answering (refused at once), as when
+    //  a day's free requests are used up
+    await page.routeWebSocket(/^ws:\/\/lab\.test\/ws\?/, (ws) => { if (who.down) ws.close({ code: 1011 }); else connect(ws, who); });
     //  url: the same page served from somewhere else — the room server under
     //  wrangler dev, say — instead of the harness's own origin
     await page.goto(url || ORIGIN + '/game.html', { timeout: 120000 });
     await page.waitForFunction(() => window.__t, null, { timeout: 60000 });
     if (!render) await page.evaluate(() => window.__t.noRender());
-    pages.add(page);
     const P = {
       page, ctx, errors,
       eval: (fn, arg) => page.evaluate(fn, arg),
-      join: () => page.evaluate(({ room, id, nick }) => {
-        if (id) window.__t.MP.id = id;
+      //  the room names players in the order they join: the first in has the
+      //  lowest id, and runs the creatures
+      join: () => page.evaluate(({ room, nick }) => {
         document.getElementById('nick').value = nick || 'bot';
         document.getElementById('room').value = room || 'lab';
         window.__t.start();
-      }, { room, id, nick }),
-      setDrop: (on) => page.evaluate((o) => { window.__drop = o ? ((t) => /\/(gate|gateask|mob)$/.test(t)) : null; }, on),
-      close: async () => { pages.delete(page); await ctx.close(); },
+      }, { room, nick }),
+      setDrop: (on) => { who.drop = on ? /^(gate|gateask|mob)$/ : null; },
+      serverDown: (on) => { who.down = !!on; },
+      close: async () => { await ctx.close(); },
     };
     return P;
   }

@@ -10,8 +10,8 @@
 //    S1 a late joiner adopts the room's tear
 //    S2 a tear restored from last visit yields to the room's
 //    S3 a tear saved in another room is not brought in
-//    S4 a lower-id newcomer who missed the room's tear converges on it
-//    S5 two opened at once converge on the lower owner id
+//    S4 a newcomer who missed the room's tear converges on it
+//    S5 two opened at once converge on the lower owner id (the first one in)
 //    S6 the title-screen save heartbeat keeps the saved tear
 //    S7 the storm room starts everyone through the same tear
 //
@@ -102,19 +102,21 @@ async function openFor(P) {
   }
 
   // ---- S4: newcomer with a lower id who missed the room's tear -------------
-  console.log('\nS4 lower-id newcomer, packets lost while listening');
+  //  (the room names players in join order, so the newcomer's id is the
+  //  higher one; before the room server it could be lower, and was tested so)
+  console.log('\nS4 newcomer, packets lost while listening');
   {
-    const A = await player({ room: 'r4', nick: 'A', id: 'pzzzzzz' });
+    const A = await player({ room: 'r4', nick: 'A' });
     await A.join(); await sleep(3500);
     await openFor(A); await sleep(300);
     await A.eval(() => { window.__t.rift.born = Date.now() - 90000; });   // it has stood a while
     const a = await A.gate();
-    const D = await player({ room: 'r4', nick: 'D', id: 'p000000', save: { k: 15, u: true, w: 0, t: Date.now(), r: 'r4', g: null } });
-    await D.setDrop(true);
+    const D = await player({ room: 'r4', nick: 'D', save: { k: 15, u: true, w: 0, t: Date.now(), r: 'r4', g: null } });
+    D.setDrop(true);
     await D.join(); await sleep(7000);
     const d0 = await D.gate();
     check('S4 deaf newcomer opened its own (the setup)', d0.present && d0.seed !== a.seed, fmt(d0));
-    await D.setDrop(false);
+    D.setDrop(false);
     await sleep(16000);
     const d = await D.gate(), a2 = await A.gate();
     check('S4 established tear keeps its place', a2.seed === a.seed && a2.x === a.x, 'A ' + fmt(a2));
@@ -125,17 +127,18 @@ async function openFor(P) {
   // ---- S5: two open at the same moment ------------------------------------
   console.log('\nS5 simultaneous opening');
   {
-    const A = await player({ room: 'r5', nick: 'A', id: 'pbbbbbb' });
-    const B = await player({ room: 'r5', nick: 'B', id: 'paaaaaa' });
-    await A.join(); await B.join(); await sleep(3500);
-    await A.setDrop(true); await B.setDrop(true);
+    const A = await player({ room: 'r5', nick: 'A' });
+    const B = await player({ room: 'r5', nick: 'B' });
+    await A.join(); await sleep(1500); await B.join(); await sleep(3500);   // A first: the lower id
+    const low = await A.eval(() => window.__t.MP.id);
+    A.setDrop(true); B.setDrop(true);
     await openFor(A); await openFor(B); await sleep(500);
     const a0 = await A.gate(), b0 = await B.gate();
     check('S5 two different tears (the setup)', a0.present && b0.present && a0.seed !== b0.seed, fmt(a0) + ' | ' + fmt(b0));
-    await A.setDrop(false); await B.setDrop(false);
+    A.setDrop(false); B.setDrop(false);
     await sleep(16000);
     const a = await A.gate(), b = await B.gate();
-    check('S5 converge on the lower owner id', same(a, b) && a.owner === 'paaaaaa', 'A ' + fmt(a) + ' | B ' + fmt(b));
+    check('S5 converge on the lower owner id', same(a, b) && a.owner === low, 'A ' + fmt(a) + ' | B ' + fmt(b) + ' | lower ' + low);
     await A.close(); await B.close();
   }
 

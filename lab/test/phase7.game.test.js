@@ -27,9 +27,9 @@ async function until(P, src, secs) {
 (async () => {
   const room = await openRoom();
   try {
-    const A = await room.player({ room: 'p7', nick: 'Aki', id: 'paaaaaa' });   // the lower id owns the mobs
-    const B = await room.player({ room: 'p7', nick: 'Ben', id: 'pbbbbbb' });
-    await A.join(); await B.join();
+    const A = await room.player({ room: 'p7', nick: 'Aki' });   // joins first: the lower id, which owns the mobs
+    const B = await room.player({ room: 'p7', nick: 'Ben' });
+    await A.join(); await sleep(800); await B.join();
     await sleep(3500);
     check('the rig is built with the city, before anything needs it', await ev(A, '!!(bzb.rig && bzb.rig.meshes.length >= 5)'));
     check('A owns the mobs', await ev(A, 'MP.host === MP.id') && !(await ev(B, 'MP.host === MP.id')));
