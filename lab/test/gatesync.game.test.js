@@ -70,9 +70,13 @@ async function openFor(P) {
     const save = { k: 12, u: true, w: 0, t: Date.now(), r: 'r2',
                    g: [a.x + 120, 0, a.z - 80, 0, 424242, 'p0000001', Date.now() - 120000] };
     const B = await player({ room: 'r2', nick: 'B', save });
+    //  deaf to the room's tear for the first moment: the host now sends it
+    //  the moment a newcomer appears, and it used to beat this look
+    B.setDrop(true);
     await B.join(); await sleep(300);
     const b0 = await B.gate();
     check('S2 restored tear goes up while listening', b0.present && b0.restored, fmt(b0));
+    B.setDrop(false);
     await sleep(4000);
     const b = await B.gate(), a2 = await A.gate();
     check('S2 joiner yields to the room tear', same(a2, b), 'A ' + fmt(a2) + ' | B ' + fmt(b));

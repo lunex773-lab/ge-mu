@@ -3138,7 +3138,7 @@
     peers: new Map(),
     lastPub: 0, PUB_MS: 55, SOLO_MS: 1000, TIMEOUT: 6000, lastX: 0, lastZ: 0,
     INTERP_MS: 120,                        // render peers this far in the past
-    host: '', mobT: 0, mobPubT: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
+    host: '', mobT: 0, mobPubT: 0, mobSeq: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
   };
@@ -3183,6 +3183,7 @@
   }
   function mobPub() { return !!(MP.connected && MP.client && MP.host === MP.id); }
   const HDQ = 255 / 6.2832;              // heading packed into a byte
+  const DOG_NEAR = 110;                  // m: a dog further than this from you is all but lost in the fog (gone by ~150)
   function publishMobs() {
     const now = performance.now();
     //  nobody else here, nobody to show them to (publishState: alone)
@@ -3197,16 +3198,37 @@
     }
     const b = [];
     for (const c of corpses) if (c.active) b.push(c.cid, Math.round(c.x * 10), Math.round(c.z * 10), c.colr);
-    const msg = { id: MP.id, r: Math.round(rageT * 10), m: a, c: b };
-    if (dogsOn) {                        // the other side's pack rides in the same snapshot
-      const k = [];
+    const msg = { id: MP.id, r: Math.round(rageT * 10) };
+    //  (see the dogs below) every eighth snapshot, once a second, is whole
+    const full = MP.mobSeq++ % 8 === 0;
+    //  the troop and its bodies belong to the daylight side: while everyone
+    //  else is over on the other side they ride only in the whole ones, and
+    //  someone crossing back hears them within the blackout of the crossing
+    let dayside = full;
+    for (const pr of MP.peers.values()) if (pr.w !== WS.BACK) dayside = true;
+    if (dayside) { msg.m = a; msg.c = b; }
+    //  The other side's pack rides in the same snapshot, and is most of it:
+    //  42 dogs came to about 1 KB of 1.5, eight times a second — 11.8 KB/s
+    //  from the host (lab/tools/net_cost.js; a phone showed 13.5). So every
+    //  eighth snapshot (once a second, kf: 1) carries every dog, and the ones
+    //  in between (kf: 0) only those someone else over there might see —
+    //  within DOG_NEAR of them — and any whose health, state or marks have
+    //  changed, so a bite or a death is still heard at once.
+    if (dogsOn) {
+      const near = [];
+      for (const pr of MP.peers.values()) if (pr.w === WS.BACK) near.push(pr.tgt);
+      const k = []; let up = 0;
       for (const dg of dogs) {
         if (!dg.live) continue;
+        up++;
+        const hv = Math.max(0, dg.hp), st = D_ST.indexOf(dg.st) + 1, fl = (dg.dead ? 1 : 0) | (dg.lord ? 2 : 0);
+        const sig = hv * 64 + st * 4 + fl;
+        if (!full && sig === dg.netSig && !near.some((q) => Math.abs(q.x - dg.x) < DOG_NEAR && Math.abs(q.z - dg.z) < DOG_NEAR)) continue;
+        dg.netSig = sig;
         const h = (((dg.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-        k.push(dg.slot, Math.round(dg.x * 10), Math.round(dg.z * 10), Math.round(h * HDQ),
-               Math.max(0, dg.hp), D_ST.indexOf(dg.st) + 1, (dg.dead ? 1 : 0) | (dg.lord ? 2 : 0));
+        k.push(dg.slot, Math.round(dg.x * 10), Math.round(dg.z * 10), Math.round(h * HDQ), hv, st, fl);
       }
-      if (k.length) msg.k = k;
+      if (up) { msg.k = k; msg.kf = full ? 1 : 0; }
     }
     if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
@@ -3223,7 +3245,18 @@
     const wasRaging = rageT > 0;
     rageT = (msg.r || 0) / 10;
     if (rageT > 0 && !wasRaging) { playHurt(); notify('猿の群れが逆上した！', 3200); }
-    const a = msg.m || [];
+    if (msg.m) applyTroopSnapshot(msg.m, msg.c || []);   // absent: nobody else is on this side (publishMobs)
+    if (msg.g) {                                           // the tear this room is standing around
+      const g = msg.g;
+      hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
+    }
+    applyDogSnapshot(msg.k, msg.kf !== 0);             // kf 0: only the dogs near us (publishMobs)
+    applyGorSnapshot(msg.q);
+    applyMfSnapshot(msg.f);
+    applyVecSnapshot(msg.v);
+    applyBzbSnapshot(msg.b);
+  }
+  function applyTroopSnapshot(a, b) {
     for (const m of monkeyPeds) m.netSeen = false;
     for (let i = 0; i + 5 < a.length; i += 6) {
       const m = monkeyPeds[a[i]]; if (!m) continue;
@@ -3249,7 +3282,7 @@
         if (m.pooled && m.active) { m.active = false; if (m.group.parent) scene.remove(m.group); }
       }
     }
-    const b = msg.c || [], live = new Set();
+    const live = new Set();
     for (let i = 0; i + 3 < b.length; i += 4) {
       live.add(b[i]);
       const hx = b[i + 1] / 10, hz = b[i + 2] / 10;
@@ -3263,15 +3296,6 @@
     for (const c of corpses) {                             // eaten over there — clear it here too
       if (c.active && !live.has(c.cid) && c.age > 2) freeCorpse(c);
     }
-    if (msg.g) {                                           // the tear this room is standing around
-      const g = msg.g;
-      hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
-    }
-    applyDogSnapshot(msg.k);
-    applyGorSnapshot(msg.q);
-    applyMfSnapshot(msg.f);
-    applyVecSnapshot(msg.v);
-    applyBzbSnapshot(msg.b);
   }
   //  one message from the room server
   function onNet(t, msg, bytes) {
@@ -3427,7 +3451,7 @@
       MP.peers.set(s.id, peer);
       recomputeHost();                                  // lowest id in the room owns the troop
       renderRoster();
-      MP.lastPub = MP.mobPubT = 0;                      // someone to show: me, and the troop, now
+      MP.lastPub = MP.mobPubT = MP.mobSeq = 0;          // someone to show: me, and the whole troop, now
     }
     peer.tgt.set(s.x, s.y, s.z);
     peer.tgtYaw = s.r || 0;
@@ -6597,7 +6621,7 @@
   //  player takes their own beating and nobody is bitten by a ghost.
   const D_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack',
                 'reposition', 'observe', 'retreat', 'hide', 'call', 'flee', 'escort'];
-  function applyDogSnapshot(k) {
+  function applyDogSnapshot(k, full) {
     if (!k) {                                     // owner has no dogs up: neither have we
       if (dogs.some((o) => o.live)) clearDogs();
       return;
@@ -6632,7 +6656,7 @@
       d.lordNet = !!(dfl & 2);                    // owned: the follower tints it locally
       if ((dfl & 1) && !d.dead) { d.dead = true; d.deadT = 0; playDogDeath(d.tdist, dogPan(d)); }
     }
-    for (const o of dogs) if (o.live && !o.netSeen) despawnDog(o);
+    if (full) for (const o of dogs) if (o.live && !o.netSeen) despawnDog(o);   // only a full list says who is gone
   }
   function sendDogHit(d, dmg) {
     if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly

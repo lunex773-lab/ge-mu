@@ -108,10 +108,16 @@ async function main() {
     }
 
     // ---- the page, and nothing else --------------------------------------
-    const page = await fetch(BASE + '/');
-    const html = await page.text();
-    check('the game is served at /', page.ok && html.includes('CONTOUR'), page.status + ' ' + html.length + ' bytes');
-    if (LIVE) check('and it is this checkout\'s index.html', html === readFileSync(path.join(ROOT, 'index.html'), 'utf8'), html.length + ' bytes served');
+    let page = await fetch(BASE + '/'), html = await page.text();
+    check('the game is served at /', page.ok && html.includes('CONTOUR'), page.status + ' ' + html.length + ' characters');
+    if (LIVE) {
+      //  a new page takes a little while to reach every edge after a deploy
+      //  (once the check read the one before, 872 359 characters for 869 789):
+      //  asked again every 5 s, for up to 2 minutes
+      const mine = readFileSync(path.join(ROOT, 'index.html'), 'utf8'), t0 = Date.now();
+      while (html !== mine && Date.now() - t0 < 120000) { await sleep(5000); page = await fetch(BASE + '/', { cache: 'no-store' }); html = await page.text(); }
+      check('and it is this checkout\'s index.html', html === mine, html.length + ' characters served, ' + mine.length + ' here, after ' + Math.round((Date.now() - t0) / 1000) + ' s');
+    }
     const notPublic = [];
     for (const f of ['/lab/README.md', '/server/room.js', '/wrangler.jsonc', '/package.json', '/SERVER_MIGRATION_ANALYSIS.md', '/README.md']) {
       const r = await fetch(BASE + f); if (r.status !== 404) notPublic.push(f + ' ' + r.status); await r.text();
