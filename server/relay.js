@@ -22,6 +22,10 @@
 //      decides the death and whose kill it is. What a player reports about
 //      itself (a car, a monkey, a banana, coming back to life) it may only
 //      report against itself.
+//    - where players are: every step is checked against how far anyone
+//      could have walked (move.js). One that could not is not passed on,
+//      not used to judge shots or pickups, and the player is told where the
+//      room last had them ('pos'), and put back there
 //    - who runs the creatures: only the host's snapshots and kill reports
 //      are passed on
 //    - how much: a size limit on every message and a rate limit per kind,
@@ -34,6 +38,7 @@
 import RULES from '../shared/rules.js';
 import ITEMS from '../shared/items.js';
 import { remember, whyNot } from './combat.js';
+import { step, freeStep } from './move.js';
 
 export const DMG = RULES.DMG;
 export const MAX_BYTES = 16384;        // one message
@@ -44,9 +49,13 @@ export const MAX_BYTES = 16384;        // one message
 const KINDS = {
   state: [30, 40, (p, from, room, now) => {
     if (!num(p.x) || !num(p.y) || !num(p.z) || Math.abs(p.x) > 2000 || Math.abs(p.z) > 2000) return null;
-    const me = room.players.get(from);
+    const me = room.players.get(from), w = p.w === undefined ? 0 : int(p.w) ? 1 : 0;
+    if (room.moves) {
+      const why = step(me, p.x, p.y, p.z, w, now);
+      if (why) { room.moveRefused++; room.lastMoveRefusal = why; room.putBack(from, me, now); return null; }
+    }
     remember(me, now, p.x, p.y, p.z);
-    me.w = p.w === undefined ? 0 : int(p.w);
+    me.w = w;
     p.id = from;
     if (p.n !== undefined) p.n = text(p.n, 20);
     //  what the others are told about my health and my score is the room's
@@ -86,7 +95,7 @@ const KINDS = {
   }],
   spawn: [1, 3, (p, from, room) => {
     const me = room.players.get(from);
-    if (me.dead) { me.dead = false; me.hp = RULES.HP_MAX; me.killer = null; me.lastBy = null; room.dirty.add(from); }
+    if (me.dead) { me.dead = false; me.hp = RULES.HP_MAX; me.killer = null; me.lastBy = null; room.dirty.add(from); freeStep(me); }   // up again, wherever
     room.send(from, 'hp', { hp: me.hp });
     return null;
   }],
@@ -116,10 +125,15 @@ function int(v) { return Number.isFinite(+v) ? Math.round(+v) : 0; }
 function text(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
 
 export class Relay {
-  constructor() {
+  //  moves: check where players say they are (move.js). On in every room on
+  //  Cloudflare; the lab's game tests move players about to set scenes up,
+  //  and turn it on only where they test it.
+  constructor({ moves = true } = {}) {
+    this.moves = moves;
     this.players = new Map();          // id → the room's view of that player
     this.out = [];
     this.refused = 0; this.lastRefusal = '';
+    this.moveRefused = 0; this.lastMoveRefusal = '';
     this.dirty = new Set();            // players whose health or score changed (the room saves them)
     this.pickups = null;               // shared/items.js, and which are lying there (items())
   }
@@ -149,6 +163,14 @@ export class Relay {
       killer: k.killer || null, lastBy: null, lastByT: 0, lastHitT: -1e9, w: 0, hist: [] });
   }
   saved(id) { const v = this.players.get(id); return v && { hp: v.hp, dead: v.dead, ds: v.ds, kills: v.kills, deaths: v.deaths, killer: v.killer }; }
+  //  a step the room did not believe: tell the player where it has them
+  //  (not more than twice a second; the steps still on their way in will
+  //  be refused too, and one answer is enough)
+  putBack(id, v, now) {
+    if (!v.mv || now - (v.putT || 0) < 500) return;       // (no step believed yet: nowhere to go back to)
+    v.putT = now;
+    this.send(id, 'pos', { x: v.mv.x, y: v.mv.y, z: v.mv.z });
+  }
   leave(id) { this.players.delete(id); }
 
   //  queue a message from the room: to 'others' (than the sender), 'self',

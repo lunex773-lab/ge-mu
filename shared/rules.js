@@ -14,4 +14,6 @@ module.exports = {
   EYE: 1.68,                // m from the feet to the eye (a state's y is the feet)
   BANANA_HEAL: 40,
   KILL_CREDIT_MS: 12000,    // a death goes to whoever shot you in the last 12 s
+  RUN: 10.2,                // m/s, running (the fastest anyone moves on their own feet)
+  WORLD: 700,               // m across; the game keeps everyone within ±WORLD × 0.48
 };

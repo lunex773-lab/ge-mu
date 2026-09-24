@@ -128,8 +128,10 @@ function build() {
 }
 
 //  The room server, as GameRoom (server/room.js) runs it, minus what only
-//  Cloudflare has (hibernation, storage): one Relay per room name.
-async function roomServer() {
+//  Cloudflare has (hibernation, storage): one Relay per room name. Its check
+//  on where players are (server/move.js) is off unless asked for — the game
+//  tests move players about to set scenes up — and move.game.test.js asks.
+async function roomServer({ moves = false } = {}) {
   const { Relay, idFor } = await import(pathToFileURL(path.join(ROOT, 'server', 'relay.js')).href);
   const rooms = new Map();                       // name → { relay, next, sockets: Map(id → { ws, who }) }
   const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
@@ -138,7 +140,7 @@ async function roomServer() {
     const raw = String(u.searchParams.get('room') || '').trim();
     const name = /^[\p{L}\p{N}_\-. ]{1,32}$/u.test(raw) ? raw : 'lobby';   // as server/worker.js
     let R = rooms.get(name);
-    if (!R) rooms.set(name, R = { relay: new Relay(), next: 0, sockets: new Map() });
+    if (!R) rooms.set(name, R = { relay: new Relay({ moves }), next: 0, sockets: new Map() });
     const id = idFor(R.next++);
     R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
     R.sockets.set(id, { ws, who });
@@ -165,11 +167,11 @@ async function roomServer() {
 
 //  A room of players. Each is a separate browser context — its own
 //  localStorage — and all of them meet in the room server above.
-async function openRoom() {
+async function openRoom({ moves = false } = {}) {
   build();
   const { chromium } = playwright();
   const browser = await chromium.launch({ args: ['--disable-gpu', '--mute-audio'] });
-  const connect = await roomServer();
+  const connect = await roomServer({ moves });
 
   async function player({ room, nick, save, render, seed, url, viewport } = {}) {
     const ctx = await browser.newContext({ viewport: viewport || { width: 480, height: 320 } });

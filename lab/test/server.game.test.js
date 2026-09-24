@@ -47,7 +47,9 @@ async function until(P, src, secs) {
   fs.copyFileSync(path.join(CACHE, 'three.min.js'), path.join(SITE, 'three.min.js'));
   const PORT = 8900 + Math.floor(Math.random() * 90), URL = 'http://127.0.0.1:' + PORT + '/';
   //  its own process group, so that stopping it stops wrangler's children too
-  const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--assets', SITE, '--log-level', 'warn'],
+  //  MOVE_CHECK off: this test sets its scenes up by moving players about
+  //  (server/move.js is checked in server/test/ and lab/test/move.game.test.js)
+  const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--assets', SITE, '--var', 'MOVE_CHECK:off', '--log-level', 'warn'],
     { cwd: ROOT, detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' } });
   let log = ''; dev.stdout.on('data', (d) => { log += d; }); dev.stderr.on('data', (d) => { log += d; });
   const room = await openRoom();

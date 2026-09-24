@@ -1020,6 +1020,8 @@
           EYE: 1.68,                // m from the feet to the eye (a state's y is the feet)
           BANANA_HEAL: 40,
           KILL_CREDIT_MS: 12000,    // a death goes to whoever shot you in the last 12 s
+          RUN: 10.2,                // m/s, running (the fastest anyone moves on their own feet)
+          WORLD: 700,               // m across; the game keeps everyone within ±WORLD × 0.48
         };
 
       },
@@ -3141,6 +3143,7 @@
     host: '', mobT: 0, mobPubT: 0, mobSeq: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
+    fixes: 0,                              // times the room put me back (onRoomPos)
   };
   const SRV = { ws: null, tries: 0, everUp: false, timer: 0, retry: 0 };   // the room server's connection (connectServer)
   //  On the room server, health, deaths and kills are the room's: it judges
@@ -3322,6 +3325,7 @@
     if (t.slice(-5) === '/took') { onTook(msg); return; }
     if (t.slice(-5) === '/item') { onItem(msg); return; }
     if (t.slice(-3) === '/hp') { onRoomHp(msg, false); return; }
+    if (t.slice(-4) === '/pos') { onRoomPos(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -3659,7 +3663,7 @@
   //  Player controller  (touch flick + desktop fallback)
   // ──────────────────────────────────────────────────────────
   const RULES = SH('rules.js');         // shared/rules.js: the numbers the room server holds us to
-  const EYE = RULES.EYE, GRAV = 26, JUMP = 8.4, WALK = 5.4, RUN = 10.2, PRAD = 0.55;
+  const EYE = RULES.EYE, GRAV = 26, JUMP = 8.4, WALK = 5.4, RUN = RULES.RUN, PRAD = 0.55;
   const p = new THREE.Vector3(0, 0, 0);
   let yaw = 0, pitch = -0.04, vy = 0, grounded = false, bob = 0, wantJump = false;
   let stridePhase = 0, jumpCharge = 0, charging = false, landTimer = 0, prevGrounded = true, strideDir = 1;
@@ -4345,6 +4349,16 @@
     if (hp <= 0) onDeath();
     if (shot) publishState(true);
   }
+  //  The room did not believe a step (server/move.js: further than anyone
+  //  could have gone): back to where it has me. Playing, this should never
+  //  happen; F3 / ?debug counts it (NET … fix n).
+  function onRoomPos(msg) {
+    if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
+    if (psyHold) psyRelease(0);
+    p.set(msg.x, (+msg.y || 0) + EYE, msg.z); vy = 0;
+    MP.fixes++;
+    publishState(true);
+  }
   function applyDamage(d, by) {
     if (dead) return;                                 // cloak hides you, but does NOT block damage
     if (by) { lastAttacker = by; lastAttackerT = performance.now(); }
@@ -4567,7 +4581,7 @@
       (S ? 'JS    logic ' + ms(S.logic) + 'ms (worst ' + ms(S.logicMax) + ')  draw ' + ms(S.draw) + 'ms (worst ' + ms(S.drawMax) + ')\n' : '') +
       'DRAW  ' + r.calls + '  TRIS ' + (r.triangles / 1000).toFixed(0) + 'k  OBJ ' + objs + '\n' +
       'MEM   heap ' + heap + '  GEO ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '  PROG ' + (renderer.info.programs || []).length + '\n' +
-      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  tick ' + (MP.tickRate ? MP.tickRate + 'Hz' : '—') + '\n' +
+      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
       '  TROOP ' + (mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '\n' +

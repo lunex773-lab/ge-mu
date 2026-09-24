@@ -20,7 +20,9 @@ import { Relay, idFor } from './relay.js';
 export class GameRoom extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this.relay = new Relay();
+    //  MOVE_CHECK=off (wrangler dev --var) only for tests that move players
+    //  about to set a scene up; every real room checks
+    this.relay = new Relay({ moves: env.MOVE_CHECK !== 'off' });
     this.sockets = new Map();                       // id → WebSocket
     this.who = new Map();                           // WebSocket → { id, name }
     for (const ws of this.ctx.getWebSockets()) {    // woken up: whoever is still connected

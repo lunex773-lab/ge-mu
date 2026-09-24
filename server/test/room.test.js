@@ -154,10 +154,14 @@ async function main() {
     check('two hits closer together than the gun can fire count once', A.of('hurt').length === 2, A.of('hurt').map((m) => m.p.hp).join(','));
     await place(A, hidden[0]); await place(B, hidden[1]); await wait(250);
     B.send('hit', { t: A.id });
-    await place(A, { x: 0, y: 0, z: -300 }); await place(B, PB); await wait(250);
-    B.send('hit', { t: A.id });
+    //  out of range: someone who arrives 340 m away (a first step may be
+    //  anywhere; the room would not believe A walked there)
+    const E = await join(ROOM + 'alpha', 'Eve');
+    await place(E, { x: 0, y: 0, z: -300 }); await place(B, PB); await wait(250);
+    B.send('hit', { t: E.id });
     await wait(300);
-    check('a hit through a building, or from out of range, does nothing', A.of('hurt').length === 2);
+    check('a hit through a building, or from out of range, does nothing', A.of('hurt').length === 2 && E.of('hurt').length === 0);
+    E.ws.close();
     await place(A, PA); await place(B, PB);
     for (let i = 0; i < 4; i++) { await wait(250); B.send('hit', { t: A.id }); }
     const kill = await until(() => B.of('kill').length && A.of('kill')[0]);
@@ -177,6 +181,16 @@ async function main() {
     check('getting up, and a car or a creature reported against yourself, count on your own health', hps.join(',') === '100,70', hps.join(','));
     A.send('kill', { by: B.id, v: A.id, ds: 99 }); await wait(200);
     check('a player cannot declare a kill', B.of('kill').length === 1);
+
+    // ---- where players are (server/move.js) ------------------------------
+    A.send('state', { x: PA.x, y: 0, z: PA.z, r: 0, w: 0 });   // the first step after getting up may be anywhere: this is it
+    await wait(150);
+    const fromA = () => B.of('state').filter((m) => m.f === A.id).length, seenA = fromA();
+    A.send('state', { x: 250, y: 0, z: 250, r: 0, w: 0 });
+    const pos = await until(() => A.of('pos')[0]);
+    await wait(200);
+    check('a step across the city is not passed on, and the player is told where the room has them',
+      pos && pos.p.x === PA.x && pos.p.z === PA.z && fromA() === seenA, JSON.stringify(pos && pos.p) + ', ' + (fromA() - seenA) + ' passed on');
 
     // ---- what a message may say ------------------------------------------
     B.send('mob', { m: [1, 2, 3] }); A.send('mob', { m: [4, 5, 6] });
