@@ -1,7 +1,9 @@
-# Deploys CONTOUR (the game and its room server) to Cloudflare.
+# Deploys CONTOUR (the game and its room server) to Cloudflare, then checks
+# the live site: the page is this commit's, and its rooms judge as they should.
 #
-# Runs on every push to the working branch, and by hand from the Actions
-# tab ("Run workflow"). It needs two repository secrets — see SETUP.md:
+# Runs on every push to the working branch (and by hand with "Run workflow",
+# once this file is on the default branch). It needs two repository secrets —
+# see SETUP.md:
 #   CLOUDFLARE_API_TOKEN   an API token made from the "Edit Cloudflare Workers" template
 #   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account to deploy to
 # Until they are set it does nothing (and does not fail).
@@ -10,6 +12,10 @@ on:
   push:
     branches: [claude/multiplayer-login-c9n7dk]
   workflow_dispatch:
+# one deploy at a time, each checked before the next goes out
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -26,8 +32,19 @@ jobs:
         if: env.READY == 'true'
         run: npm ci && npm run test:server
       - name: Deploy
+        id: deploy
         if: env.READY == 'true'
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Check the live site
+        if: env.READY == 'true'
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+          OUT: ${{ steps.deploy.outputs.command-output }}
+        run: |
+          [ -n "$URL" ] || URL=$(printf '%s' "$OUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
+          [ -n "$URL" ] || { echo "The deployed URL is not in wrangler's output."; exit 1; }
+          echo "### 公開先: $URL" >> "$GITHUB_STEP_SUMMARY"
+          LIVE_URL="$URL" node server/test/room.test.js

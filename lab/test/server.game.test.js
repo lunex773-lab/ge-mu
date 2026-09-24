@@ -43,8 +43,9 @@ async function until(P, src, secs) {
   fs.copyFileSync(path.join(CACHE, 'game.html'), path.join(SITE, 'index.html'));
   fs.copyFileSync(path.join(CACHE, 'three.min.js'), path.join(SITE, 'three.min.js'));
   const PORT = 8900 + Math.floor(Math.random() * 90), URL = 'http://127.0.0.1:' + PORT + '/';
+  //  its own process group, so that stopping it stops wrangler's children too
   const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--assets', SITE, '--log-level', 'warn'],
-    { cwd: ROOT, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' } });
+    { cwd: ROOT, detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' } });
   let log = ''; dev.stdout.on('data', (d) => { log += d; }); dev.stderr.on('data', (d) => { log += d; });
   const room = await openRoom();
   try {
@@ -132,7 +133,7 @@ async function until(P, src, secs) {
     await B.close();
   } finally {
     await room.close();
-    dev.kill('SIGTERM');
+    try { process.kill(-dev.pid, 'SIGTERM'); } catch (e) {}
   }
   console.log('\nTHE GAME ON ITS ROOM SERVER\n');
   console.log(results.join('\n'));
