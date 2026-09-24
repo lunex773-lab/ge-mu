@@ -22,6 +22,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { Relay, idFor } from './relay.js';
+import BUILD from '../dist/build.js';                // (written by server/build.js: which code this is)
 
 export class GameRoom extends DurableObject {
   constructor(ctx, env) {
@@ -55,7 +56,7 @@ export class GameRoom extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(a);
     const out = this.adopt(server, a);
-    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns() } }));
+    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns(), bd: BUILD } }));
     this.route(out, a.id, server);
     this.relay.hello(a.id);
     const asked = this.askMind();                   // (answered once the player is in)

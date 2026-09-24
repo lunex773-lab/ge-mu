@@ -20,8 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import TF from '../../shared/traffic.js';
+import { fingerprint } from '../fingerprint.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const BUILD = fingerprint(ROOT);                   // the room server's code, as it is in this checkout
 const PORT = 8700 + Math.floor(Math.random() * 200);
 const LIVE = (process.env.LIVE_URL || '').replace(/\/+$/, '');
 const BASE = LIVE || 'http://127.0.0.1:' + PORT;
@@ -69,6 +71,8 @@ function join(room, name) {
 //  were until they next say — so hits it should have judged were refused.)
 async function roundTrip() {
   const P = await join(ROOM + 'rtt', 'rtt');
+  //  (a room still on the last version, the minute after a deploy, is not this one)
+  if (P.welcome.bd !== BUILD) { P.ws.close(); throw new Error('a room still runs build ' + P.welcome.bd + ', not ' + BUILD); }
   const all = [];
   for (let i = 0; i < 5; i++) {
     const t0 = Date.now(), n = P.of('ping').length;
@@ -82,8 +86,10 @@ async function roundTrip() {
 }
 //  Just after a deploy the rooms are still moving to the new version: the
 //  first sockets fail, or answer seconds late (both seen, a second after
-//  deploying). So, live, wait until a room answers promptly — the middle
-//  ping under 2 s — trying every few seconds for up to 90 s.
+//  deploying), or a room answers on the last version's code (seen: the
+//  first rooms of a check on the old code, then moved over half way through
+//  it). So, live, wait until a room answers promptly — the middle ping under
+//  2 s — with this checkout's build, trying every few seconds for 90 s.
 async function settled() {
   const end = Date.now() + 90000;
   let tries = 0, why = '';
