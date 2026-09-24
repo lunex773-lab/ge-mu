@@ -113,15 +113,18 @@ const KINDS = {
     room.creatures.hostSaid(p);                                    // the tear, and Beelzebub while the room takes him over
     return Object.assign(p, { id: from });
   }],
-  mdeath: [8, 16, (p, from, room) => (room.host() === from ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
-  mobhit: [8, 12, (p, from) => ({ i: int(p.i), d: DMG, by: from })],
+  //  the troop: the host's to say who took a monkey down, and the host's to
+  //  be told of every shot at one — unless the room runs it, when the room
+  //  judges the shot and says (creatures.js, troop.js)
+  mdeath: [8, 16, (p, from, room) => (room.host() === from && !room.creatures.own.m ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
+  mobhit: [8, 12, (p, from, room, now) => (room.creatures.monkeyShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, by: from })],
   dhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   ghit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   mfhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
   //  at Beelzebub: the room's to judge when it runs him, else the host's
   bhit: [8, 12, (p, from, room, now) => (room.creatures.shot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z), by: from })],
-  corpse: [4, 8, (p, from) => Object.assign(p, { id: from })],
+  corpse: [4, 8, (p, from, room) => { room.creatures.corpse(p); return Object.assign(p, { id: from }); }],
   //  a tear is announced by whoever heard of it, on behalf of its owner: the
   //  id in it is the owner's, and is left alone
   gate: [4, 8, (p) => p],
@@ -237,6 +240,10 @@ export class Relay {
     const me = this.players.get(from);
     if (!me) return { out: [], drop: 'unknown sender' };
     if (me.t0 === undefined) me.t0 = now;
+    //  woken from sleep (GameRoom): whatever the players' games think the room
+    //  runs, it runs nothing yet — they carry on with it, and the room takes
+    //  it back from them as it did the first time (creatures.js recount)
+    if (this.woke) { this.woke = false; this.send('all', 'own', { b: 0, m: 0 }); }
     this.tickItems(now);
     const r = this.judge(me, from, raw, now);
     this.creatures.tick(now);              // whatever the message, time has moved on for the creatures

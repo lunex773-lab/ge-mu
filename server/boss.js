@@ -24,7 +24,7 @@
 import CITY from '../shared/city.js';
 import RULES from '../shared/rules.js';
 import BRAIN from './brain.js';
-import { theCity } from './combat.js';
+import { theCity, theFootprints } from './combat.js';
 import { fileable } from './mindstore.js';
 import BR from '../lab/core/boss_runner.js';          // the lab's modules are CommonJS: each is its module.exports
 import NEURAL from '../lab/core/neural.js';
@@ -42,8 +42,6 @@ const GONE_AFTER = 9.5;                    // s he lies there before he is gone 
 //  where he can be shot: shins, chest, head (index.html bzbRayHit)
 const SPHERES = [[1.2, 0.75], [2.6, 0.85], [3.6, 0.95], [4.3, 0.42]];
 
-let foot = null;                           // once per isolate
-function footprints() { return foot || (foot = CITY.footprints(CITY.planBuildings())); }
 
 export class RoomBoss {
   constructor(room) {
@@ -53,7 +51,7 @@ export class RoomBoss {
     this.gate = null;                      // { x, z, ry, seed } the tear he guards
     this.slain = new Set();                // tears at which he has fallen (B7)
     this.acc = 0; this.t = 0; this.deadT = 0;
-    const F = footprints();
+    const F = theFootprints();
     this.peers = new Map();                // the adapter's view of the players (refilled each step)
     this.env = {
       world: {

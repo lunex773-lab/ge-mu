@@ -22,6 +22,8 @@ const SLACK = 0.4;                     // m: a line that stops this short of the
 
 let city = null;                       // once per isolate, and lazily (shared/city.js lazyCity)
 export function theCity() { return city || (city = CITY.lazyCity()); }
+let foot = null;                       // the streets' open ground and roofs (shared/city.js footprints), once per isolate
+export function theFootprints() { return foot || (foot = CITY.footprints(CITY.planBuildings())); }
 
 //  where a player has been: flat [t, x, y, z, t, x, y, z, …], y at the feet.
 //  Kept in memory only: a room that sleeps (hibernation, after ~10 s with

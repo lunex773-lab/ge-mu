@@ -34,7 +34,7 @@ export class GameRoom extends DurableObject {
     this.mindName = 'beelzebub';
     for (const ws of this.ctx.getWebSockets()) {    // woken up: whoever is still connected
       const a = ws.deserializeAttachment();
-      if (a && a.id) { this.adopt(ws, a); if (a.mind) this.mindName = a.mind; }
+      if (a && a.id) { this.adopt(ws, a); if (a.mind) this.mindName = a.mind; this.relay.woke = true; }
     }
     //  a plain "ping" keeps a phone's connection alive without waking the room
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));

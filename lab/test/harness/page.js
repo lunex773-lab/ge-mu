@@ -66,7 +66,7 @@ const HOOK = `
     get gateSettle() { return gateSettle; },
     get myKills() { return myKills; }, set myKills(v) { myKills = v; },
     get gateUnlocked() { return gateUnlocked; },
-    get rageT() { return rageT; }, RAGE_TIME,
+    get rageT() { return troop.rageT; }, RAGE_TIME: TR.RAGE_TIME,
     monkeyPeds, dogs,
     creditMyKill, openGate, saveGate, publishGate, start,
     noRender() { renderer.realRender = renderer.render; renderer.render = () => {}; },

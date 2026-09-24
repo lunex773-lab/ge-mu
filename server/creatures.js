@@ -3,21 +3,25 @@
 //  ============================================================
 //  Alone in a room, a player's game runs every creature itself, as it
 //  always has: nothing is sent, nothing is waited for. With two or more,
-//  the room runs them — so far Beelzebub (boss.js) — and everyone is told
-//  the same, nobody's phone carrying them for the rest.
+//  the room runs them — so far Beelzebub (boss.js) and the monkey troop
+//  (troop.js) — and everyone is told the same, nobody's phone carrying them
+//  for the rest.
 //
-//  Handing him over, so that he is never run twice and never not at all:
+//  Handing one over, so that it is never run twice and never not at all:
 //
 //    two are here     → the room waits for the host's next snapshot (at most
-//                       an eighth of a second), takes him from what it says
-//                       (or finds he is not standing), and only then tells
-//                       everyone it runs him ('own' { b: 1 }): the host's game
-//                       stops, and everyone draws him from the room's 'sv'
+//                       an eighth of a second), takes it from what that says,
+//                       and only then tells everyone it runs it ('own' { b: 1 },
+//                       { m: 1 }): the host's game stops, and everyone draws it
+//                       from the room's 'sv'. (The troop rides in a host's
+//                       snapshot only when someone else is on this side of the
+//                       tear, or in every eighth; after nine without it, the
+//                       host is not running one, and the room starts its own.)
 //    one is left      → the room tells them it no longer does, with its last
-//                       word on him ('own' { b: 0, s }), and their game carries
-//                       on from there
+//                       word ('own' { b: 0, s } / { m: 0, t }), and their game
+//                       carries on from there
 //
-//  The room steps him whenever a message arrives — with two players about,
+//  The room steps them whenever a message arrives — with two players about,
 //  some thirty a second — so it needs no timer (a Durable Object's alarm is
 //  a billed request, and would keep it from sleeping).
 //
@@ -27,68 +31,108 @@
 //  next fight the room runs (`cand`), and what players' games may tell it.
 
 import { RoomBoss } from './boss.js';
+import { RoomTroop } from './troop.js';
 import { fileable, MIN_FIGHT } from './mindstore.js';
 import PM from '../lab/core/player_model.js';
 
-const SEND_MS = 100;                       // his account goes out ten times a second
+const SEND_MS = 100;                       // what the room runs goes out ten times a second
 export const ROOM = '__room';              // (who a candidate is for, when it is the room's own)
 const KNOWN_MAX = 32;
+const TROOP_WAIT = 9;                      // host snapshots without the troop before the room starts its own
 
 export class Creatures {
   constructor(room, { enabled = true } = {}) {
     this.room = room;                      // the Relay
     this.enabled = enabled;
     this.boss = new RoomBoss(room);
-    this.own = false;                      // the room runs Beelzebub
-    this.taking = false;                   // two are here: waiting on the host's next word
-    this.sentT = 0; this.sentSome = false;
+    this.troop = new RoomTroop(room);
+    this.own = { b: false, m: false };     // what the room runs: Beelzebub, the troop
+    this.taking = { b: false, m: 0 };      // two are here: waiting on the host's next word (m: how many so far)
+    this.sentT = 0; this.sentSome = false; this.svSeq = 0;
     this.known = new Map();                // name → { t, m, f }: what the memory has of them (and what has been learned here since)
     this.asked = new Set();                // names already asked of the memory
     this.cand = null; this.candAsked = false;
     this.ro = null;                        // the readout, as the memory last had it
   }
-  owns() { return { b: this.own ? 1 : 0 }; }
+  owns() { return { b: this.own.b ? 1 : 0, m: this.own.m ? 1 : 0 }; }
 
   //  the host's snapshot: the tear, whether he has fallen at it, and — while
-  //  the room is taking him over — where he is and how he is
+  //  the room is taking them over — where he is and how he is, and the troop
   hostSaid(p) {
     if (!this.enabled) return;
     this.boss.hearGate(Array.isArray(p.g) ? p.g : null);
     if (p.bs && Array.isArray(p.g)) this.boss.hearSlain(p.g[4]);
-    if (this.taking) {
-      this.taking = false; this.own = true;
+    const took = {};
+    if (this.taking.b) {
+      this.taking.b = false; this.own.b = true; took.b = 1;
       if (Array.isArray(p.b)) this.boss.adopt(p.b);
-      this.room.send('all', 'own', { b: 1 });
     }
-    if (this.own) delete p.b;              // (a game from before this still sends him)
+    if (this.taking.m) {
+      const ok = RoomTroop.valid(p.m, p.c);
+      if (ok || ++this.taking.m > TROOP_WAIT) {
+        this.taking.m = 0; this.own.m = true; took.m = 1;
+        this.troop.adopt(ok ? p.m : null, p.c, p.r);
+      }
+    }
+    if (took.b || took.m) this.room.send('all', 'own', took);
+    if (this.own.b) delete p.b;            // (a game from before this still sends them)
+    if (this.own.m) { delete p.m; delete p.c; delete p.r; }
   }
   //  someone came or went
   recount() {
     if (!this.enabled) return;
     const n = this.room.players.size;
-    if (n >= 2) { if (!this.own) this.taking = true; this.wantMind(); return; }
-    this.taking = false;
-    if (!this.own) return;
-    this.own = false;
-    this.room.send('all', 'own', { b: 0, s: this.boss.snapshot() });
-    this.boss.end();
-    this.boss.st = null; this.sentSome = false;
+    if (n >= 2) {
+      if (!this.own.b) this.taking.b = true;
+      if (!this.own.m && !this.taking.m) this.taking.m = 1;
+      this.wantMind();
+      return;
+    }
+    this.taking.b = false; this.taking.m = 0;
+    if (!this.own.b && !this.own.m) return;
+    const back = {};
+    if (this.own.m) { this.own.m = false; back.m = 0; back.t = this.troop.snapshot(); }
+    if (this.own.b) {
+      this.own.b = false; back.b = 0; back.s = this.boss.snapshot();
+      this.boss.end();
+      this.boss.st = null; this.sentSome = false;
+    }
+    this.room.send('all', 'own', back);
     //  what the room learned of whoever is left goes with him
-    for (const [id, p] of this.room.players) { const e = this.known.get(p.name); if (e) this.room.send(id, 'mind', { me: e }); }
+    if ('b' in back) for (const [id, p] of this.room.players) { const e = this.known.get(p.name); if (e) this.room.send(id, 'mind', { me: e }); }
   }
   //  a message has arrived (now: ms)
   tick(now) {
-    if (!this.own) return;
-    this.boss.step(now);
+    if (!this.own.b && !this.own.m) return;
+    if (this.own.b) this.boss.step(now);
+    if (this.own.m) this.troop.step(now);
     if (now - this.sentT < SEND_MS) return;
-    const b = this.boss.snapshot();
-    if (!b && !this.sentSome) return;      // nothing to say, and nothing said that needs taking back
-    this.sentT = now; this.sentSome = !!b;
-    this.room.send('all', 'sv', { b });
+    const sv = {};
+    if (this.own.b) {
+      const b = this.boss.snapshot();
+      if (b || this.sentSome) sv.b = b;    // (nothing to say, and nothing said that needs taking back: nothing)
+      this.sentSome = !!b;
+    }
+    if (this.own.m) {
+      const T = this.troop.snapshot();
+      sv.r = T.r;
+      //  the troop and its bodies belong to this side of the tear: while
+      //  everyone is over on the other they ride only in every eighth
+      let dayside = this.svSeq++ % 8 === 0;
+      for (const p of this.room.players.values()) if (!p.w) dayside = true;
+      if (dayside) { sv.m = T.m; sv.c = T.c; }
+    }
+    if (!('b' in sv) && !('r' in sv)) return;
+    this.sentT = now;
+    this.room.send('all', 'sv', sv);
   }
   //  a round at him, when the room runs him (returns false when it does not)
-  shot(from, now) { if (!this.own) return false; this.boss.shot(from, now); return true; }
-  heard(from) { if (this.own) this.boss.heard(from); }
+  shot(from, now) { if (!this.own.b) return false; this.boss.shot(from, now); return true; }
+  heard(from) { if (this.own.b) this.boss.heard(from); }
+  //  a round at monkey i, when the room runs the troop (false when it does not)
+  monkeyShot(from, i, now) { if (!this.own.m) return false; this.troop.shot(from, i, now); return true; }
+  //  a body a player's game threw: the room's troop comes to eat it too
+  corpse(p) { if (this.own.m) this.troop.corpse(p); }
 
   //  ---- his memory ------------------------------------------------------------
   //  what the room needs before it runs him: a candidate for the fight, and
