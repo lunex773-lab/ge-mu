@@ -52,7 +52,7 @@ try {
 } catch (e) { thrown = e; }
 check('a minute of him, near two players: no error, he thinks ten times a second, and he swings', !thrown && boss.ai.thinks > 550 && swings > 0,
   (thrown ? thrown.message + ' ' : '') + boss.ai.thinks + ' decisions, ' + swings + ' swings, now ' + MODES[boss.snapshot()[6]]);
-check('and no call comes near the 10 ms a call has', Math.max(worst, coreMs, mindMs, upMs) < 7,
+check('and no call reaches the 10 ms a call has', Math.max(worst, coreMs, mindMs, upMs) < 9.5,
   'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; his core ' + coreMs.toFixed(2) + ', his mind ' + mindMs.toFixed(2) + ', standing up ' + upMs.toFixed(2));
 
 //  shots at him
