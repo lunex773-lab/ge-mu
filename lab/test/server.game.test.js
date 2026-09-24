@@ -102,10 +102,21 @@ async function until(P, src, secs) {
     check('getting back up is the room\'s full health too', (await ev(A, '!dead && hp === HP_MAX')));
     //  and a real shot: the game aims at what it draws, fires, and the room agrees
     await stand(A, 10); await sleep(1500);
+    //  (they stand on the pavement, where people walk and the troop wanders,
+    //  and whoever steps into the line takes the bullet instead, as they
+    //  should: for this one shot, B's walkers and monkeys step aside)
+    const inTheWay = await ev(B, `(() => { const pr = MP.peers.get(${JSON.stringify(ids.a)}); let n = 0;
+      const ax = pr.cur.x - p.x, az = pr.cur.z - p.z, L = Math.hypot(ax, az);
+      for (const e of peds) { if (e.isMonkey && e.hp <= 0) continue;
+        const u = ((e.wx - p.x) * ax + (e.wz - p.z) * az) / (L * L);
+        if (u > 0 && u < 1 && Math.abs((e.wx - p.x) * az - (e.wz - p.z) * ax) / L < 1.5) n++;
+        e.wx += 500; }
+      return n; })()`);
     await ev(B, `(() => { mode = 'mobile'; const pr = MP.peers.get(${JSON.stringify(ids.a)}); const dx = pr.cur.x - p.x, dz = pr.cur.z - p.z;
       yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(pr.cur.y + 1.1 - p.y, Math.hypot(dx, dz)); fireCd = 0; reloading = 0; ammo = Math.max(ammo, 5); fire(); return 1; })()`);
     const shotLanded = await until(A, 'hp === 80', 4);
-    check('a real shot — aimed at what the game draws, fired — lands on the room\'s word', shotLanded, 'hp ' + (await ev(A, 'hp')));
+    check('a real shot — aimed at what the game draws, fired — lands on the room\'s word', shotLanded,
+      'hp ' + (await ev(A, 'hp')) + (inTheWay ? '; ' + inTheWay + ' walker(s) or monkey(s) had been in the line' : ''));
 
     // ---- the pickups are the room's -----------------------------------------
     const where = (P) => ev(P, 'JSON.stringify(bananas.map((b) => [Math.round(b.x * 10), Math.round(b.z * 10)]))');
