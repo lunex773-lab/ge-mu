@@ -7,9 +7,13 @@
 //  is not found.
 //
 //    /ws?room=<name>&name=<nick>   WebSocket, handed to that room's GameRoom
+//    /mind                         how Beelzebub's learning is going (JSON:
+//                                  steps taken, fights, how far from the lab's
+//                                  readout, how many players remembered — no names)
 
 import { GameRoom } from './room.js';
-export { GameRoom };
+import { BossMind } from './mind.js';
+export { GameRoom, BossMind };
 
 const ROOM_RE = /^[\p{L}\p{N}_\-. ]{1,32}$/u;
 
@@ -32,6 +36,10 @@ function originAllowed(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/mind' && request.method === 'GET' && env.MIND) {
+      const [st] = await env.MIND.getByName('beelzebub').ask([{ k: 'stats' }]);
+      return new Response(JSON.stringify(st, null, 1), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+    }
     if (url.pathname !== '/ws') return new Response('not found', { status: 404 });
     if (request.method !== 'GET' || request.headers.get('Upgrade') !== 'websocket') {
       return new Response('expected a WebSocket', { status: 426 });

@@ -3172,6 +3172,7 @@
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
     fixes: 0,                              // times the room put me back (onRoomPos)
     srvOwns: { b: false },                 // creatures the room runs itself (server/creatures.js): b, Beelzebub
+    mindCand: null,                        // Beelzebub's next candidate readout, from his memory on the server (onRoomMind)
   };
   const SRV = { ws: null, tries: 0, everUp: false, timer: 0, retry: 0 };   // the room server's connection (connectServer)
   //  On the room server, health, deaths and kills are the room's: it judges
@@ -3357,6 +3358,7 @@
     if (t.slice(-4) === '/pos') { onRoomPos(msg); return; }
     if (t.slice(-4) === '/own') { onRoomOwns(msg); return; }
     if (t.slice(-3) === '/sv') { onRoomCreatures(msg); return; }
+    if (t.slice(-5) === '/mind') { onRoomMind(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -4392,7 +4394,7 @@
   function onRoomOwns(msg) {
     const was = MP.srvOwns.b;
     MP.srvOwns.b = !!msg.b;
-    if (MP.srvOwns.b && !was && bzbAI && bzbAI.body) { bzbSaveMind(); bzbAI.body = null; }
+    if (MP.srvOwns.b && !was && bzbAI && bzbAI.body) { bzbFightEnd(); bzbSaveMind(); bzbAI.body = null; }
     if (!MP.srvOwns.b && was && msg.s) applyBzbSnapshot(msg.s);
   }
   function onRoomCreatures(msg) { if (MP.srvOwns.b) applyBzbSnapshot(msg.b || null); }
@@ -14355,6 +14357,7 @@
   const BZ_VIEW = 260;                 // m — past this he is not drawn
   const BZ_SAVE = 'contour.bzb';       // { seed, slain } — B7 survives a reload
   const BZ_MIND = 'contour.bzb.mind';  // what he has learned about the people he has fought (D4)
+  const BZ_RO = 'contour.bzb.ro';      // his readout, as his memory on the server last had it (B9b+)
   const BZ_MODES = ['ground', 'fly', 'attack', 'guard', 'dead'];
   const BZ_KINDS = ['reap', 'whirl', 'dash', 'dive'];
   const BZ_PHASES = ['wind', 'travel', 'act', 'rec'];
@@ -14412,7 +14415,7 @@
     onHit(id, dmg, kind) { if (id === MP.id) bzbStruck(dmg, kind); },
     onSwing(kind) { playBzbSwing(kind, bzb.tdist); },
     onDecision: (ai, dec) => bzbRecord(ai, dec),
-    onSave: () => bzbSaveMind(),
+    onSave: () => { bzbSaveMind(); bzbShareOwn(); },       // (half a minute of this phone running him)
   };
   function bzbMakeAI() {
     bzbEnv.G = {
@@ -14422,12 +14425,80 @@
     const c = new (NC('neural.js').NeuralCore)(NC('connectome.js').unpackGraph(NC_GRAPH), { seed: 0xbeef });
     if (NC_READOUT) c.trained = c.setReadout(NC_READOUT);   // Phase 10's readout, if it fits this graph
     bzbEnv.core = c;
+    bzbUseReadout();                                        // (or what the server has learned since)
     try { bzbEnv.mind = JSON.parse(localStorage.getItem(BZ_MIND) || 'null'); } catch (e) { bzbEnv.mind = null; }
     return BR.makeMind(bzbEnv);
   }
   function bzbSaveMind() {
     if (!bzbAI) return;
-    try { localStorage.setItem(BZ_MIND, JSON.stringify(BR.serializeMind(bzbAI))); } catch (e) {}
+    try { localStorage.setItem(BZ_MIND, JSON.stringify(Object.assign(BR.serializeMind(bzbAI), { at: Date.now() }))); } catch (e) {}
+  }
+
+  // ---- what he learns, fight by fight (B9b+) -------------------------------
+  //  His memory is on the server (server/mindstore.js), one for every room.
+  //  Arriving in a room, this phone is told the readout as it has learned it
+  //  so far, handed a candidate — that readout nudged a little — for the
+  //  next fight this phone runs him in, and what he knows of me (onRoomMind).
+  //  Each fight this phone runs is run with the candidate and scored as it
+  //  goes (boss_runner.js fightScore); at its end the score goes back, and a
+  //  new candidate comes. What he has learned of me goes back every half
+  //  minute of fighting. Offline, he fights with the readout last heard of.
+  let bzbFight = null;                     // { id }: the candidate this fight is run with (null: none)
+  function bzbServerRo() { try { return JSON.parse(localStorage.getItem(BZ_RO) || 'null'); } catch (e) { return null; } }
+  function bzbUseReadout() {
+    const c = bzbEnv.core, ro = bzbServerRo();
+    if (c && ro && c.setReadout(ro)) c.trained = true;
+    else if (c && NC_READOUT) c.setReadout(NC_READOUT);
+  }
+  function sendMind(m) {
+    if (!MP.connected || !MP.client) return;
+    try { MP.client.publish(mtopic('mind'), JSON.stringify(m)); } catch (e) {}
+  }
+  function bzbFightBegin() {
+    if (!bzbAI || bzbFight) return;
+    const c = MP.mindCand;
+    MP.mindCand = null;
+    bzbFight = { id: c && bzbAI.core.setReadout(c) ? c.id : null };
+    if (bzbFight.id === null) bzbUseReadout();
+    BR.fightStart(bzbAI);
+  }
+  function bzbFightEnd() {
+    if (!bzbFight || !bzbAI) return;
+    const f = bzbFight, sc = BR.fightScore(bzbAI);
+    bzbFight = null; bzbAI.tally = null;
+    if (f.id !== null) sendMind({ r: f.id, s: sc ? sc.s : null, n: sc ? sc.n : 0 });
+    bzbShareOwn();
+    bzbUseReadout();
+  }
+  //  what he has learned of me, for the server to keep — only from a fight
+  //  this phone ran (anything else here may be older than what the server
+  //  has), and only mine: the room takes nothing else from this phone
+  function bzbShareOwn() {
+    const e = bzbAI && MP.name && bzbAI.bank.models.get(MP.name);
+    if (e) sendMind({ m: e.model.serialize(), f: +bzbAI.fair.level.toFixed(4) });
+  }
+  function onRoomMind(m) {
+    if (m.ro) try { localStorage.setItem(BZ_RO, JSON.stringify(m.ro)); } catch (e) {}
+    if (m.c) MP.mindCand = m.c;
+    if (m.ro && bzbAI && !bzbFight) bzbUseReadout();
+    if (m.me && m.me.m) bzbTakeOwn(m.me);
+  }
+  //  what the server has of me, when it is newer than what this phone last
+  //  kept: another phone, or a room, has fought me since
+  function bzbTakeOwn(e) {
+    let kept = null;
+    try { kept = JSON.parse(localStorage.getItem(BZ_MIND) || 'null'); } catch (x) {}
+    if (!MP.name || !(e.t > ((kept && kept.at) || 0))) return;
+    kept = kept && kept.v === 1 ? kept : { v: 1 };
+    kept.bank = kept.bank && kept.bank.players ? kept.bank : { v: 1, players: {} };
+    kept.bank.players[MP.name] = { t: 0, m: e.m };
+    if (Number.isFinite(e.f)) kept.fair = { v: 1, difficulty: 'ADAPTIVE', level: e.f };
+    kept.at = e.t;
+    try { localStorage.setItem(BZ_MIND, JSON.stringify(kept)); } catch (x) {}
+    if (!bzbAI) return;
+    bzbAI.bank.restore({ v: 1, players: { [MP.name]: { t: cityT, m: e.m } } }, bzbAI.fair.mind);
+    if (bzbAI.pmName === MP.name) { bzbAI.pm = null; bzbAI.pmName = ''; }
+    if (Number.isFinite(e.f) && !bzbAI.body) bzbAI.fair.setLevel(e.f);
   }
   //  the name over a player's head is the only thing about them that lasts (D7)
   function bzbNameOf(id) {
@@ -14448,6 +14519,7 @@
       if (!bzbAI) bzbAI = bzbMakeAI();
       const b = BR.giveBody(bzbAI, bzbEnv, x, z, hd, hpMax, rift);
       bzb.hpMax = b.hpMax; bzb.hp = b.hp;
+      bzbFightBegin();
     }
     if (Math.hypot(x - p.x, z - p.z) < 400) notify('裂け目の前に、何かが立っている…', 4200);
     playBzbSpawn(Math.hypot(x - p.x, z - p.z));
@@ -14456,7 +14528,7 @@
     bzb.live = false;
     if (bzb.rig) bzb.rig.group.visible = false;
     bzb.drawn = false;
-    if (bzbAI) { bzbSaveMind(); bzbAI.body = null; }
+    if (bzbAI) { bzbFightEnd(); bzbSaveMind(); bzbAI.body = null; }
     bzbBedOff();
     bzbReleaseBar();
   }
@@ -14464,6 +14536,7 @@
     if (bzb.mode === 'dead') return;
     bzb.mode = 'dead'; bzb.deadT = 0; bzb.slain = true; bzb.hp = 0;
     bzbSaveSlain();
+    bzbFightEnd();
     if (bzbAI) bzbSaveMind();
     playBzbDeath(bzb.tdist);
     if (bzb.tdist < 300) notify('BEELZEBUB が斃れた', 4200);
@@ -14570,6 +14643,7 @@
       // the owner changed hands: carry on from what the old owner last said
       if (!bzbAI) bzbAI = bzbMakeAI();
       BR.adoptBody(bzbAI, bzbEnv, bzb, rift);
+      if (bzb.mode !== 'dead') bzbFightBegin();
     } else {
       // a follower: ease onto what the owner says, and judge his blade for itself
       const k = Math.min(1, dt * 7);
@@ -14796,6 +14870,9 @@
     const ep = ai.memory.episodic;
     s += 'MEM   landed ' + ep.count_('boss_attack_landed', 60, cityT) + '  missed ' + ep.count_('boss_attack_failed', 60, cityT) +
       '  countered ' + ep.count_('player_countered', 60, cityT) + '  (60s)\n';
+    const ro = bzbServerRo(), sc = ai.tally && BR.fightScore(ai);
+    s += 'LEARN ' + (bzbFight && bzbFight.id !== null ? 'candidate ' + bzbFight.id : 'no candidate') + '  readout step ' + (ro && ro.gen !== undefined ? ro.gen : 'lab') +
+      '  this fight ' + (ai.tally ? Math.round(ai.tally.secs) + 's' + (sc ? ' ' + f2(sc.s) + '/min' : '') : '—') + '\n';
     s += 'SAFE  ' + (d && d.faulted ? 'FSM — ' + ai.brain.lastError : 'brain') + '  faults ' + ai.brain.faults +
       '  ' + (ai.thinks ? Math.round(ai.thinkUs / ai.thinks) : 0) + 'µs/decision  F4: save replay\n';
     return s;

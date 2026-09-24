@@ -9,6 +9,12 @@
 //  game's own snapshot format), everyone's shots at him are checked and
 //  land here, and each player's game still judges his blade against itself.
 //
+//  What he learns is kept for every room (mindstore.js): each fight the
+//  room runs is run with the candidate readout the memory handed it, and
+//  scored as it goes (boss_runner.js fightScore); at its end the score goes
+//  back, with what he has learned of the players he fought. At the start of
+//  each, what the memory knows of the players here goes into his mind.
+//
 //  Costs, measured (server/test/boss.test.js): a step is a few hundredths of
 //  a millisecond on average; the first few calls in a fresh isolate cost
 //  more while the code warms (his core, his mind, his first senses and his
@@ -19,6 +25,7 @@ import CITY from '../shared/city.js';
 import RULES from '../shared/rules.js';
 import BRAIN from './brain.js';
 import { theCity } from './combat.js';
+import { fileable } from './mindstore.js';
 import BR from '../lab/core/boss_runner.js';          // the lab's modules are CommonJS: each is its module.exports
 import NEURAL from '../lab/core/neural.js';
 import BODY from '../lab/core/boss_body.js';
@@ -66,9 +73,10 @@ export class RoomBoss {
       onHit: () => {},                     // each player's game judges his blade against itself
       onSwing: () => {},
       onDecision: () => {},
-      onSave: (ai) => { this.mind = BR.serializeMind(ai); },
+      onSave: () => this.remember(),       // half a minute of fighting
     };
-    this.mind = null;
+    this.fightId = null;                   // the candidate this fight is run with (null: none came)
+    this.savedT = -Infinity;               // his time when what he learned was last sent to the memory
   }
 
   //  what the host last said of him, when the room takes him over
@@ -80,6 +88,7 @@ export class RoomBoss {
       atkSeq: k[7] | 0, atkKind: KINDS[k[8]] || null, atkPhase: PHASES[k[9]] || null, seed: k[10], vx: 0, vz: 0 };
     BR.adoptBody(this.ai, this.env, st, this.gate);
     this.st = st; this.deadT = 0;
+    if (st.mode !== 'dead') this.begin();
     this.took = { x: st.x, z: st.z, hp: st.hp };           // (what it was taken from: for a test, and for a look in the logs)
   }
   //  his core in one call, the rest of his mind in the next (each is a few
@@ -87,7 +96,6 @@ export class RoomBoss {
   mindUp(all) {
     if (this.ai) return;
     if (!this.env.core) { this.env.core = NeuralCore.fromPrepared(BRAIN.core); this.env.core.trained = BRAIN.trained; if (!all) return; }
-    this.env.mind = this.mind;
     this.ai = BR.makeMind(this.env);
   }
 
@@ -106,7 +114,7 @@ export class RoomBoss {
   step(now) {
     const dt = this.last === undefined ? 0 : Math.min(0.5, (now - this.last) / 1000);   // (a long gap is not caught up)
     this.last = now;
-    if (!this.gate) { this.st = null; return; }
+    if (!this.gate) { if (this.st) this.end(); this.st = null; return; }
     if (!this.st) {
       if (this.slain.has(this.gate.seed)) return;
       if (!this.ai) { this.mindUp(); return; }                       // made over two calls …
@@ -134,12 +142,74 @@ export class RoomBoss {
     this.st = { x: b.x, z: b.z, alt: 0, hd: post.hd, vx: 0, vz: 0, hp: b.hp, hpMax: b.hpMax, mode: 'ground',
       atkSeq: 0, atkKind: null, atkPhase: null, seed: this.gate.seed };
     this.deadT = 0;
+    this.begin();
   }
   fall() {
     this.st.mode = 'dead'; this.st.hp = 0; this.st.atkKind = null; this.st.atkPhase = null;
     this.slain.add(this.st.seed); this.deadT = 0;
-    this.mind = BR.serializeMind(this.ai);
+    this.end();
   }
+
+  //  ---- what he learns (mindstore.js) -------------------------------------------
+  //  A fight begins: with the memory's candidate if one has come (else the
+  //  readout as the memory last had it, else the lab's), knowing what the
+  //  memory knows of whoever is here, and scored from now on.
+  begin() {
+    const C = this.room.creatures, c = C.cand;
+    C.cand = null;
+    this.fightId = c && this.env.core.setReadout(c) ? c.id : null;
+    if (this.fightId === null && C.ro) this.env.core.setReadout(C.ro);
+    this.recall();
+    BR.fightStart(this.ai);
+    C.wantMind();                          // (the next fight's candidate)
+  }
+  //  It ends — he falls, the tear closes, or the room gives him back: how it
+  //  went goes to the memory (a fight too short to say: the candidate is
+  //  handed out again), with what he learned of the players.
+  end() {
+    const ai = this.ai;
+    if (!ai || !ai.tally) return;
+    const sc = BR.fightScore(ai);
+    ai.tally = null;
+    if (this.fightId !== null) this.room.ask({ k: 'report', id: this.fightId, s: sc ? sc.s : null, n: sc ? sc.n : 0 });
+    this.fightId = null;
+    this.remember();
+  }
+  //  What the memory has of the players here, into his mind: each one's
+  //  model, unless he has learned something newer of them himself; and
+  //  where the fairness had settled for them, on average.
+  recall() {
+    const ai = this.ai, C = this.room.creatures;
+    let fs = 0, fn = 0;
+    for (const p of this.room.players.values()) {
+      const e = C.known.get(p.name);
+      if (!e) continue;
+      const had = ai.bank.models.get(p.name);
+      if (!had || this.wallOf(had.lastT) < e.t) ai.bank.restore({ v: 1, players: { [p.name]: { t: -1, m: e.m } } }, ai.fair.mind);
+      if (ai.pmName === p.name) { ai.pm = null; ai.pmName = ''; }      // (picked up afresh)
+      if (Number.isFinite(e.f)) { fs += e.f; fn++; }
+    }
+    if (fn) ai.fair.setLevel(fs / fn);
+  }
+  //  What he has learned of the players he has seen since it was last sent
+  remember() {
+    const ai = this.ai;
+    if (!ai) return;
+    const players = {}, C = this.room.creatures;
+    let any = false;
+    //  (a model's time is when he last turned to them; whoever he is on now, he sees now)
+    const cur = ai.pmName && ai.bank.models.get(ai.pmName);
+    if (cur) cur.lastT = Math.max(cur.lastT, ai.now);
+    for (const [name, e] of ai.bank.models) {
+      if (e.lastT < 0 || e.lastT <= this.savedT || !fileable(name)) continue;
+      const ent = { t: this.wallOf(e.lastT), m: e.model.serialize(), f: +ai.fair.level.toFixed(4) };
+      players[name] = ent; C.learnt(name, ent); any = true;
+    }
+    this.savedT = this.t;
+    if (any) this.room.ask({ k: 'save', players });
+  }
+  //  his time (s) as the time of day (ms), for the memory
+  wallOf(t) { return t < 0 ? -Infinity : Math.round((this.last || 0) - (this.t - t) * 1000); }
   //  Where he stands: in the street in front of the tear, or the nearest open
   //  street to it (index.html bzbPost, in the shared city)
   post() {

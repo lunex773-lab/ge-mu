@@ -12,10 +12,18 @@
   // (the server's source, the lab, the docs) ever reaches the web.
   "build": { "command": "node server/build.js", "watch_dir": "server" },
   "assets": { "directory": "dist/public" },
+  // ROOMS: one GameRoom per room. MIND: Beelzebub's memory, one for every
+  // room (server/mind.js).
   "durable_objects": {
-    "bindings": [{ "name": "ROOMS", "class_name": "GameRoom" }]
+    "bindings": [
+      { "name": "ROOMS", "class_name": "GameRoom" },
+      { "name": "MIND", "class_name": "BossMind" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["BossMind"] }
+  ],
   "vars": {
     // where a new room is created: near the players (best effort)
     "LOCATION_HINT": "apac",

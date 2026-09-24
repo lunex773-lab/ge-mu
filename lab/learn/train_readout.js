@@ -20,6 +20,12 @@
 //  The score is §21's shaped reward plus who won, not just "did the player
 //  die": a boss rewarded only for kills learns to be a wall, not a fight.
 //
+//  What this trains is where he starts. Since B9b+ the room server goes on
+//  learning it from real fights (server/mindstore.js: the same ES, a fight a
+//  trial), in small steps and never further than a fixed distance from what
+//  this wrote — §20's point, that the live game must not be able to break
+//  him, held by a bound instead of by not learning at all.
+//
 //    node lab/learn/train_readout.js [generations] [population]
 
 const fs = require('fs');

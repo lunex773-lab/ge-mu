@@ -118,6 +118,7 @@ export class MindStore {
   //  Everything a room asks at once (a list), answered in one list.
   //    { k: 'hello', id, name }      → { k: 'hello', id, ro, c, me }   a player has arrived: the readout,
   //                                    a candidate for the fights their game runs, and what is known of them
+  //    { k: 'models', names }        → { k: 'models', players }         what is known of these players
   //    { k: 'cand', for }            → { k: 'cand', for, c, ro }       a candidate for the next fight
   //    { k: 'report', id, s, n, for? } → (a new candidate for `for`, when given)   how a fight went
   //    { k: 'save', players }        → nothing                          what was learned of players
@@ -131,6 +132,10 @@ export class MindStore {
       if (a.k === 'hello') {
         out.push({ k: 'hello', id: a.id, ro: this.readout(), c: this.candidate(), me: fileable(a.name) ? await this.player(a.name) : null });
         esDirty = true;
+      } else if (a.k === 'models') {
+        const players = {};
+        for (const n of Array.isArray(a.names) ? a.names.slice(0, 16) : []) if (fileable(n)) { const e = await this.player(n); if (e) players[n] = e; }
+        out.push({ k: 'models', players });
       } else if (a.k === 'cand') {
         out.push({ k: 'cand', for: a.for, c: this.candidate(), ro: this.readout() }); esDirty = true;
       } else if (a.k === 'report') {

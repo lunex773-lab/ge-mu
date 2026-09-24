@@ -13,6 +13,12 @@
 //  kept in the object's storage, so the player who has been here longest
 //  has the lowest id — and runs the creatures, as the game decides — and
 //  nobody can pick an id to take that job.
+//
+//  What Beelzebub learns is kept for every room by one other object,
+//  BossMind (mind.js): after each message, whatever the room has for it
+//  (relay.takeAsks) goes to it in one call, and its answers come back
+//  through the relay (mindSaid). The live check's rooms (_check-…) use a
+//  memory of their own, so testing teaches him nothing.
 
 import { DurableObject } from 'cloudflare:workers';
 import { Relay, idFor } from './relay.js';
@@ -24,10 +30,11 @@ export class GameRoom extends DurableObject {
     //  about to set a scene up; every real room checks
     this.relay = new Relay({ moves: env.MOVE_CHECK !== 'off' });
     this.sockets = new Map();                       // id → WebSocket
-    this.who = new Map();                           // WebSocket → { id, name }
+    this.who = new Map();                           // WebSocket → { id, name, mind }
+    this.mindName = 'beelzebub';
     for (const ws of this.ctx.getWebSockets()) {    // woken up: whoever is still connected
       const a = ws.deserializeAttachment();
-      if (a && a.id) this.adopt(ws, a);
+      if (a && a.id) { this.adopt(ws, a); if (a.mind) this.mindName = a.mind; }
     }
     //  a plain "ping" keeps a phone's connection alive without waking the room
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
@@ -42,14 +49,28 @@ export class GameRoom extends DurableObject {
     const url = new URL(request.url);
     const n = (await this.ctx.storage.get('next')) || 0;
     await this.ctx.storage.put('next', n + 1);
-    const a = { id: idFor(n), name: String(url.searchParams.get('name') || '').slice(0, 20) };
+    if (String(url.searchParams.get('room') || '').startsWith('_check')) this.mindName = 'beelzebub-check';
+    const a = { id: idFor(n), name: String(url.searchParams.get('name') || '').slice(0, 20), mind: this.mindName };
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(a);
     const out = this.adopt(server, a);
     server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns() } }));
     this.route(out, a.id, server);
+    this.relay.hello(a.id);
+    const asked = this.askMind();                   // (answered once the player is in)
+    if (asked) try { this.ctx.waitUntil(asked); } catch (e) {}
     return new Response(null, { status: 101, webSocket: client });
+  }
+  //  whatever the room has for Beelzebub's memory, in one call; its answers
+  //  go out as the room's own messages. Without it (no MIND binding, or it
+  //  cannot be reached) the room runs on: he fights with the readout he has.
+  askMind() {
+    const asks = this.relay.takeAsks();
+    if (!asks.length || !this.env.MIND) return null;
+    return this.env.MIND.getByName(this.mindName).ask(asks)
+      .then((replies) => this.route(this.relay.mindSaid(replies), null, null))
+      .catch((e) => { this.relay.mindErrors = (this.relay.mindErrors || 0) + 1; this.relay.lastMindError = String(e && e.message || e); });
   }
 
   async webSocketMessage(ws, raw) {
@@ -64,6 +85,8 @@ export class GameRoom extends DurableObject {
     }
     this.relay.dirty.clear();
     this.route(r.out, a.id, ws);
+    const asked = this.askMind();
+    if (asked) await asked;
   }
   //  what the room says: [to, text] pairs, to 'others' (than `from`), 'all', 'self' or an id
   route(out, from, ws) {
@@ -90,6 +113,8 @@ export class GameRoom extends DurableObject {
     const out = this.relay.leave(a.id);
     this.broadcast(JSON.stringify({ s: 'leave', p: { id: a.id } }), null);
     this.route(out, a.id, null);
+    const asked = this.askMind();
+    if (asked) try { this.ctx.waitUntil(asked); } catch (e) {}
   }
 
   broadcast(text, except) {

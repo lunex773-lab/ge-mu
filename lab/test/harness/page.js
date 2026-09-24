@@ -133,10 +133,19 @@ function build() {
 //  tests move players about to set scenes up — and move.game.test.js asks;
 //  so is its running of the creatures (server/creatures.js), which the tests
 //  of creatures as a host runs them do without, and boss.game.test.js asks for.
+//  Beelzebub's memory (server/mindstore.js, the BossMind object) is one for
+//  every room here too, kept in a Map, and answers a few ms later, as
+//  another Durable Object would.
 async function roomServer({ moves = false, creatures = false } = {}) {
   const { Relay, idFor } = await import(pathToFileURL(path.join(ROOT, 'server', 'relay.js')).href);
+  const { MindStore } = await import(pathToFileURL(path.join(ROOT, 'server', 'mindstore.js')).href);
   const rooms = new Map();                       // name → { relay, next, sockets: Map(id → { ws, who }) }
   connect.rooms = rooms;                         // (a test may look inside: openRoom().rooms)
+  const kept = new Map(), cp = (v) => (v === undefined ? v : structuredClone(v));
+  const mind = new MindStore({ async get(k) { return cp(kept.get(k)); },
+    async put(k, v) { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) kept.set(kk, cp(vv)); else kept.set(k, cp(v)); },
+    async delete(k) { for (const kk of [].concat(k)) kept.delete(kk); } });
+  connect.mind = mind;
   const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
   function connect(ws, who) {
     const u = new URL(ws.url());
@@ -157,17 +166,25 @@ async function roomServer({ moves = false, creatures = false } = {}) {
       }
     };
     route(joined, id);
+    //  as GameRoom.askMind: the room's asks, in one call; the answers routed
+    const askMind = () => {
+      const asks = R.relay.takeAsks();
+      if (asks.length) setTimeout(() => mind.ask(asks).then((replies) => route(R.relay.mindSaid(replies), null)), 5);
+    };
+    R.relay.hello(id); askMind();
     ws.onMessage((m) => {
       if (!R.sockets.has(id)) return;
       const r = R.relay.handle(id, String(m), Date.now());
       R.relay.dirty.clear();
       route(r.out, id);
+      askMind();
     });
     const gone = () => {
       if (!R.sockets.delete(id)) return;
       const out = R.relay.leave(id);
       for (const other of R.sockets.keys()) deliver(other, JSON.stringify({ s: 'leave', p: { id } }));
       route(out, id);
+      askMind();
     };
     ws.onClose(() => { try { ws.close(); } catch (e) {} gone(); });   // answer it, as GameRoom does
     who.closes.add(gone);                          // (a page shut outright never says goodbye: P.close says it for it)
@@ -223,7 +240,7 @@ async function openRoom({ moves = false, creatures = false } = {}) {
     };
     return P;
   }
-  return { player, close: () => browser.close(), rooms: connect.rooms };
+  return { player, close: () => browser.close(), rooms: connect.rooms, mind: connect.mind };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

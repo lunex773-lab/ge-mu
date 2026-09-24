@@ -29,6 +29,10 @@
 //    - who runs the creatures: with two or more here the room runs Beelzebub
 //      itself (creatures.js), and judges every shot at him; the rest are the
 //      host's, and only the host's snapshots and kill reports are passed on
+//    - what Beelzebub learns (mindstore.js, kept for every room): a player's
+//      game may report how a fight it ran went only with the candidate the
+//      memory handed that player, once; and may share what it has learned
+//      only of the player it belongs to, under the name the room knows
 //    - how much: a size limit on every message and a rate limit per kind,
 //      and anything the game never sends is dropped
 //
@@ -124,6 +128,9 @@ const KINDS = {
   gateask: [2, 4, (p, from) => ({ id: from })],
   gatereq: [2, 4, () => ({})],
   bolt: [2, 4, (p, from) => ({ id: from, s: int(p.s) })],
+  //  Beelzebub's memory: how a fight this player's game ran went, and what it
+  //  has learned of this player (creatures.js fromPlayer); nothing passed on
+  mind: [0.2, 4, (p, from, room, now) => { room.creatures.fromPlayer(from, p, now); return null; }],
   ping: [2, 4, (p, from) => ({ id: from, t: +p.t || 0 })],    // answered to the sender only
 };
 
@@ -147,6 +154,18 @@ export class Relay {
     this.dirty = new Set();            // players whose health or score changed (the room saves them)
     this.pickups = null;               // shared/items.js, and which are lying there (items())
     this.creatures = new Creatures(this, { enabled: creatures });
+    this.asks = [];                    // for Beelzebub's memory (mindstore.js): the room takes them (takeAsks) and answers (mindSaid)
+  }
+  ask(a) { this.asks.push(a); }
+  takeAsks() { const a = this.asks; this.asks = []; return a; }
+  //  a player has arrived (not one the room woke up with): the memory is
+  //  asked for its readout, a candidate, and what it knows of them
+  hello(id) { const v = this.players.get(id); if (v) { v.helloed = true; this.ask({ k: 'hello', id, name: v.name }); } }
+  //  the memory's answers. Returns what to send, as join() does.
+  mindSaid(list) {
+    this.out = [];
+    for (const r of Array.isArray(list) ? list : []) this.creatures.mindSaid(r);
+    return this.out;
   }
   items() {
     if (!this.pickups) this.pickups = ITEMS.layout().map((it) => ({ k: it.k, w: it.w, x: it.x, z: it.z, active: true, until: 0 }));
@@ -217,6 +236,7 @@ export class Relay {
     this.out = [];
     const me = this.players.get(from);
     if (!me) return { out: [], drop: 'unknown sender' };
+    if (me.t0 === undefined) me.t0 = now;
     this.tickItems(now);
     const r = this.judge(me, from, raw, now);
     this.creatures.tick(now);              // whatever the message, time has moved on for the creatures

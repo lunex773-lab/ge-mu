@@ -138,7 +138,7 @@ async function main() {
     A.send('state', { id: 'pzzzzzz', x: 1, y: 0, z: 2, r: 0 });
     const st = await until(() => B.of('state')[0]);
     check('a state reaches the room, stamped with its real sender', st && st.f === A.id && st.p.id === A.id, JSON.stringify(st));
-    check('and not another room', C.got.length === 0, JSON.stringify(C.got));
+    check('and not another room', C.got.filter((m) => m.s !== 'mind').length === 0, kinds(C));
 
     // ---- shots between players: the room judges them ----------------------
     //  two places in the same street (a clear line), and one round the corner
@@ -216,6 +216,21 @@ async function main() {
     for (let i = 0; i < 60; i++) B.send('shot', {});
     await wait(400);
     check('a flood is cut to each kind\'s rate', A.of('shot').length <= 20, A.of('shot').length + ' of 60 shots passed');
+
+    // ---- Beelzebub's memory (server/mindstore.js; a live check's rooms have one of their own) ----
+    const hello = await until(() => A.of('mind')[0], 5000);
+    check('arriving, a player is handed his readout and a candidate for the fights its game runs',
+      hello && hello.p.ro && hello.p.ro.w.length === 91 && hello.p.c && Number.isInteger(hello.p.c.id), hello ? 'readout at step ' + hello.p.ro.gen + ', candidate ' + hello.p.c.id : kinds(A));
+    A.send('mind', { r: hello.p.c.id + 7, s: null, n: 0 });
+    await wait(400);
+    const stillOne = A.of('mind').length === 1;
+    A.send('mind', { r: hello.p.c.id, s: null, n: 0 });          // (no fight: handed out again, and nothing learned)
+    const next = await until(() => A.of('mind')[1], 5000);
+    check('a report for its own candidate is taken, and a candidate comes back for the next fight (the same: it was never fought); for any other, nothing',
+      stillOne && next && next.p.c && Number.isInteger(next.p.c.id), next ? 'next ' + next.p.c.id : kinds(A));
+    const mind = await fetch(BASE + '/mind').then((r) => r.json()).catch((e) => ({ error: String(e) }));
+    check('/mind says how his learning is going (and names nobody)', Number.isInteger(mind.gen) && Number.isInteger(mind.players) && !JSON.stringify(mind).includes('Aki'),
+      JSON.stringify(mind).slice(0, 160));
 
     // ---- leaving -------------------------------------------------------------
     B.ws.close();
