@@ -40,7 +40,14 @@ async function until(fn, ms = 3000) {
 }
 
 const results = []; let pass = 0, fail = 0;
-function check(name, ok, detail) { if (ok) pass++; else fail++; results.push((ok ? '  ok   ' : '  FAIL ') + name + (detail ? '\n         ' + detail : '')); }
+//  each result is printed as it comes, so a run that stops half way still says how far it got
+function check(name, ok, detail) {
+  if (ok) pass++; else fail++;
+  const line = (ok ? '  ok   ' : '  FAIL ') + name + (detail ? '\n         ' + detail : '');
+  results.push(line); console.log(line);
+}
+//  what a player has been sent, kind by kind (for a check that fails)
+const kinds = (P) => Object.entries(P.got.reduce((n, m) => (n[m.s] = (n[m.s] || 0) + 1, n), {})).map(([k, n]) => k + ' ' + n).join(', ');
 
 //  a player: a WebSocket and everything it has been sent
 function join(room, name) {
@@ -147,7 +154,8 @@ async function main() {
     await place(A, PA); await place(B, PB);
     B.send('hit', { by: 'pzzzzzz', t: A.id, d: 99999 });
     const h = await until(() => A.of('hurt')[0]);
-    check('a hit the room believes does the gun\'s damage, not what it claims', h && h.p.d === 20 && h.p.by === B.id && h.p.hp === 80, JSON.stringify(h));
+    check('a hit the room believes does the gun\'s damage, not what it claims', h && h.p.d === 20 && h.p.by === B.id && h.p.hp === 80,
+      h ? JSON.stringify(h) : 'nothing came; A was sent: ' + kinds(A) + ' | B was sent: ' + kinds(B));
     check('and is not passed on as a claim', A.of('hit').length === 0);
     await wait(250); B.send('hit', { t: A.id }); await sleep(10); B.send('hit', { t: A.id });   // the second too soon after the first
     await until(() => A.of('hurt').length >= 2); await wait(300);
@@ -165,7 +173,8 @@ async function main() {
     await place(A, PA); await place(B, PB);
     for (let i = 0; i < 4; i++) { await wait(250); B.send('hit', { t: A.id }); }
     const kill = await until(() => B.of('kill').length && A.of('kill')[0]);
-    check('the fifth hit kills, and the room says whose kill it is', A.of('hurt').pop().p.hp === 0 && kill && kill.p.by === B.id && kill.p.v === A.id && B.of('kill').length === 1,
+    const lastHurt = A.of('hurt').pop();
+    check('the fifth hit kills, and the room says whose kill it is', lastHurt && lastHurt.p.hp === 0 && kill && kill.p.by === B.id && kill.p.v === A.id && B.of('kill').length === 1,
       JSON.stringify(kill));
     B.send('state', { x: PB.x, y: 0, z: PB.z, r: 0, w: 0 }); A.send('state', { x: PA.x, y: 0, z: PA.z, r: 0, w: 0, hp: 100 });
     const lastA = () => B.of('state').filter((m) => m.f === A.id).pop();
@@ -218,9 +227,7 @@ async function main() {
   } finally {
     if (dev) try { process.kill(-dev.pid, 'SIGTERM'); } catch (e) {}
   }
-  console.log('\nGAMEROOM — ' + (LIVE ? 'live at ' + BASE : 'on a local workerd') + '\n');
-  console.log(results.join('\n'));
-  console.log('\n  ' + pass + ' passed, ' + fail + ' failed\n');
+  console.log('\nGAMEROOM — ' + (LIVE ? 'live at ' + BASE : 'on a local workerd') + ': ' + pass + ' passed, ' + fail + ' failed\n');
   process.exit(fail ? 1 : 0);
 }
 main().catch((e) => { console.error(e); process.exit(2); });
