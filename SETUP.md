@@ -128,6 +128,8 @@ GitHub Pages など、Cloudflare 以外に置いたコピーは、これまで�
 ## 困ったとき
 
 - **523 エラー**: 初めて公開した直後は数分出ることがあります。待つと直ります。
+- **遊んでいる途中で一瞬 `RECONNECTING…` になる**: 私が更新を公開した直後です（ルームのサーバーが新しい版に切り替わるため）。
+  数秒で自動的につながり直し、ゲームはそのまま続きます。
 - **ONLINE にならない**: URL が `workers.dev` のものか確認してください。GitHub Pages の URL だと MQTT 経由になります。
 - **サーバーのログを見たい**: 方法2の環境で `npx wrangler tail`、またはダッシュボードの Workers & Pages → contour → **Logs**。
 - **GitHub Actions が失敗した**: Actions タブのログを、私に見せてください。

@@ -47,8 +47,9 @@ function join(room, name) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(BASE.replace('http', 'ws') + '/ws?room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(name), { headers: { Origin: BASE } });
     const P = { ws, got: [], id: null };
-    ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.s === '_welcome') { P.id = m.p.id; P.welcome = m.p; resolve(P); } else P.got.push(m); };
-    ws.onerror = (e) => reject(new Error('socket error'));
+    const late = setTimeout(() => { reject(new Error('no welcome in 10 s')); try { ws.close(); } catch (e) {} }, 10000);
+    ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.s === '_welcome') { clearTimeout(late); P.id = m.p.id; P.welcome = m.p; resolve(P); } else P.got.push(m); };
+    ws.onerror = (e) => { clearTimeout(late); reject(new Error('socket error')); };
     P.send = (s, p) => ws.send(JSON.stringify({ s, p }));
     P.of = (s) => P.got.filter((m) => m.s === s);
   });
@@ -71,6 +72,24 @@ async function roundTrip() {
   P.ws.close();
   return all;
 }
+//  Just after a deploy the rooms are still moving to the new version: the
+//  first sockets fail, or answer seconds late (both seen, a second after
+//  deploying). So, live, wait until a room answers promptly — the middle
+//  ping under 2 s — trying every few seconds for up to 90 s.
+async function settled() {
+  const end = Date.now() + 90000;
+  let tries = 0, why = '';
+  for (;;) {
+    tries++;
+    try {
+      const all = await roundTrip(), mid = all.slice().sort((a, b) => a - b)[2];
+      if (mid < 2000) return { all, mid, tries };
+      why = 'slow (' + all.join(', ') + ' ms)';
+    } catch (e) { why = e.message; }
+    if (Date.now() > end) throw new Error('the rooms did not settle in 90 s (' + tries + ' tries, last: ' + why + ')');
+    await sleep(3000);
+  }
+}
 
 async function main() {
   //  its own process group, so that stopping it stops wrangler's children too
@@ -82,10 +101,10 @@ async function main() {
     for (let i = 0; i < 120 && !up; i++) { if (dev || i) await sleep(500); try { up = (await fetch(BASE + '/')).ok; } catch (e) { if (LIVE) log = String(e.cause || e); } }
     if (!up) throw new Error((LIVE ? BASE + ' did not answer: ' : 'wrangler dev did not start:\n') + log.slice(-2000));
     if (LIVE) {
-      const all = await roundTrip(), rtt = all.slice().sort((a, b) => a - b)[2];
+      const { all, mid: rtt, tries } = await settled();
       //  at most 1.5 s more, so no gap in a sequence nears the ~10 s a room waits before it sleeps
       EXTRA = Math.min(1500, Math.ceil(rtt * 1.5));
-      console.log('LIVE ' + BASE + ' — round trip ' + rtt + ' ms (' + all.join(', ') + '), every wait +' + EXTRA + ' ms');
+      console.log('LIVE ' + BASE + ' — settled after ' + tries + ' tr' + (tries === 1 ? 'y' : 'ies') + '; round trip ' + rtt + ' ms (' + all.join(', ') + '), every wait +' + EXTRA + ' ms');
     }
 
     // ---- the page, and nothing else --------------------------------------
