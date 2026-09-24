@@ -570,6 +570,10 @@
     #meta { left: calc(24px + env(safe-area-inset-left)); right: auto; top: calc(244px + env(safe-area-inset-top)); text-align: left; }
     #toolbar { bottom: calc(2px + env(safe-area-inset-bottom)); }                    /* below the stick */
     #compass { width: min(260px, 54vw); }                                             /* clear of the minimap */
+    /* the roster centred on the gap between the minimap (right edge 126) and
+       the gear (left edge 62 from the right), not on the screen: "ONLINE · 2
+       · 108ms" reached the minimap on the first two-phone game */
+    #net { left: calc(50% + 32px + (env(safe-area-inset-left) - env(safe-area-inset-right)) / 2); }
   }
   @media (orientation: landscape) and (max-height: 520px) {
     /* the health bar beside the minimap, which leaves the chat button room
@@ -597,7 +601,7 @@
   <div id="compass"><i></i><div id="compass-strip"></div></div>
   <div id="hitmarker"></div>
   <div id="notification"></div>
-  <div id="ammo"><b id="ammo-count">30</b><span id="reserve-ammo">120</span></div>
+  <div id="ammo"><b id="ammo-count">30</b><span id="reserve-ammo">300</span></div>
   <div id="kd">K <b id="kill-count">0</b> · D <b id="death-count">0</b></div>
   <div id="reload-msg">R · リロード</div>
   <div id="dbg"></div>
@@ -1031,7 +1035,7 @@
         const COMPASS_SPOTS = [[0, 0], [-0.64, -0.64], [0.64, -0.64], [-0.64, 0.64], [0.64, 0.64]];
         const RESPAWN = { banana: 22, rot: 22, compass: 45 };   // s before it lies there again
         const REACH = 1.8;                                      // m: close enough to pick one up
-        const AMMO = 60;                                        // rounds a banana gives
+        const AMMO = 90;                                        // rounds a banana gives (three magazines)
         const REVEAL_TIME = 30;                                 // s a compass shows the others
 
         function layout(buildings) {
@@ -2415,7 +2419,7 @@
   function gotBanana(b, rotten, newHp) {
     hp = newHp; updateHpUI(); playHeal(); publishState(true);
     reserve = Math.min(RESERVE_MAX, reserve + SH('items.js').AMMO); updateAmmoUI();
-    notify((rotten ? '腐ったバナナ' : 'バナナ') + '  +40 HP  +60 AMMO', 1600);
+    notify((rotten ? '腐ったバナナ' : 'バナナ') + '  +' + BANANA_HEAL + ' HP  +' + SH('items.js').AMMO + ' AMMO', 1600);
   }
   function gotCompass() {
     revealT = REVEAL_TIME; playHeal();
@@ -3336,6 +3340,23 @@
     enrageMonkeys();
   }
 
+  //  The name plate and the health bar over another player keep one size on
+  //  screen, near or far, and stack there: the bar just over the head, the
+  //  name just over the bar. (They were boards in the world, the name 1.4 m
+  //  tall and a few metres wide: close up it covered the very player it
+  //  named, and the bar under it.) Sizes in CSS pixels; sizePlates() turns
+  //  them into sprite scales every frame, so the scope's zoom and a turned
+  //  phone change nothing.
+  const PLATE_PX = 17, BAR_PX = [46, 5], FILL_PX = [44, 3], PLATE_GAP = 3, PLATE_Y = 2.42;
+  const plateK = () => 2 / (innerHeight * camera.projectionMatrix.elements[5]);   // CSS px → scale (sizeAttenuation off)
+  function sizePlates(g, k) {
+    const u = g.userData, tag = u.tag, fill = u.hpfill, f = fill.userData.f === undefined ? 1 : fill.userData.f;
+    tag.scale.set(PLATE_PX * tag.userData.aspect * k, PLATE_PX * k, 1);
+    u.hpbg.scale.set(BAR_PX[0] * k, BAR_PX[1] * k, 1);
+    fill.scale.set(Math.max(0.01, FILL_PX[0] * f) * k, FILL_PX[1] * k, 1);
+    fill.center.x = 0.5 / Math.max(f, 0.01 / FILL_PX[0]);   // the left end stays put as it empties
+  }
+
   // floating name plate (billboard sprite)
   function nameSprite(name) {
     const fs = 30, pad = 9;
@@ -3349,9 +3370,11 @@
     ctx.fillStyle = 'rgba(11,16,20,0.55)'; ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = '#FFFFFF'; ctx.fillText(name, pad, h / 2 + 1);
     const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, fog: false }));
-    spr.scale.set(w / h * 1.4, 1.4, 1);
-    spr.position.y = 2.7; spr.renderOrder = 4;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, fog: false, sizeAttenuation: false }));
+    spr.userData.aspect = w / h;
+    spr.center.set(0.5, -(BAR_PX[1] + PLATE_GAP) / PLATE_PX);   // standing on the bar
+    const k = plateK(); spr.scale.set(PLATE_PX * spr.userData.aspect * k, PLATE_PX * k, 1);
+    spr.position.y = PLATE_Y; spr.renderOrder = 4;
     return spr;
   }
 
@@ -3362,18 +3385,18 @@
     m.add(tag); m.userData.tag = tag;
     // floating HP bar (dark backing + coloured fill), just under the name
     // depthTest true → the bar is hidden when the peer is behind a building
-    const hpbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0b1014, transparent: true, opacity: 0.65, depthTest: true, depthWrite: false, fog: false }));
-    hpbg.scale.set(1.2, 0.12, 1); hpbg.position.y = 2.42; hpbg.renderOrder = 5;
-    const hpfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66DD66, depthTest: true, depthWrite: false, fog: false }));
-    hpfill.scale.set(1.16, 0.09, 1); hpfill.position.y = 2.42; hpfill.renderOrder = 6;
-    m.add(hpbg, hpfill); m.userData.hpfill = hpfill;
+    const hpbg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0b1014, transparent: true, opacity: 0.65, depthTest: true, depthWrite: false, fog: false, sizeAttenuation: false }));
+    hpbg.center.set(0.5, 0); hpbg.position.y = PLATE_Y; hpbg.renderOrder = 5;
+    const hpfill = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66DD66, depthTest: true, depthWrite: false, fog: false, sizeAttenuation: false }));
+    hpfill.center.set(0.5, -(BAR_PX[1] - FILL_PX[1]) / 2 / FILL_PX[1]); hpfill.position.y = PLATE_Y; hpfill.renderOrder = 6;
+    m.add(hpbg, hpfill); m.userData.hpfill = hpfill; m.userData.hpbg = hpbg;
+    sizePlates(m, plateK());
     return m;
   }
   function setPeerHp(peer) {
     const fill = peer.group.userData.hpfill; if (!fill) return;
-    const f = Math.max(0, Math.min(1, peer.hp / 100)), W = 1.16;
-    fill.scale.x = Math.max(0.001, W * f);
-    fill.position.x = -(W * (1 - f)) / 2;                 // anchor the fill to the left
+    const f = Math.max(0, Math.min(1, peer.hp / 100));
+    fill.userData.f = f; fill.visible = f > 0;           // sizePlates() draws it this long
     fill.material.color.setHex(f > 0.5 ? 0x66DD66 : f > 0.25 ? 0xE8C74C : 0xE0503F);
   }
   function setPeerTag(peer, name) {
@@ -3604,7 +3627,7 @@
       MP.txRate = MP.txBytes; MP.rxRate = MP.rxBytes; MP.txMsgRate = MP.txMsgs; MP.rxMsgRate = MP.rxMsgs;
       MP.txBytes = 0; MP.rxBytes = 0; MP.txMsgs = 0; MP.rxMsgs = 0; MP.rateT = now;
     }
-    const k = 1 - Math.exp(-dt * 13);
+    const k = 1 - Math.exp(-dt * 13), pk = plateK();
     for (const [id, peer] of MP.peers) {
       if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
       const px = peer.cur.x, pz = peer.cur.z;
@@ -3646,6 +3669,7 @@
       const pw = peer.w === undefined ? WS.NORMAL : peer.w;
       peer.group.visible = !peer.dead && !peer.inv && pw === wState;
       if (peer.hp !== peer.hpShown) { peer.hpShown = peer.hp; setPeerHp(peer); }
+      if (peer.group.visible) sizePlates(peer.group, pk);
       const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
       const air = (peer.cur.y - height(peer.cur.x, peer.cur.z)) > 0.5;
       const walk = air ? 0 : Math.min(spd / (WALK * 0.7), 1);
@@ -4428,7 +4452,7 @@
   function doContinue() {
     hp = HP_MAX; dead = false; cloak = 0; cloakCd = 0; fireCd = 0; vy = 0; lastAttacker = null; lastAttackerT = 0; killerId = null;
     if (roomRules()) MP.client.publish(mtopic('spawn'), '{}');
-    ammo = MAG_SIZE; reserve = Math.min(RESERVE_MAX, reserve + 90); reloading = 0; updateAmmoUI();
+    ammo = MAG_SIZE; reserve = Math.max(reserve, RESERVE_START); reloading = 0; updateAmmoUI();
     setSelfCloak(false); respawn();
     updateHpUI(); updateCloakBtn();
     gameoverEl.classList.remove('show');
@@ -4515,8 +4539,10 @@
     }
     ui.strip.innerHTML = html;
   }
-  const MAG_SIZE = 30, RESERVE_MAX = 240, RELOAD_TIME = 1.6;
-  let ammo = MAG_SIZE, reserve = 120, reloading = 0, deaths = 0;
+  //  what you can carry: 20 magazines, and 10 to start with and to come back with
+  //  (2026-09-24, asked for after the first two-phone game; it was 8 and 4)
+  const MAG_SIZE = 30, RESERVE_MAX = 600, RESERVE_START = 300, RELOAD_TIME = 1.6;
+  let ammo = MAG_SIZE, reserve = RESERVE_START, reloading = 0, deaths = 0;
   function updateAmmoUI() {
     ui.ammoN.textContent = ammo;
     ui.resN.textContent = reserve;

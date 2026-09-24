@@ -20,7 +20,7 @@ const NUM_BANANA = 8, NUM_ROT = 12;
 const COMPASS_SPOTS = [[0, 0], [-0.64, -0.64], [0.64, -0.64], [-0.64, 0.64], [0.64, 0.64]];
 const RESPAWN = { banana: 22, rot: 22, compass: 45 };   // s before it lies there again
 const REACH = 1.8;                                      // m: close enough to pick one up
-const AMMO = 60;                                        // rounds a banana gives
+const AMMO = 90;                                        // rounds a banana gives (three magazines)
 const REVEAL_TIME = 30;                                 // s a compass shows the others
 
 function layout(buildings) {

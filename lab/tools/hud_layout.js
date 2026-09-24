@@ -89,6 +89,11 @@ function overlap(a, b) {
       await P.eval(() => window.__t.ev("mode = 'mobile'; applyMode(); 1"));
       await P.page.waitForFunction(() => document.querySelector('#hud.live') && document.querySelector('#touch.live'), null, { timeout: 60000 });
       await sleep(500);
+      //  the roster at its fullest: four players, the round trip shown, a
+      //  crown, a long name (the first two-phone game showed "· 2 · 108ms"
+      //  reaching the minimap, where one player with no round trip had not)
+      await P.eval(() => window.__t.ev(`setNet('ONLINE · 4 · 188ms');
+        netList.innerHTML = ['<div class="me">👑 旅人-3ph (you) · 12</div>', '<div>旅人-mib · 3</div>', '<div>ながいなまえのひと · 0</div>', '<div>旅人-x7k · 1</div>'].join(''); 1`));
       const shapes = await P.eval(measure, PARTS);
       const hits = [];
       for (let i = 0; i < shapes.length; i++) for (let j = i + 1; j < shapes.length; j++) {
