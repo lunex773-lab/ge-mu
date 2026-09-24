@@ -151,8 +151,8 @@ async function openRoom() {
   const pages = new Set();
   const relay = (m) => { for (const pg of pages) pg.evaluate((mm) => window.__recv && window.__recv(mm), m).catch(() => {}); };
 
-  async function player({ room, id, nick, save, render, seed, url } = {}) {
-    const ctx = await browser.newContext({ viewport: { width: 480, height: 320 } });
+  async function player({ room, id, nick, save, render, seed, url, viewport } = {}) {
+    const ctx = await browser.newContext({ viewport: viewport || { width: 480, height: 320 } });
     await ctx.route(ORIGIN + '/**', (route) => {
       const f = path.join(CACHE, new URL(route.request().url()).pathname.slice(1));
       if (!fs.existsSync(f)) return route.fulfill({ status: 404, body: '' });

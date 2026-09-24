@@ -556,6 +556,31 @@
     pointer-events: auto !important; outline: 2px dashed var(--amber); outline-offset: 3px; touch-action: none;
   }
 
+  /* ---- phones: nothing on the screen on top of anything else ----
+     Measured with lab/tools/hud_layout.js at an iPhone 14's size, after the
+     first real-device test (2026-09-24) showed the collisions. These are the
+     defaults; a button moved in the layout editor stays where it was put. */
+  #reloadbtn { right: calc(133px + env(safe-area-inset-right)); bottom: calc(230px + env(safe-area-inset-bottom)); }  /* between JUMP and 透明, off both */
+  #scopebtn { bottom: calc(86px + env(safe-area-inset-bottom)); }                                                     /* clear of 透明 */
+  @media (orientation: portrait) and (max-width: 600px) {
+    /* the bottom middle is all buttons: the ammo, the score and the readout go
+       down the empty left side, under the health bar */
+    #ammo { left: calc(24px + env(safe-area-inset-left)); top: calc(184px + env(safe-area-inset-top)); bottom: auto; transform: none; }
+    #kd { left: calc(24px + env(safe-area-inset-left)); top: calc(222px + env(safe-area-inset-top)); bottom: auto; transform: none; }
+    #meta { left: calc(24px + env(safe-area-inset-left)); right: auto; top: calc(244px + env(safe-area-inset-top)); text-align: left; }
+    #toolbar { bottom: calc(2px + env(safe-area-inset-bottom)); }                    /* below the stick */
+    #compass { width: min(260px, 54vw); }                                             /* clear of the minimap */
+  }
+  @media (orientation: landscape) and (max-height: 520px) {
+    /* the health bar beside the minimap, which leaves the chat button room
+       below it; the readout beside the gear, clear of JUMP */
+    #hpwrap { left: calc(140px + env(safe-area-inset-left)); top: calc(18px + env(safe-area-inset-top)) !important; width: 140px; }
+    #chatbtn { bottom: calc(176px + env(safe-area-inset-bottom)); }
+    #meta { top: calc(20px + env(safe-area-inset-top)); right: calc(74px + env(safe-area-inset-right)); max-width: 190px;
+            line-height: 1.7; display: flex; flex-direction: column-reverse; align-items: flex-end; }
+    #m-help { word-break: keep-all; }                                                 /* wrap at the spaces, not inside 視点 */
+  }
+
 </style>
 </head>
 <body>
@@ -2378,6 +2403,7 @@
     const now = performance.now();
     if (it.asked && now < it.asked) return;
     it.asked = now + 800;
+    publishState(true);                          // the room checks I am there (I may be alone, and sending seldom)
     MP.client.publish(mtopic('take'), JSON.stringify({ i: it.gi }));
   }
   function eatBanana(b, arr, rotten) {
@@ -3104,7 +3130,7 @@
     name: '', room: 'lobby',
     client: null, connected: false, started: false,
     peers: new Map(),
-    lastPub: 0, PUB_MS: 55, TIMEOUT: 6000, lastX: 0, lastZ: 0,
+    lastPub: 0, PUB_MS: 55, SOLO_MS: 1000, TIMEOUT: 6000, lastX: 0, lastZ: 0,
     INTERP_MS: 120,                        // render peers this far in the past
     host: '', mobT: 0, mobPubT: 0, MOB_MS: 125, MOB_STALE: 2500,   // troop owner + snapshot clock
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
@@ -3154,7 +3180,8 @@
   const HDQ = 255 / 6.2832;              // heading packed into a byte
   function publishMobs() {
     const now = performance.now();
-    if (!mobPub() || now - MP.mobPubT < MP.MOB_MS) return;
+    //  nobody else here, nobody to show them to (publishState: alone)
+    if (!mobPub() || !MP.peers.size || now - MP.mobPubT < MP.MOB_MS) return;
     MP.mobPubT = now;
     const a = [];
     for (const m of monkeyPeds) {
@@ -3381,6 +3408,7 @@
       MP.peers.set(s.id, peer);
       recomputeHost();                                  // lowest id in the room owns the troop
       renderRoster();
+      MP.lastPub = MP.mobPubT = 0;                      // someone to show: me, and the troop, now
     }
     peer.tgt.set(s.x, s.y, s.z);
     peer.tgtYaw = s.r || 0;
@@ -3530,7 +3558,13 @@
   function publishState(force) {
     if (!MP.connected || !MP.client) return;
     const now = performance.now();
-    if (!force && now - MP.lastPub < MP.PUB_MS) return;
+    //  Alone in the room, nobody needs to see me move: once a second, so a
+    //  newcomer finds me, and the room has me where I am when I ask it for
+    //  something (askTake). Measured on a phone (iPhone 14, 4G), it was 25
+    //  messages and 12.7 KB a second to nobody — about 46 MB an hour of
+    //  mobile data, and nearly all of the room's free daily requests.
+    //  A newcomer brings the full rate straight back (upsertPeer).
+    if (!force && now - MP.lastPub < (MP.peers.size ? MP.PUB_MS : MP.SOLO_MS)) return;
     const dtp = (now - MP.lastPub) / 1000;
     MP.lastPub = now;
     let vx = 0, vz = 0;                          // velocity for the receiver's dead-reckoning

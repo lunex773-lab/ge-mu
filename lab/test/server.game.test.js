@@ -15,6 +15,9 @@
 //      other player sees the old one leave
 //    - the same bananas for everyone; the first one there gets it, for everyone
 //    - when the host leaves, the other player takes over the creatures
+//    - alone in a room, a player sends about once a second, not ~25 times;
+//      the full rate comes back the moment someone arrives, and a pickup
+//      still works (asking for it tells the room where you are)
 //
 //    node lab/test/server.game.test.js     (about two minutes)
 
@@ -56,6 +59,9 @@ async function until(P, src, secs) {
     const A = await room.player({ room: 'srv', nick: 'Aki', url: URL });
     await A.join();
     await until(A, 'MP.connected', 15);
+    await sleep(2500);
+    const soloRate = await ev(A, 'MP.txMsgRate');
+    check('alone in the room, a player sends about once a second (a phone sent 25 a second, to nobody)', soloRate <= 3, soloRate + ' messages in the last second');
     const B = await room.player({ room: 'srv', nick: 'Ben', url: URL });
     await B.join();
     const both = (await until(A, 'MP.connected && MP.client.server', 15)) && (await until(B, 'MP.connected && MP.client.server', 15));
@@ -68,6 +74,7 @@ async function until(P, src, secs) {
     check('they see each other', seen);
     check('the first one in runs the creatures, and the other is sent them',
       (await until(A, 'MP.host === MP.id && mobPub()', 10)) && (await until(B, 'MP.host !== MP.id && performance.now() - MP.mobT < 2000', 10)));
+    check('with someone to see them, the full rate is back', await until(A, 'MP.txMsgRate >= 15', 4), (await ev(A, 'MP.txMsgRate')) + ' messages in the last second');
 
     await ev(A, "document.getElementById('chat-input').value = 'やあ'; sendChat(); 1");
     const chat = (await until(A, "document.getElementById('chat-log').textContent.includes('やあ')", 5)) && (await until(B, "document.getElementById('chat-log').textContent.includes('やあ')", 5));
@@ -127,6 +134,17 @@ async function until(P, src, secs) {
     await A.close();
     const took = await until(B, 'MP.host === MP.id && mobPub()', 12);
     check('when the host leaves, the other player takes over the creatures', took);
+
+    // ---- alone again ---------------------------------------------------------
+    const quiet = await until(B, 'MP.peers.size === 0 && MP.txMsgRate <= 3', 8);
+    check('alone again, it goes quiet again', quiet, (await ev(B, 'MP.txMsgRate')) + ' messages in the last second');
+    await ev(B, 'applyDamage(50, null); 1');
+    await sleep(600);
+    const hb = await ev(B, 'hp');
+    const b1 = JSON.parse(await ev(B, 'JSON.stringify({ x: bananas[1].x, z: bananas[1].z })'));
+    await ev(B, 'p.set(' + b1.x + ', EYE, ' + b1.z + '); 1');       // no publishState: asking for it must tell the room where I am
+    const ateAlone = await until(B, '!bananas[1].active && hp === ' + Math.min(100, hb + 40), 5);
+    check('and alone, sending seldom, a banana still goes to whoever reaches it', ateAlone, 'hp ' + hb + ' → ' + (await ev(B, 'hp')));
 
     const errs = A.errors.concat(B.errors);
     check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
