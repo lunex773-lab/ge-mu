@@ -391,6 +391,41 @@ class NeuralCore {
     for (let i = 0; i < this.n; i++) a[i] = Math.max(-127, Math.min(127, Math.round(this.act[i] * 127)));
     return { t: this.ticks, act: a, faults: this.faults };
   }
+
+  //  ---- worked out beforehand ------------------------------------------
+  //  Everything the constructor derives from the graph, as plain arrays. The
+  //  room server has a few milliseconds a call, and building a core there
+  //  from the graph took about 15 (measured cold): lab/inline.js writes this
+  //  out once (server/brain.js), and the server only copies it in. A core
+  //  made either way is the same core, step for step (server/test/brain.test.js).
+  prepared() {
+    const a = (t) => Array.from(t);
+    return { v: 1, o: this.o, n: this.n, radius: this.radius,
+      graph: this.g.fingerprint ? this.g.fingerprint() : null, cls: this.g.nodes.map((nd) => nd.cls),
+      bias: a(this.bias), sIdx: a(this.sIdx), sChan: a(this.sChan), sMu: a(this.sMu), sGain: a(this.sGain),
+      mFlat: a(this.mFlat), mSign: a(this.mSign), mStart: a(this.mStart), mBias: a(this.mBias),
+      modStart: a(this.modStart), modIdx: a(this.modIdx), modW: a(this.modW),
+      start: a(this.start), idx: a(this.idx), w: a(this.w) };
+  }
+  static fromPrepared(P) {
+    if (!P || P.v !== 1) throw new Error('NeuralCore.fromPrepared: not a prepared core');
+    const c = Object.create(NeuralCore.prototype), F = Float32Array, I = Int32Array;
+    c.o = Object.assign({}, P.o); c.n = P.n; c.radius = P.radius;
+    //  what the methods still ask of the graph: each node's class (activity())
+    //  and the fingerprint a readout is checked against (setReadout())
+    const nodes = P.cls.map((cls) => ({ cls }));
+    c.g = { nodes, fingerprint: () => P.graph };
+    c.act = new F(P.n); c.net = new F(P.n); c.mod = new F(P.n);
+    c.bias = F.from(P.bias);
+    c.sIdx = I.from(P.sIdx); c.sChan = I.from(P.sChan); c.sMu = F.from(P.sMu); c.sGain = F.from(P.sGain);
+    c.mFlat = I.from(P.mFlat); c.mSign = F.from(P.mSign); c.mStart = I.from(P.mStart); c.mBias = F.from(P.mBias);
+    c.modStart = I.from(P.modStart); c.modIdx = I.from(P.modIdx); c.modW = F.from(P.modW);
+    c.start = I.from(P.start); c.idx = I.from(P.idx); c.w = F.from(P.w);
+    c.rng = makeRng(c.o.seed ^ 0x9e37);
+    c.ticks = 0; c.faults = 0;
+    c.reset();
+    return c;
+  }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
