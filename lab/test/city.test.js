@@ -54,6 +54,21 @@ const ev = (P, src) => P.eval((s) => window.__t.ev(s), src);
       }
       return rays.length + ' rays, ' + hits + ' of them hit something';
     });
+    //  and the footprints the room's creatures stand and walk among
+    const spots = JSON.parse(await ev(A, `(() => { let seed = 9; const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+      const out = []; for (let i = 0; i < 20000; i++) { const x = (rnd() - 0.5) * 720, z = (rnd() - 0.5) * 720, m = rnd() * 2.5;
+        out.push([x, z, m, clearAt(x, z, m) ? 1 : 0, bzbRoof(x, z)]); }
+      return JSON.stringify(out); })()`));
+    test('the footprints: clear or not, and the roof over it, as the game has them', () => {
+      const F = C.footprints(C.planBuildings());
+      let blocked = 0, roofed = 0;
+      for (const s of spots) {
+        const c = F.clearAt(s[0], s[1], s[2]) ? 1 : 0, r = F.roof(s[0], s[1]);
+        if (c !== s[3] || r !== s[4]) throw new Error('at ' + JSON.stringify(s) + ': shared clear ' + c + ', roof ' + r);
+        if (!c) blocked++; if (r > 0) roofed++;
+      }
+      return spots.length + ' spots, ' + blocked + ' inside a footprint, ' + roofed + ' under a roof';
+    });
     await A.close();
   } finally { await room.close(); }
   console.log('\nTHE CITY, SHARED — the same city for the game and the server\n');

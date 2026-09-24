@@ -305,4 +305,34 @@ function rayLazy(city, ro, rd, max) {
   return best;
 }
 
-module.exports = { N, PITCH, RW, SWW, HALF, FH, WGRID_H, WGRID_V, ACC_MAX, SEED, BTYPE, GLASS, mulberry32, planBuildings, interior, buildCity, lazyCity, rayAabb, aabbTouch, rayCity, rayLazy };
+//  Where the buildings stand, for quick questions: is a spot clear of every
+//  footprint (by a margin), and how high is the roof over it. The game has
+//  its own copy of the same lookup (index.html: clearAt, bzbRoof); the room
+//  server's creatures ask this one (lab/test/city.test.js: they agree).
+function footprints(buildings) {
+  const B = new Map();
+  for (const b of buildings) {
+    const k = Math.round(b.cx / PITCH) + ',' + Math.round(b.cz / PITCH);
+    let a = B.get(k); if (!a) B.set(k, a = []); a.push(b);
+  }
+  function clearAt(x, z, margin) {
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+      const a = B.get((bi + oi) + ',' + (bj + oj)); if (!a) continue;
+      for (const b of a) if (Math.abs(x - b.cx) < b.hw + margin && Math.abs(z - b.cz) < b.hd + margin) return false;
+    }
+    return true;
+  }
+  function roof(x, z) {
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+    let h = 0;
+    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) {
+      const a = B.get((bi + oi) + ',' + (bj + oj)); if (!a) continue;
+      for (const b of a) if (Math.abs(x - b.cx) < b.hw + 1 && Math.abs(z - b.cz) < b.hd + 1 && b.h > h) h = b.h;
+    }
+    return h;
+  }
+  return { clearAt, roof };
+}
+
+module.exports = { N, PITCH, RW, SWW, HALF, FH, WGRID_H, WGRID_V, ACC_MAX, SEED, BTYPE, GLASS, mulberry32, planBuildings, interior, buildCity, lazyCity, rayAabb, aabbTouch, rayCity, rayLazy, footprints };
