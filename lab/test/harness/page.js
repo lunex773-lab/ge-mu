@@ -222,7 +222,7 @@ async function openRoom({ moves = false, creatures = false } = {}) {
     //  url: the same page served from somewhere else — the room server under
     //  wrangler dev, say — instead of the harness's own origin
     await page.goto(url || ORIGIN + '/game.html', { timeout: 120000 });
-    await page.waitForFunction(() => window.__t, null, { timeout: 60000 });
+    await page.waitForFunction(() => window.__t, null, { timeout: 60000 }).catch((e) => { throw new Error(e.message + (errors.length ? ' — page errors: ' + errors.slice(0, 3).join(' | ') : '')); });
     if (!render) await page.evaluate(() => window.__t.noRender());
     const P = {
       page, ctx, errors,

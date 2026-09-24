@@ -3,9 +3,9 @@
 //  ============================================================
 //  Alone in a room, a player's game runs every creature itself, as it
 //  always has: nothing is sent, nothing is waited for. With two or more,
-//  the room runs them — so far Beelzebub (boss.js) and the monkey troop
-//  (troop.js) — and everyone is told the same, nobody's phone carrying them
-//  for the rest.
+//  the room runs them — so far Beelzebub (boss.js), the monkey troop
+//  (troop.js) and the day side's traffic (traffic.js) — and everyone is told
+//  the same, nobody's phone carrying them for the rest.
 //
 //  Handing one over, so that it is never run twice and never not at all:
 //
@@ -17,9 +17,14 @@
 //                       snapshot only when someone else is on this side of the
 //                       tear, or in every eighth; after nine without it, the
 //                       host is not running one, and the room starts its own.)
+//                       The traffic is every game's own until then (each
+//                       phone runs its own), so the room asks the host's game
+//                       for its traffic ('tq' → 'tfull'), carries on from that
+//                       — the host sees no change — and tells everyone ('own'
+//                       { t: 1 }); if no answer comes, it starts the city's own.
 //    one is left      → the room tells them it no longer does, with its last
-//                       word ('own' { b: 0, s } / { m: 0, t }), and their game
-//                       carries on from there
+//                       word ('own' { b: 0, s } / { m: 0, mt } / { t: 0, tf }),
+//                       and their game carries on from there
 //
 //  The room steps them whenever a message arrives — with two players about,
 //  some thirty a second — so it needs no timer (a Durable Object's alarm is
@@ -32,6 +37,7 @@
 
 import { RoomBoss } from './boss.js';
 import { RoomTroop } from './troop.js';
+import { RoomTraffic } from './traffic.js';
 import { fileable, MIN_FIGHT } from './mindstore.js';
 import PM from '../lab/core/player_model.js';
 
@@ -39,22 +45,24 @@ const SEND_MS = 100;                       // what the room runs goes out ten ti
 export const ROOM = '__room';              // (who a candidate is for, when it is the room's own)
 const KNOWN_MAX = 32;
 const TROOP_WAIT = 9;                      // host snapshots without the troop before the room starts its own
+const TRAFFIC_WAIT = 12;                   // host snapshots without its traffic, asked for, before the room starts the city's own
 
 export class Creatures {
   constructor(room, { enabled = true } = {}) {
     this.room = room;                      // the Relay
     this.enabled = enabled;
     this.boss = new RoomBoss(room);
-    this.troop = new RoomTroop(room);
-    this.own = { b: false, m: false };     // what the room runs: Beelzebub, the troop
-    this.taking = { b: false, m: 0 };      // two are here: waiting on the host's next word (m: how many so far)
+    this.traffic = new RoomTraffic(room, (c) => this.roomCorpse(c));
+    this.troop = new RoomTroop(room, () => this.traffic.t);        // (the signals: one clock for the city)
+    this.own = { b: false, m: false, t: false };   // what the room runs: Beelzebub, the troop, the traffic
+    this.taking = { b: false, m: 0, t: 0 };        // two are here: waiting on the host's word (m, t: how many so far)
     this.sentT = 0; this.sentSome = false; this.svSeq = 0;
     this.known = new Map();                // name → { t, m, f }: what the memory has of them (and what has been learned here since)
     this.asked = new Set();                // names already asked of the memory
     this.cand = null; this.candAsked = false;
     this.ro = null;                        // the readout, as the memory last had it
   }
-  owns() { return { b: this.own.b ? 1 : 0, m: this.own.m ? 1 : 0 }; }
+  owns() { return { b: this.own.b ? 1 : 0, m: this.own.m ? 1 : 0, t: this.own.t ? 1 : 0 }; }
 
   //  the host's snapshot: the tear, whether he has fallen at it, and — while
   //  the room is taking them over — where he is and how he is, and the troop
@@ -74,7 +82,11 @@ export class Creatures {
         this.troop.adopt(ok ? p.m : null, p.c, p.r);
       }
     }
-    if (took.b || took.m) this.room.send('all', 'own', took);
+    if (this.taking.t && ++this.taking.t > TRAFFIC_WAIT) {           // the host's game never answered: the city's own
+      this.taking.t = 0; this.own.t = true; took.t = 1;
+      this.traffic.adopt(null);
+    }
+    if (took.b || took.m || took.t) this.room.send('all', 'own', took);
     if (this.own.b) delete p.b;            // (a game from before this still sends them)
     if (this.own.m) { delete p.m; delete p.c; delete p.r; }
   }
@@ -85,13 +97,15 @@ export class Creatures {
     if (n >= 2) {
       if (!this.own.b) this.taking.b = true;
       if (!this.own.m && !this.taking.m) this.taking.m = 1;
+      if (!this.own.t && !this.taking.t) { this.taking.t = 1; this.room.send(this.room.host(), 'tq', {}); }
       this.wantMind();
       return;
     }
-    this.taking.b = false; this.taking.m = 0;
-    if (!this.own.b && !this.own.m) return;
+    this.taking.b = false; this.taking.m = 0; this.taking.t = 0;
+    if (!this.own.b && !this.own.m && !this.own.t) return;
     const back = {};
-    if (this.own.m) { this.own.m = false; back.m = 0; back.t = this.troop.snapshot(); }
+    if (this.own.t) { this.own.t = false; back.t = 0; back.tf = this.traffic.full(); }
+    if (this.own.m) { this.own.m = false; back.m = 0; back.mt = this.troop.snapshot(); }
     if (this.own.b) {
       this.own.b = false; back.b = 0; back.s = this.boss.snapshot();
       this.boss.end();
@@ -103,7 +117,8 @@ export class Creatures {
   }
   //  a message has arrived (now: ms)
   tick(now) {
-    if (!this.own.b && !this.own.m) return;
+    if (!this.own.b && !this.own.m && !this.own.t) return;
+    if (this.own.t) { this.traffic.step(now); this.traffic.tell(now); }
     if (this.own.b) this.boss.step(now);
     if (this.own.m) this.troop.step(now);
     if (now - this.sentT < SEND_MS) return;
@@ -133,6 +148,22 @@ export class Creatures {
   monkeyShot(from, i, now) { if (!this.own.m) return false; this.troop.shot(from, i, now); return true; }
   //  a body a player's game threw: the room's troop comes to eat it too
   corpse(p) { if (this.own.m) this.troop.corpse(p); }
+  //  a body the room's traffic left (a Ferrari through the crowd): on every
+  //  screen, and for whoever runs the troop
+  roomCorpse(c) {
+    this.room.send('all', 'corpse', Object.assign({ id: '__room' }, c));
+    this.corpse(c);
+  }
+  //  the host's game's traffic, asked for when two came ('tq'): the room
+  //  carries on from it, and says so
+  trafficFrom(from, p) {
+    if (!this.enabled || !this.taking.t || from !== this.room.host()) return;
+    this.taking.t = 0; this.own.t = true;
+    this.traffic.adopt(p);
+    this.room.send('all', 'own', { t: 1 });
+  }
+  //  a round into walker k, when the room runs the traffic
+  pedShot(from, k, now) { if (!this.own.t) return false; this.traffic.shot(from, k, now); return true; }
 
   //  ---- his memory ------------------------------------------------------------
   //  what the room needs before it runs him: a candidate for the fight, and
@@ -170,6 +201,7 @@ export class Creatures {
     if (had && had.t >= e.t) return;
     this.known.delete(name); this.known.set(name, e);
     if (this.known.size > KNOWN_MAX) this.known.delete(this.known.keys().next().value);
+    if (this.own.b && this.boss.ai && this.boss.ai.tally) this.boss.recall(name);   // (mid-fight: he knows it from now)
   }
   //  What a player's game says (relay kind 'mind'):
   //    { r, s, n }   how the fight it ran with candidate r went (fightScore; s null: no fight)

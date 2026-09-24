@@ -19,6 +19,7 @@ import RULES from '../../shared/rules.js';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import TF from '../../shared/traffic.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 8700 + Math.floor(Math.random() * 200);
@@ -231,6 +232,20 @@ async function main() {
     const mind = await fetch(BASE + '/mind').then((r) => r.json()).catch((e) => ({ error: String(e) }));
     check('/mind says how his learning is going (and names nobody)', Number.isInteger(mind.gen) && Number.isInteger(mind.players) && !JSON.stringify(mind).includes('Aki'),
       JSON.stringify(mind).slice(0, 160));
+
+    // ---- the day side's traffic (server/traffic.js): two in a room of their own ----
+    const G1 = await join(ROOM + 'gamma', 'Gus'), G2 = await join(ROOM + 'gamma', 'Gil');
+    const tq = await until(() => G1.of('tq')[0], 5000);
+    //  G1's game hands over its traffic (a city fresh from the seed, its clock at 42 s)
+    const city = TF.fullState(TF.makeTraffic({ now: () => 42 }));
+    G1.send('tfull', city);
+    const tOwn = await until(() => G2.of('own').find((m) => m.p.t === 1), 5000);
+    for (let i = 0; i < 6; i++) { G1.send('state', { x: 30, y: 0, z: 6, r: 0, w: 0 }); G2.send('state', { x: 32, y: 0, z: 6, r: 0, w: 0 }); await sleep(60); }
+    const tv = await until(() => G2.of('tv')[0], 5000);
+    const told = tv ? (tv.p.c || []).length / 6 + (tv.p.f || []).length / 7 + (tv.p.w || []).length / 6 : 0;
+    check('two in a room: it asks the host\'s game for its traffic, carries on from it, and tells each player the whole city',
+      tq && tOwn && tv && Math.abs(tv.p.t - 42) < 3 && told === 361, (tq ? 'asked; ' : 'not asked; ') + (tv ? 'first word ' + JSON.stringify(tv.p).length + ' bytes, ' + told + ' told, clock ' + tv.p.t : kinds(G2)));
+    G1.ws.close(); G2.ws.close();
 
     // ---- leaving -------------------------------------------------------------
     B.ws.close();

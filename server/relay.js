@@ -26,9 +26,10 @@
 //      could have walked (move.js). One that could not is not passed on,
 //      not used to judge shots or pickups, and the player is told where the
 //      room last had them ('pos'), and put back there
-//    - who runs the creatures: with two or more here the room runs Beelzebub
-//      itself (creatures.js), and judges every shot at him; the rest are the
-//      host's, and only the host's snapshots and kill reports are passed on
+//    - who runs the creatures: with two or more here the room runs Beelzebub,
+//      the monkey troop and the day side's traffic itself (creatures.js), and
+//      judges every shot at them; the rest are the host's, and only the host's
+//      snapshots and kill reports are passed on
 //    - what Beelzebub learns (mindstore.js, kept for every room): a player's
 //      game may report how a fight it ran went only with the candidate the
 //      memory handed that player, once; and may share what it has learned
@@ -125,6 +126,12 @@ const KINDS = {
   //  at Beelzebub: the room's to judge when it runs him, else the host's
   bhit: [8, 12, (p, from, room, now) => (room.creatures.shot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z), by: from })],
   corpse: [4, 8, (p, from, room) => { room.creatures.corpse(p); return Object.assign(p, { id: from }); }],
+  //  the day side's traffic (creatures.js, traffic.js): the host's game's
+  //  traffic, when the room asks for it to carry on from ('tq'); a round into
+  //  a walker, when the room runs the traffic (else the walker is the
+  //  shooter's own business: every game runs its own crowd)
+  tfull: [1, 2, (p, from, room) => { room.creatures.trafficFrom(from, p); return null; }],
+  pedkill: [8, 12, (p, from, room, now) => { room.creatures.pedShot(from, int(p.k), now); return null; }],
   //  a tear is announced by whoever heard of it, on behalf of its owner: the
   //  id in it is the owner's, and is left alone
   gate: [4, 8, (p) => p],
@@ -213,7 +220,7 @@ export class Relay {
 
   //  queue a message from the room: to 'others' (than the sender), 'self',
   //  'all', or one player's id
-  send(to, s, p, f) { this.out.push([to, JSON.stringify(f ? { s, p, f } : { s, p })]); }
+  send(to, s, p, f) { const t = JSON.stringify(f ? { s, p, f } : { s, p }); this.out.push([to, t]); return t; }
 
   //  d damage to player id, by another player (by) or by the city (null)
   damage(id, d, by, now) {
@@ -243,7 +250,13 @@ export class Relay {
     //  woken from sleep (GameRoom): whatever the players' games think the room
     //  runs, it runs nothing yet — they carry on with it, and the room takes
     //  it back from them as it did the first time (creatures.js recount)
-    if (this.woke) { this.woke = false; this.send('all', 'own', { b: 0, m: 0 }); }
+    if (this.woke) {
+      this.woke = false;
+      this.send('all', 'own', { b: 0, m: 0, t: 0 });
+      //  (and asks the host's game again for its traffic: the room's first
+      //  ask was made as it woke, before there was anyone to send it to)
+      if (this.creatures.taking.t) this.send(this.host(), 'tq', {});
+    }
     this.tickItems(now);
     const r = this.judge(me, from, raw, now);
     this.creatures.tick(now);              // whatever the message, time has moved on for the creatures

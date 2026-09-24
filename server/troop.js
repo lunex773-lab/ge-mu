@@ -22,12 +22,13 @@ const LIM = RULES.WORLD * 0.46;
 const CHEST = 1.05;                        // m: where a shot at a monkey is aimed (the game's hit sphere)
 
 export class RoomTroop {
-  constructor(room) {
-    this.room = room;                      // the Relay: players, clock
+  //  clock(): the city's clock the signals run on (the traffic's, traffic.js)
+  constructor(room, clock) {
+    this.room = room;                      // the Relay: players
     this.t = 0; this.acc = 0; this.last = undefined;
     this.F = theFootprints();
     this.T = TROOP.makeTroop({
-      now: () => this.t,
+      now: clock || (() => this.t),
       nearest: (x, z) => this.nearest(x, z),
       spot: () => this.spot(),
     });

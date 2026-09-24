@@ -166,7 +166,7 @@ check('a minute of the troop raging round two players: no error, and no call nea
 out.length = 0;
 keep(R.leave('p000001'));
 const gave = out.find(([, m]) => m.s === 'own');
-check('one left: the room gives the troop back, with its last word on it', gave && gave[1].p.m === 0 && Array.isArray(gave[1].p.t.m) && !C.own.m, JSON.stringify(gave && Object.keys(gave[1].p)));
+check('one left: the room gives the troop back, with its last word on it', gave && gave[1].p.m === 0 && Array.isArray(gave[1].p.mt.m) && !C.own.m, JSON.stringify(gave && Object.keys(gave[1].p)));
 
 //  a host's word that is not a troop is not taken for one
 {

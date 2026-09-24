@@ -176,18 +176,24 @@ export class RoomBoss {
   //  What the memory has of the players here, into his mind: each one's
   //  model, unless he has learned something newer of them himself; and
   //  where the fairness had settled for them, on average.
-  recall() {
+  //  (name: just that player — what the memory has of them arrived after the
+  //  fight began: their game's own word, or the memory's answer)
+  recall(name) {
     const ai = this.ai, C = this.room.creatures;
+    if (!ai) return;
     let fs = 0, fn = 0;
     for (const p of this.room.players.values()) {
+      if (name !== undefined && p.name !== name) continue;
       const e = C.known.get(p.name);
       if (!e) continue;
       const had = ai.bank.models.get(p.name);
-      if (!had || this.wallOf(had.lastT) < e.t) ai.bank.restore({ v: 1, players: { [p.name]: { t: -1, m: e.m } } }, ai.fair.mind);
-      if (ai.pmName === p.name) { ai.pm = null; ai.pmName = ''; }      // (picked up afresh)
+      if (!had || this.wallOf(had.lastT) < e.t) {
+        ai.bank.restore({ v: 1, players: { [p.name]: { t: -1, m: e.m } } }, ai.fair.mind);
+        if (ai.pmName === p.name) { ai.pm = null; ai.pmName = ''; }    // (picked up afresh)
+      }
       if (Number.isFinite(e.f)) { fs += e.f; fn++; }
     }
-    if (fn) ai.fair.setLevel(fs / fn);
+    if (fn && name === undefined) ai.fair.setLevel(fs / fn);
   }
   //  What he has learned of the players he has seen since it was last sent
   remember() {

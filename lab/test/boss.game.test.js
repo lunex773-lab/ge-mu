@@ -46,11 +46,15 @@ const near = (P, d) => ev(P, `(() => { carHitCd = 1e9; const a = Math.atan2(p.x 
     p.set(x, EYE, z); vy = 0; yaw = Math.atan2(-(bzb.x - x), -(bzb.z - z)); publishState(true); return 1; }
   return 0; })()`);
 //  a real shot at his chest; the walkers and the troop step out of the line
-//  first. window.__bhits counts the shots that hit him here and went to the room.
-const SHOOT = `(() => { mode = 'mobile'; for (const e of peds) e.wx += 500;
+//  first. fire() shoots along the camera, which turns to the aim on the next
+//  frame: so aim, let it turn (a couple of frames, re-aiming as he moves), then
+//  fire. window.__bhits counts the shots that hit him here and went to the room.
+const SHOOT = `new Promise((done) => { mode = 'mobile'; for (const e of peds) e.wx += 500;
   if (!window.__counting) { window.__counting = 1; window.__bhits = 0; const f = sendBzbHit; sendBzbHit = function (d) { window.__bhits++; return f(d); }; }
-  const dx = bzb.x - p.x, dz = bzb.z - p.z; yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(bzb.alt + 2.6 - p.y, Math.hypot(dx, dz));
-  fireCd = 0; reloading = 0; ammo = Math.max(ammo, 5); fire(); return 1; })()`;
+  const aim = () => { const dx = bzb.x - p.x, dz = bzb.z - p.z; yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(bzb.alt + 2.6 - p.y, Math.hypot(dx, dz)); };
+  aim(); requestAnimationFrame(() => { aim(); requestAnimationFrame(() => { aim(); requestAnimationFrame(() => {
+    for (const e of peds) if (!e.isMonkey) e.wx += 500;
+    fireCd = 0; reloading = 0; ammo = Math.max(ammo, 5); fire(); done(1); }); }); }); })`;
 
 (async () => {
   const room = await openRoom({ creatures: true });
