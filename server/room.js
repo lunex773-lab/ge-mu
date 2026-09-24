@@ -34,7 +34,8 @@ export class GameRoom extends DurableObject {
   }
 
   adopt(ws, a) {
-    this.who.set(ws, a); this.sockets.set(a.id, ws); this.relay.join(a.id, a.name, a.keep);
+    this.who.set(ws, a); this.sockets.set(a.id, ws);
+    return this.relay.join(a.id, a.name, a.keep);
   }
 
   async fetch(request) {
@@ -45,8 +46,9 @@ export class GameRoom extends DurableObject {
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(a);
-    this.adopt(server, a);
-    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState() } }));
+    const out = this.adopt(server, a);
+    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns() } }));
+    this.route(out, a.id, server);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -61,10 +63,14 @@ export class GameRoom extends DurableObject {
       if (w) { w.keep = this.relay.saved(id); try { s.serializeAttachment(w); } catch (e) {} }
     }
     this.relay.dirty.clear();
-    for (const [to, text] of r.out) {
-      if (to === 'others') this.broadcast(text, a.id);
+    this.route(r.out, a.id, ws);
+  }
+  //  what the room says: [to, text] pairs, to 'others' (than `from`), 'all', 'self' or an id
+  route(out, from, ws) {
+    for (const [to, text] of out) {
+      if (to === 'others') this.broadcast(text, from);
       else if (to === 'all') this.broadcast(text, null);
-      else if (to === 'self') ws.send(text);
+      else if (to === 'self') { try { ws.send(text); } catch (e) {} }
       else { const s = this.sockets.get(to); if (s) try { s.send(text); } catch (e) {} }
     }
   }
@@ -80,8 +86,10 @@ export class GameRoom extends DurableObject {
   gone(ws) {
     const a = this.who.get(ws);
     if (!a) return;
-    this.who.delete(ws); this.sockets.delete(a.id); this.relay.leave(a.id);
+    this.who.delete(ws); this.sockets.delete(a.id);
+    const out = this.relay.leave(a.id);
     this.broadcast(JSON.stringify({ s: 'leave', p: { id: a.id } }), null);
+    this.route(out, a.id, null);
   }
 
   broadcast(text, except) {

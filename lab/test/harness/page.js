@@ -130,48 +130,58 @@ function build() {
 //  The room server, as GameRoom (server/room.js) runs it, minus what only
 //  Cloudflare has (hibernation, storage): one Relay per room name. Its check
 //  on where players are (server/move.js) is off unless asked for — the game
-//  tests move players about to set scenes up — and move.game.test.js asks.
-async function roomServer({ moves = false } = {}) {
+//  tests move players about to set scenes up — and move.game.test.js asks;
+//  so is its running of the creatures (server/creatures.js), which the tests
+//  of creatures as a host runs them do without, and boss.game.test.js asks for.
+async function roomServer({ moves = false, creatures = false } = {}) {
   const { Relay, idFor } = await import(pathToFileURL(path.join(ROOT, 'server', 'relay.js')).href);
   const rooms = new Map();                       // name → { relay, next, sockets: Map(id → { ws, who }) }
+  connect.rooms = rooms;                         // (a test may look inside: openRoom().rooms)
   const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
-  return function connect(ws, who) {
+  function connect(ws, who) {
     const u = new URL(ws.url());
     const raw = String(u.searchParams.get('room') || '').trim();
     const name = /^[\p{L}\p{N}_\-. ]{1,32}$/u.test(raw) ? raw : 'lobby';   // as server/worker.js
     let R = rooms.get(name);
-    if (!R) rooms.set(name, R = { relay: new Relay({ moves }), next: 0, sockets: new Map() });
+    if (!R) rooms.set(name, R = { relay: new Relay({ moves, creatures }), next: 0, sockets: new Map() });
     const id = idFor(R.next++);
-    R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
     R.sockets.set(id, { ws, who });
+    const joined = R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
     //  who.drop: kinds this player does not hear (setDrop — packets lost)
     const deliver = (to, text) => { const t = R.sockets.get(to); if (t && !(t.who.drop && t.who.drop.test(kindOf(text)))) t.ws.send(text); };
-    ws.send(JSON.stringify({ s: '_welcome', p: { id, host: R.relay.host(), players: [...R.sockets.keys()], t: Date.now(), hp: R.relay.players.get(id).hp, items: R.relay.itemState() } }));
+    ws.send(JSON.stringify({ s: '_welcome', p: { id, host: R.relay.host(), players: [...R.sockets.keys()], t: Date.now(), hp: R.relay.players.get(id).hp, items: R.relay.itemState(), own: R.relay.creatures.owns() } }));
+    const route = (out, from) => {
+      for (const [to, text] of out) {
+        if (to === 'others' || to === 'all') { for (const other of [...R.sockets.keys()]) if (to === 'all' || other !== from) deliver(other, text); }
+        else deliver(to === 'self' ? from : to, text);
+      }
+    };
+    route(joined, id);
     ws.onMessage((m) => {
       if (!R.sockets.has(id)) return;
       const r = R.relay.handle(id, String(m), Date.now());
       R.relay.dirty.clear();
-      for (const [to, text] of r.out) {
-        if (to === 'others' || to === 'all') { for (const other of [...R.sockets.keys()]) if (to === 'all' || other !== id) deliver(other, text); }
-        else deliver(to === 'self' ? id : to, text);
-      }
+      route(r.out, id);
     });
-    ws.onClose(() => {
-      try { ws.close(); } catch (e) {}           // answer it, as GameRoom does
+    const gone = () => {
       if (!R.sockets.delete(id)) return;
-      R.relay.leave(id);
+      const out = R.relay.leave(id);
       for (const other of R.sockets.keys()) deliver(other, JSON.stringify({ s: 'leave', p: { id } }));
-    });
-  };
+      route(out, id);
+    };
+    ws.onClose(() => { try { ws.close(); } catch (e) {} gone(); });   // answer it, as GameRoom does
+    who.closes.add(gone);                          // (a page shut outright never says goodbye: P.close says it for it)
+  }
+  return connect;
 }
 
 //  A room of players. Each is a separate browser context — its own
 //  localStorage — and all of them meet in the room server above.
-async function openRoom({ moves = false } = {}) {
+async function openRoom({ moves = false, creatures = false } = {}) {
   build();
   const { chromium } = playwright();
   const browser = await chromium.launch({ args: ['--disable-gpu', '--mute-audio'] });
-  const connect = await roomServer({ moves });
+  const connect = await roomServer({ moves, creatures });
 
   async function player({ room, nick, save, render, seed, url, viewport } = {}) {
     const ctx = await browser.newContext({ viewport: viewport || { width: 480, height: 320 } });
@@ -188,7 +198,7 @@ async function openRoom({ moves = false } = {}) {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    const who = { drop: null, down: false };
+    const who = { drop: null, down: false, closes: new Set() };
     //  who.down: the room server is not answering (refused at once), as when
     //  a day's free requests are used up
     await page.routeWebSocket(/^ws:\/\/lab\.test\/ws\?/, (ws) => { if (who.down) ws.close({ code: 1011 }); else connect(ws, who); });
@@ -209,11 +219,11 @@ async function openRoom({ moves = false } = {}) {
       }, { room, nick }),
       setDrop: (on) => { who.drop = on ? /^(gate|gateask|mob)$/ : null; },
       serverDown: (on) => { who.down = !!on; },
-      close: async () => { await ctx.close(); },
+      close: async () => { for (const f of who.closes) f(); who.closes.clear(); await ctx.close(); },
     };
     return P;
   }
-  return { player, close: () => browser.close() };
+  return { player, close: () => browser.close(), rooms: connect.rooms };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

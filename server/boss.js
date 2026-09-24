@@ -80,6 +80,7 @@ export class RoomBoss {
       atkSeq: k[7] | 0, atkKind: KINDS[k[8]] || null, atkPhase: PHASES[k[9]] || null, seed: k[10], vx: 0, vz: 0 };
     BR.adoptBody(this.ai, this.env, st, this.gate);
     this.st = st; this.deadT = 0;
+    this.took = { x: st.x, z: st.z, hp: st.hp };           // (what it was taken from: for a test, and for a look in the logs)
   }
   //  his core in one call, the rest of his mind in the next (each is a few
   //  ms the first time an isolate does it, before the code is warm)

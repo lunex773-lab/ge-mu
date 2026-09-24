@@ -26,8 +26,9 @@
 //      could have walked (move.js). One that could not is not passed on,
 //      not used to judge shots or pickups, and the player is told where the
 //      room last had them ('pos'), and put back there
-//    - who runs the creatures: only the host's snapshots and kill reports
-//      are passed on
+//    - who runs the creatures: with two or more here the room runs Beelzebub
+//      itself (creatures.js), and judges every shot at him; the rest are the
+//      host's, and only the host's snapshots and kill reports are passed on
 //    - how much: a size limit on every message and a rate limit per kind,
 //      and anything the game never sends is dropped
 //
@@ -39,6 +40,7 @@ import RULES from '../shared/rules.js';
 import ITEMS from '../shared/items.js';
 import { remember, whyNot } from './combat.js';
 import { step, freeStep } from './move.js';
+import { Creatures } from './creatures.js';
 
 export const DMG = RULES.DMG;
 export const MAX_BYTES = 16384;        // one message
@@ -55,7 +57,7 @@ const KINDS = {
       if (why) { room.moveRefused++; room.lastMoveRefusal = why; room.putBack(from, me, now); return null; }
     }
     remember(me, now, p.x, p.y, p.z);
-    me.w = w;
+    me.w = w; me.yaw = num(p.r) ? p.r : 0; me.inv = !!p.iv;          // (what the room's creatures see of them)
     p.id = from;
     if (p.n !== undefined) p.n = text(p.n, 20);
     //  what the others are told about my health and my score is the room's
@@ -64,7 +66,7 @@ const KINDS = {
     else { delete p.d; delete p.ds; delete p.kb; }
     return p;
   }],
-  shot: [12, 16, (p, from) => ({ id: from })],
+  shot: [12, 16, (p, from, room) => { room.creatures.heard(from); return { id: from }; }],
   //  "I hit t": checked, and if it stands the room does the damage (below)
   hit: [6, 8, (p, from, room, now) => {
     const me = room.players.get(from), v = room.players.get(p.t);
@@ -102,14 +104,19 @@ const KINDS = {
   //  deaths and kills are decided here now; a player's own claim is ignored
   kill: [3, 6, () => null],
   chat: [1, 4, (p, from) => { const m = text(p.m, 120); return m ? { id: from, n: text(p.n, 20), m } : null; }],
-  mob: [10, 12, (p, from, room) => (room.host() === from ? Object.assign(p, { id: from }) : null)],
+  mob: [10, 12, (p, from, room) => {
+    if (room.host() !== from) return null;
+    room.creatures.hostSaid(p);                                    // the tear, and Beelzebub while the room takes him over
+    return Object.assign(p, { id: from });
+  }],
   mdeath: [8, 16, (p, from, room) => (room.host() === from ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
   mobhit: [8, 12, (p, from) => ({ i: int(p.i), d: DMG, by: from })],
   dhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   ghit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   mfhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
-  bhit: [8, 12, (p, from) => ({ d: DMG, x: int(p.x), z: int(p.z), by: from })],
+  //  at Beelzebub: the room's to judge when it runs him, else the host's
+  bhit: [8, 12, (p, from, room, now) => (room.creatures.shot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z), by: from })],
   corpse: [4, 8, (p, from) => Object.assign(p, { id: from })],
   //  a tear is announced by whoever heard of it, on behalf of its owner: the
   //  id in it is the owner's, and is left alone
@@ -128,7 +135,10 @@ export class Relay {
   //  moves: check where players say they are (move.js). On in every room on
   //  Cloudflare; the lab's game tests move players about to set scenes up,
   //  and turn it on only where they test it.
-  constructor({ moves = true } = {}) {
+  //  creatures: run Beelzebub when two or more are here (creatures.js). On
+  //  in every room on Cloudflare; the lab's game tests of the creatures as a
+  //  host runs them leave it off.
+  constructor({ moves = true, creatures = true } = {}) {
     this.moves = moves;
     this.players = new Map();          // id → the room's view of that player
     this.out = [];
@@ -136,6 +146,7 @@ export class Relay {
     this.moveRefused = 0; this.lastMoveRefusal = '';
     this.dirty = new Set();            // players whose health or score changed (the room saves them)
     this.pickups = null;               // shared/items.js, and which are lying there (items())
+    this.creatures = new Creatures(this, { enabled: creatures });
   }
   items() {
     if (!this.pickups) this.pickups = ITEMS.layout().map((it) => ({ k: it.k, w: it.w, x: it.x, z: it.z, active: true, until: 0 }));
@@ -156,11 +167,16 @@ export class Relay {
   }
   has(id) { return this.players.has(id); }
   host() { let h = null; for (const id of this.players.keys()) if (h === null || id < h) h = id; return h; }
-  //  saved: what was kept of this player while the room slept (saved())
+  //  saved: what was kept of this player while the room slept (saved()).
+  //  Returns what to send because of it, as handle() does (the room's
+  //  creatures may change hands when someone comes or goes).
   join(id, name, saved) {
+    this.out = [];
     const k = saved || {};
     this.players.set(id, { name: text(name, 20), buckets: {}, hp: num(k.hp) ? k.hp : RULES.HP_MAX, dead: !!k.dead, ds: int(k.ds), kills: int(k.kills), deaths: int(k.deaths),
       killer: k.killer || null, lastBy: null, lastByT: 0, lastHitT: -1e9, w: 0, hist: [] });
+    this.creatures.recount();
+    return this.out;
   }
   saved(id) { const v = this.players.get(id); return v && { hp: v.hp, dead: v.dead, ds: v.ds, kills: v.kills, deaths: v.deaths, killer: v.killer }; }
   //  a step the room did not believe: tell the player where it has them
@@ -171,7 +187,7 @@ export class Relay {
     v.putT = now;
     this.send(id, 'pos', { x: v.mv.x, y: v.mv.y, z: v.mv.z });
   }
-  leave(id) { this.players.delete(id); }
+  leave(id) { this.out = []; this.players.delete(id); this.creatures.recount(); return this.out; }
 
   //  queue a message from the room: to 'others' (than the sender), 'self',
   //  'all', or one player's id
@@ -199,17 +215,23 @@ export class Relay {
   //  (to: 'others', 'self', 'all' or an id), and why nothing, if nothing.
   handle(from, raw, now) {
     this.out = [];
-    this.tickItems(now);
     const me = this.players.get(from);
     if (!me) return { out: [], drop: 'unknown sender' };
-    if (typeof raw !== 'string') return { out: [], drop: 'binary' };
-    if (raw.length > MAX_BYTES) return { out: [], drop: 'too large' };
+    this.tickItems(now);
+    const r = this.judge(me, from, raw, now);
+    this.creatures.tick(now);              // whatever the message, time has moved on for the creatures
+    return r;
+  }
+  judge(me, from, raw, now) {
+    const no = (why) => ({ out: this.out, drop: why });
+    if (typeof raw !== 'string') return no('binary');
+    if (raw.length > MAX_BYTES) return no('too large');
     let msg;
-    try { msg = JSON.parse(raw); } catch (e) { return { out: [], drop: 'not JSON' }; }
-    if (!msg || typeof msg !== 'object' || typeof msg.s !== 'string' || !msg.p || typeof msg.p !== 'object') return { out: [], drop: 'malformed' };
+    try { msg = JSON.parse(raw); } catch (e) { return no('not JSON'); }
+    if (!msg || typeof msg !== 'object' || typeof msg.s !== 'string' || !msg.p || typeof msg.p !== 'object') return no('malformed');
     const rule = KINDS[msg.s];
-    if (!rule) return { out: [], drop: 'unknown kind ' + msg.s };
-    if (!this.take(me, msg.s, rule[0], rule[1], now)) return { out: [], drop: 'rate ' + msg.s };
+    if (!rule) return no('unknown kind ' + msg.s);
+    if (!this.take(me, msg.s, rule[0], rule[1], now)) return no('rate ' + msg.s);
     const p = rule[2](msg.p, from, this, now);
     if (p) {
       //  a ping is for the sender; a chat line goes to everyone *including* the

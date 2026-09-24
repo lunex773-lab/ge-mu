@@ -3171,6 +3171,7 @@
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
     fixes: 0,                              // times the room put me back (onRoomPos)
+    srvOwns: { b: false },                 // creatures the room runs itself (server/creatures.js): b, Beelzebub
   };
   const SRV = { ws: null, tries: 0, everUp: false, timer: 0, retry: 0 };   // the room server's connection (connectServer)
   //  On the room server, health, deaths and kills are the room's: it judges
@@ -3263,7 +3264,8 @@
     if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
     if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
-    { const b = bzbSnapshot(); if (b) msg.b = b; }         // the guardian, when he stands
+    if (!MP.srvOwns.b) { const b = bzbSnapshot(); if (b) msg.b = b; }   // the guardian, when he stands (and is mine to run)
+    if (bzb.slain && bzb.seed === rift.seed) msg.bs = 1;   // he has fallen at this tear: the room must not stand him up again
     if (rift.present && !rift.restored) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10),
       Math.round(rift.ry * 1000), rift.seed, rift.owner, gateAge()];
     const payload = JSON.stringify(msg);
@@ -3284,7 +3286,7 @@
     applyGorSnapshot(msg.q);
     applyMfSnapshot(msg.f);
     applyVecSnapshot(msg.v);
-    applyBzbSnapshot(msg.b);
+    if (!MP.srvOwns.b) applyBzbSnapshot(msg.b);        // (while the room runs him, it says where he is: onRoomCreatures)
   }
   function applyTroopSnapshot(a, b) {
     for (const m of monkeyPeds) m.netSeen = false;
@@ -3353,6 +3355,8 @@
     if (t.slice(-5) === '/item') { onItem(msg); return; }
     if (t.slice(-3) === '/hp') { onRoomHp(msg, false); return; }
     if (t.slice(-4) === '/pos') { onRoomPos(msg); return; }
+    if (t.slice(-4) === '/own') { onRoomOwns(msg); return; }
+    if (t.slice(-3) === '/sv') { onRoomCreatures(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -3556,6 +3560,7 @@
         const was = SRV.everUp;
         MP.id = m.p.id; rekit(monkey, MP.id);            // the room decides who we are
         MP.serverT0 = m.p.t - performance.now();
+        onRoomOwns(m.p.own || { b: 0 });                 // what the room runs, as I arrive
         MP.client = client; MP.connected = true; SRV.everUp = true; SRV.tries = 0;
         if (dead || hp < HP_MAX) client.publish(mtopic('hurt'), JSON.stringify({ d: dead ? HP_MAX : HP_MAX - hp }));
         (m.p.items || []).forEach((a, i) => onItem({ i, a }));        // which pickups are lying there now
@@ -3570,6 +3575,7 @@
       clearTimeout(SRV.timer);
       if (SRV.ws !== ws) return;                           // an old socket, already replaced
       MP.connected = false;
+      MP.srvOwns.b = false;                                // alone now: whatever the room ran, this game runs
       //  keep playing, and keep knocking: 1, 2, 4, 8 s … then every 15 s
       //  (every 30 s if it has never answered: a copy with no server, or a
       //  day's free requests used up — alone until it does)
@@ -4379,6 +4385,17 @@
   //  The room did not believe a step (server/move.js: further than anyone
   //  could have gone): back to where it has me. Playing, this should never
   //  happen; F3 / ?debug counts it (NET … fix n).
+  //  With two or more here the room runs Beelzebub itself (server/creatures.js).
+  //  When it takes him, whoever was running him stops (the room took him from
+  //  their last snapshot); when it gives him back, with its last word on him,
+  //  whoever runs the creatures carries on from there (updateBzb's hand-over).
+  function onRoomOwns(msg) {
+    const was = MP.srvOwns.b;
+    MP.srvOwns.b = !!msg.b;
+    if (MP.srvOwns.b && !was && bzbAI && bzbAI.body) { bzbSaveMind(); bzbAI.body = null; }
+    if (!MP.srvOwns.b && was && msg.s) applyBzbSnapshot(msg.s);
+  }
+  function onRoomCreatures(msg) { if (MP.srvOwns.b) applyBzbSnapshot(msg.b || null); }
   function onRoomPos(msg) {
     if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
     if (psyHold) psyRelease(0);
@@ -14450,7 +14467,7 @@
     if (!b.alive) bzbDie();
   }
   function sendBzbHit(dmg) {
-    if (!MP.connected || !MP.client || mobPub()) return;
+    if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.b)) return;   // the owner applies its own, unless the room runs him
     try { MP.client.publish(mtopic('bhit'), JSON.stringify({ d: dmg, x: Math.round(p.x), z: Math.round(p.z), by: MP.id })); } catch (e) {}
   }
   function onBzbHit(msg) { if (bzbAI && bzbAI.body) bzbHurt(msg.d || 0, msg.x, msg.z, msg.by || null); }
@@ -14515,7 +14532,7 @@
 
   // ---- the frame --------------------------------------------------------
   function updateBzb(dt) {
-    const mine = mobSim();
+    const mine = mobSim() && !MP.srvOwns.b;           // the room may be running him (onRoomOwns)
     // B1: the tear is open, and has settled, and he has not fallen here — he stands
     if (mine && rift.present && gateSettle === 0 && !bzb.live) {
       const sv = bzbSaved();
