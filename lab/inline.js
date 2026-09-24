@@ -46,6 +46,7 @@ const MODULES = [
   ['tactics.js', 'core/tactics.js'],
   ['fsm_brain.js', 'core/fsm_brain.js'],
   ['game_adapter.js', 'adapter/game_adapter.js'],
+  ['boss_runner.js', 'core/boss_runner.js'],
 ];
 
 function theGraph() { return C.hybrid(buildMockConnectome({ nodes: GRAPH.nodes, seed: GRAPH.seed }), GRAPH.keep); }
