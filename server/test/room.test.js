@@ -54,19 +54,22 @@ function join(room, name) {
   });
 }
 
-//  the slowest of a few pings to a room of its own
+//  the round trip to a room of its own: the middle of five pings. (Not the
+//  slowest: one ping once took 5 s, every wait grew by 7.5 s, and in the
+//  gaps the room went to sleep — hibernation, which forgets where players
+//  were until they next say — so hits it should have judged were refused.)
 async function roundTrip() {
   const P = await join(ROOM + 'rtt', 'rtt');
-  let worst = 0;
-  for (let i = 0; i < 3; i++) {
+  const all = [];
+  for (let i = 0; i < 5; i++) {
     const t0 = Date.now(), n = P.of('ping').length;
     P.send('ping', { t: t0 });
     while (P.of('ping').length === n && Date.now() - t0 < 5000) await sleep(5);
-    worst = Math.max(worst, Date.now() - t0);
+    all.push(Date.now() - t0);
     await sleep(600);                             // pings are limited to 2 a second
   }
   P.ws.close();
-  return worst;
+  return all;
 }
 
 async function main() {
@@ -79,9 +82,10 @@ async function main() {
     for (let i = 0; i < 120 && !up; i++) { if (dev || i) await sleep(500); try { up = (await fetch(BASE + '/')).ok; } catch (e) { if (LIVE) log = String(e.cause || e); } }
     if (!up) throw new Error((LIVE ? BASE + ' did not answer: ' : 'wrangler dev did not start:\n') + log.slice(-2000));
     if (LIVE) {
-      const rtt = await roundTrip();
-      EXTRA = Math.ceil(rtt * 1.5);
-      console.log('LIVE ' + BASE + ' — round trip ' + rtt + ' ms, every wait +' + EXTRA + ' ms');
+      const all = await roundTrip(), rtt = all.slice().sort((a, b) => a - b)[2];
+      //  at most 1.5 s more, so no gap in a sequence nears the ~10 s a room waits before it sleeps
+      EXTRA = Math.min(1500, Math.ceil(rtt * 1.5));
+      console.log('LIVE ' + BASE + ' — round trip ' + rtt + ' ms (' + all.join(', ') + '), every wait +' + EXTRA + ' ms');
     }
 
     // ---- the page, and nothing else --------------------------------------

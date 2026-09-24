@@ -23,7 +23,11 @@ const SLACK = 0.4;                     // m: a line that stops this short of the
 let city = null;                       // once per isolate, and lazily (shared/city.js lazyCity)
 export function theCity() { return city || (city = CITY.lazyCity()); }
 
-//  where a player has been: flat [t, x, y, z, t, x, y, z, …], y at the feet
+//  where a player has been: flat [t, x, y, z, t, x, y, z, …], y at the feet.
+//  Kept in memory only: a room that sleeps (hibernation, after ~10 s with
+//  nobody sending anything) wakes without it, and judges no shot at a player
+//  until that player's next state — a few hundredths of a second in a game,
+//  where everyone moving sends many a second.
 export function remember(pl, now, x, y, z) {
   const h = pl.hist;
   h.push(now, x, y, z);
