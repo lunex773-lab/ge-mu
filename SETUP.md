@@ -23,36 +23,56 @@ URL は `https://contour.<あなたのサブドメイン>.workers.dev` になり
 
 ### 1-1. アカウント ID を控える
 
-Cloudflare のダッシュボードで **Workers & Pages** を開くと、画面の右側に **Account ID** が表示されています。コピーして控えてください。
-（見つからない場合は、ダッシュボード右上のアカウントメニュー → **Account Home** → アカウント名の横の「⋯」→ **Copy account ID**。）
+1. Cloudflare のダッシュボード（<https://dash.cloudflare.com>）にログインします。
+2. 左のメニューの **Workers & Pages** を開きます（**Compute** の中にあることもあります）。
+3. 画面の **Account Details** の欄に **Account ID** があります。横のコピーボタンでコピーし、メモ帳などに貼っておきます。
+   - 見つからないときは、画面上部の検索（パソコンなら `Ctrl + K`）に `Copy account ID` と入力して選ぶと、コピーされます。
+   - Account ID は英数字32文字です（例: `0123456789abcdef0123456789abcdef`）。
+4. 同じ画面に **Your subdomain**（`xxxx.workers.dev`）が出ていれば、それがあなたのサブドメインです。
+   **サブドメインを決める画面が出た場合は、ここで決めてください。** 決まっていないと、最初の公開が失敗します。
 
 ### 1-2. API トークンを作る
 
-1. ダッシュボード右上の人のアイコン → **My Profile** → 左の **API Tokens**
-   （または **Manage Account → Account API Tokens**）を開きます。
+1. <https://dash.cloudflare.com/profile/api-tokens> を開きます（右上の人のアイコン → **My Profile** → **API Tokens** と同じ場所）。
 2. **Create Token** を押します。
-3. テンプレートの一覧から **Edit Cloudflare Workers** の **Use template** を押します。
-4. **Account Resources** で自分のアカウントを選びます。**Zone Resources** は **All zones** のままで構いません。
-5. **Continue to summary** → **Create Token** を押します。
-6. 表示されたトークンを**コピーします。この画面でしか表示されません。**
-   このトークンは他人に見せないでください（あなたのアカウントに公開する権限があります）。
+3. テンプレートの一覧から **Edit Cloudflare Workers** の行の **Use template** を押します。
+4. **Account Resources**: `Include` と、自分のアカウント名を選びます。
+5. **Zone Resources**: `Include` と `All zones` のままで構いません（独自ドメインを持っていなくても大丈夫です）。
+6. 下の **Continue to summary** → 次の画面で **Create Token** を押します。
+7. 表示されたトークン（`cfut_` で始まる長い文字列）を**コピーします。この画面でしか表示されません。**
+   閉じてしまったら、同じ手順でもう一度作り直せば大丈夫です。
+   - **このトークンは誰にも見せないでください**（私にも送らないでください）。GitHub のシークレットに入れるだけで使えます。
 
 ### 1-3. GitHub にシークレットとして登録する
 
-1. GitHub で `lunex773-lab/ge-mu` を開き、**Settings** → 左の **Secrets and variables** → **Actions** を開きます。
-2. **New repository secret** で次の2つを登録します。
+GitHub のスマホアプリでは設定できないので、**ブラウザ**（Safari や Chrome）で行います。
 
-| Name | Secret |
+1. <https://github.com/lunex773-lab/ge-mu/settings/secrets/actions> を開きます
+   （リポジトリの **Settings** → 左のメニューの **Secrets and variables** → **Actions** と同じ場所。
+   スマホで Settings のタブが見えないときは、ブラウザのメニューから「デスクトップ用サイトを表示」にすると出ます）。
+2. **New repository secret** を押し、次の1つ目を入れて **Add secret** を押します。
+
+| Name（名前） | Secret（値） |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | 1-2 でコピーしたトークン |
 | `CLOUDFLARE_ACCOUNT_ID` | 1-1 で控えた Account ID |
 
+3. もう一度 **New repository secret** を押して、2つ目も同じように登録します。
+   名前は**大文字・アンダースコアまでこの通りに**入れてください（1文字でも違うと使われません）。
+4. 一覧に2つとも並べば完了です（値は二度と表示されませんが、それで正常です）。
+
 ### 1-4. 公開する
 
-- GitHub の **Actions** タブ → **Deploy to Cloudflare** → **Run workflow**（ブランチは `claude/multiplayer-login-c9n7dk`）→ 緑の **Run workflow** を押します。
-- 1〜2分で完了します。ログの最後の方に `https://contour.<サブドメイン>.workers.dev` が出ます。
-- **以後は、このブランチに push されるたびに自動で公開されます**（毎回、サーバーのテストを通ってから公開します）。
-  自動にしたくない場合は教えてください。手動だけに変えます。
+次のどちらかで公開されます。
+
+- **私に「登録した」と伝える**: 私がこのブランチに push すると、自動で公開されます（一番簡単です）。
+- **自分で今すぐ公開する**: <https://github.com/lunex773-lab/ge-mu/actions> → 左の **Deploy to Cloudflare** →
+  一番上の実行（run）を開く → 右上の **Re-run jobs** → **Re-run all jobs**。
+  （**Run workflow** ボタンは、この仕組みが既定のブランチ `main` に入るまでは表示されません。）
+
+1〜2分で終わります。実行のログを開き、**Deploy** の段の最後の方に出る `https://contour.<サブドメイン>.workers.dev` が公開先です。
+ダッシュボードの **Workers & Pages** → **contour** からも確認できます。
+**以後は、このブランチに push されるたびに自動で公開されます**（毎回、サーバーのテストを通ってから公開します）。
 
 ---
 
@@ -80,8 +100,12 @@ npx wrangler deploy       # 公開。最後に URL が表示されます
 
 1. 公開された URL をスマホで開き、名前とルームを入れて始めます。画面上部に **ONLINE · 1** と出れば、サーバーにつながっています。
 2. 別のスマホ（またはパソコン）で**同じルーム名**で入ると **ONLINE · 2** になり、お互いが見えます。
-3. **性能の数字**: URL の最後に `?debug` を付けて開くと（例: `https://contour.xxx.workers.dev/?debug`）、左下にフレーム時間・JS 時間・通信量などが出ます。
-   Phase 17（実機テスト）で、この数字をスクリーンショットで送ってください。
+3. **性能の数字**（Phase 17 の実機テスト）: URL の最後に `?debug` を付けて開くと（例: `https://contour.xxx.workers.dev/?debug`）、左下に数字が出ます。
+   - 見てほしい行: `FPS`（と frame / worst）、`JS`（logic と draw）、`DRAW`（ドローコールと三角形）、`MEM`、`NET`
+   - 1分ほど普通に歩き回ってから、**横持ち**と**縦持ち**でそれぞれスクリーンショットを撮ってください
+     （iPhone: 電源ボタン＋音量を上げるボタン / Android: 電源ボタン＋音量を下げるボタン）
+   - できれば、機種名（例: iPhone 13、Pixel 7）も教えてください
+   - 数字は0.25秒ごとに変わります。撮るたびに違っていて構いません
 
 GitHub Pages など、Cloudflare 以外に置いたコピーは、これまでどおり公開 MQTT ブローカーでつながります（移行が終わったら外します）。
 
