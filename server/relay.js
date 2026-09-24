@@ -222,13 +222,14 @@ export class Relay {
   //  'all', or one player's id
   send(to, s, p, f) { const t = JSON.stringify(f ? { s, p, f } : { s, p }); this.out.push([to, t]); return t; }
 
-  //  d damage to player id, by another player (by) or by the city (null)
-  damage(id, d, by, now) {
+  //  d damage to player id, by another player (by) or by the city (null;
+  //  src: what of it, for the game to show — 'monkey', a swipe)
+  damage(id, d, by, now, src) {
     const v = this.players.get(id);
     if (!v || v.dead) return;
     v.hp = Math.max(0, v.hp - d); this.dirty.add(id);
     if (by) { v.lastBy = by; v.lastByT = now; this.send(id, 'hurt', { d, by, hp: v.hp }); }
-    else this.send(id, 'hp', { hp: v.hp });
+    else this.send(id, 'hp', src ? { hp: v.hp, src } : { hp: v.hp });
     if (v.hp <= 0) this.die(id, now);
   }
   //  a death, and whose kill it is: whoever shot them in the last 12 s

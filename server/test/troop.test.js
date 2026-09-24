@@ -145,6 +145,28 @@ const death = out.find(([, m]) => m.s === 'mdeath');
 check('taken down: the room tells everyone whose it was', death && death[0] === 'all' && death[1].p.i === 3 && death[1].p.by === 'p000000', JSON.stringify(death && death[1].p) + ' after ' + shots + ' more');
 check('and the host can no longer say so', say('p000000', 'mdeath', { i: 5, by: 'p000000', s: 1 }).drop === 'refused mdeath');
 
+//  swipes: the room decides them now — a raging monkey within reach takes 11
+{
+  const m5 = RT.T.monkeys[5];
+  now += 500; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); say('p000001', 'state', { x: ax + 60, y: 0, z: az, r: 0, w: 0 });
+  const hpA = R.players.get('p000000').hp;
+  m5.hp = 60; m5.aggro = true; m5.meleeCd = 0; m5.pooled = false; RT.T.rageT = 30;
+  out.length = 0;
+  for (let i = 0; i < 4; i++) { m5.wx = m5.rx = ax + 0.8; m5.wz = m5.rz = az; now += 50; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); }
+  const sw = out.filter(([to, m]) => to === 'p000000' && m.s === 'hp' && m.p.src === 'monkey');
+  check('a raging monkey within reach swipes: the room takes 11 off, and tells the player it was a swipe', sw.length === 1 && R.players.get('p000000').hp === hpA - 11,
+    hpA + ' → ' + R.players.get('p000000').hp + ', ' + sw.length + ' swipe(s) in 0.2 s');
+  for (let i = 0; i < 20; i++) { m5.wx = m5.rx = ax + 0.8; m5.wz = m5.rz = az; now += 50; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); }
+  const n1 = out.filter(([to, m]) => to === 'p000000' && m.s === 'hp' && m.p.src === 'monkey').length;
+  check('and again once it has drawn back (0.7 s a swipe), not faster', n1 >= 2 && n1 <= 3, n1 + ' swipes in 1.2 s');
+  now += 300; say('p000001', 'state', { x: ax + 60, y: 0, z: az, r: 0, w: 1 });
+  const hpB = R.players.get('p000001').hp;
+  for (let i = 0; i < 20; i++) { m5.wx = m5.rx = ax + 60.5; m5.wz = m5.rz = az; now += 50; say('p000001', 'state', { x: ax + 60, y: 0, z: az, r: 0, w: 1 }); }
+  check('nobody on the other side of the tear is swiped', R.players.get('p000001').hp === hpB);
+  now += 300; say('p000001', 'state', { x: ax + 60, y: 0, z: az, r: 0, w: 0 });
+  R.players.get('p000000').hp = 100;
+}
+
 //  a body thrown by a player's game
 say('p000001', 'corpse', { c: 4242, x: Math.round(ax * 10), z: Math.round(az * 10), vx: 30, vz: 0, k: 7 });
 check('a body a player\'s game threw: the room\'s troop has it too', RT.T.corpses.some((c) => c.active && c.cid === 4242));

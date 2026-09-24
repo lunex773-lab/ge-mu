@@ -471,7 +471,9 @@
   /* the commander's health — present, but not a numeric readout stuck over the world */
   #boss {
     position: absolute; left: 50%; transform: translateX(-50%);
-    top: calc(60px + env(safe-area-inset-top)); width: min(52vw, 420px);
+    /* just under the roster, however many it lists (placeBossBar): at a fixed
+       60 px it lay across the names, held sideways */
+    top: calc(var(--roster-bottom, calc(60px + env(safe-area-inset-top))) + 8px); width: min(52vw, 420px);
     display: none; pointer-events: none; text-align: center;
   }
   #boss.on { display: block; }
@@ -583,6 +585,7 @@
     #meta { top: calc(20px + env(safe-area-inset-top)); right: calc(74px + env(safe-area-inset-right)); max-width: 190px;
             line-height: 1.7; display: flex; flex-direction: column-reverse; align-items: flex-end; }
     #m-help { word-break: keep-all; }                                                 /* wrap at the spaces, not inside 視点 */
+    #boss { width: min(40vw, 320px); }                                                 /* clear of 透明 */
   }
 
 </style>
@@ -2629,6 +2632,7 @@
   //  (how the troop walks, chases, eats and rages is shared/troop.js — the
   //  room runs it with the same code when two or more are here; the
   //  reserve a rage wakes is added below, with the multiplayer code)
+  const MONKEY_SCALE = 0.9;                // a monkey's size (makeMonkey), alive and back on its feet
   const monkeyPeds = [];
   for (let k = 0; k < NUMMONKEY; k++) {
     const e = TR.newMonkey(monkeyPeds.length, false);   // mi: the same monkey on every screen
@@ -2656,7 +2660,7 @@
     nearest: (x, z) => nearestTarget(x, z),
     spot: () => rageSpot(),
     onWake(m) {
-      m.group.scale.setScalar(1); m.group.rotation.set(0, 0, 0);
+      m.group.scale.setScalar(MONKEY_SCALE); m.group.rotation.set(0, 0, 0);
       m.group.position.set(m.wx, 0, m.wz); m.group.visible = true;
       if (m.pooled && !m.group.parent) scene.add(m.group);
     },
@@ -2967,6 +2971,7 @@
   }
   function monkeyMelee(ped, dt) {             // damage is decided locally, on the synced positions
     ped.meleeCd = Math.max(0, (ped.meleeCd || 0) - dt);
+    if (MP.srvOwns.m) return;                  // (the room runs the troop: it decides the swipes, server/troop.js)
     if (dead || !ped.aggro || wState === WS.BACK) return;   // the troop is not over there
     const dx = p.x - ped.wx, dz = p.z - ped.wz;
     if (dx * dx + dz * dz < 3.61 && ped.meleeCd <= 0 && monkeyHitCd <= 0) {     // within 1.9 m
@@ -3061,7 +3066,7 @@
         ped.group.visible = true;
         ped.group.position.set(ped.wx, 0.15 * ease, ped.wz);
         ped.group.rotation.set(ease * 1.62, ped.hd || 0, 0, 'YXZ');
-        ped.group.scale.setScalar(ped.corpseT < 0.7 ? ped.corpseT / 0.7 : 1);   // sinks away at the end
+        ped.group.scale.setScalar(MONKEY_SCALE * (ped.corpseT < 0.7 ? ped.corpseT / 0.7 : 1));   // sinks away at the end
         poseMonkey(ped.group.userData, { stride: 0, walk: 0, run: false, air: 0, crouch: 0.5, land: 0, time: cityT, eat: 0 });
         return;
       }
@@ -3278,7 +3283,7 @@
     ra.lo.add(gun);
 
     g.traverse((o) => { if (o.isMesh) { o.updateMatrix(); o.matrixAutoUpdate = false; } });
-    g.scale.setScalar(0.9);
+    g.scale.setScalar(MONKEY_SCALE);
     g.userData = {
       body, torso, head, tail, gun,
       lArm: la.arm, lArmLo: la.lo, rArm: ra.arm, rArmLo: ra.lo,
@@ -3589,14 +3594,21 @@
       m.netX = a[i + 1] / 10; m.netZ = a[i + 2] / 10;
       // a hit we just landed is already applied locally; until the owner has had
       // time to hear about it, only believe a *lower* hp so the kill does not blink
-      const nh = a[i + 3];
+      const nh = a[i + 3], was = m.hp;
       m.hp = (m.hpHold && performance.now() < m.hpHold) ? Math.min(m.hp, nh) : nh;
       m.netH = a[i + 4] / HDQ; m.aggro = !!(a[i + 5] & 1); m.eating = !!(a[i + 5] & 2);
       if (m.pooled && !m.active) {                        // a reinforcement popped in over there
-        m.active = true; m.killed = false; m.deadT = 0;
-        m.wx = m.rx = m.netX; m.wz = m.rz = m.netZ;
-        m.group.position.set(m.netX, 0, m.netZ); m.group.visible = true;
+        m.active = true;
         if (!m.group.parent) scene.add(m.group);
+      }
+      //  back on its feet (a rage wakes the fallen, or it never fell there):
+      //  as it was before it fell — it had toppled, and shrunk away as its
+      //  body sank, and a monkey woken without this walked on a tenth its size
+      if (m.hp > 0 && (was <= 0 || m.deadFx)) {
+        m.killed = false; m.deadT = 0; m.deadFx = false; m.corpseT = 0;
+        m.wx = m.rx = m.netX; m.wz = m.rz = m.netZ;
+        m.group.scale.setScalar(MONKEY_SCALE); m.group.rotation.set(0, 0, 0);
+        m.group.position.set(m.netX, 0, m.netZ); m.group.visible = true;
       }
     }
     for (const m of monkeyPeds) {                          // anything unsent is out of play
@@ -3689,14 +3701,22 @@
   }
 
   //  The name plate and the health bar over another player keep one size on
-  //  screen, near or far, and stack there: the bar just over the head, the
-  //  name just over the bar. (They were boards in the world, the name 1.4 m
-  //  tall and a few metres wide: close up it covered the very player it
-  //  named, and the bar under it.) Sizes in CSS pixels; sizePlates() turns
-  //  them into sprite scales every frame, so the scope's zoom and a turned
-  //  phone change nothing.
+  //  screen close up, and stack there: the bar just over the head, the name
+  //  just over the bar. (They were boards in the world, the name 1.4 m tall
+  //  and a few metres wide: close up it covered the very player it named,
+  //  and the bar under it.) Sizes in CSS pixels; sizePlates() turns them into
+  //  sprite scales every frame, so the scope's zoom and a turned phone change
+  //  nothing…
   const PLATE_PX = 17, BAR_PX = [46, 5], FILL_PX = [44, 3], PLATE_GAP = 3, PLATE_Y = 2.42;
   const plateK = () => 2 / (innerHeight * camera.projectionMatrix.elements[5]);   // CSS px → scale (sizeAttenuation off)
+  //  …near. Further off they shrink with the player they hang over: at full
+  //  size while the player stands PLATE_FULL px tall on the screen, and as
+  //  they get smaller, down to PLATE_MIN. (One size at every distance put a
+  //  46 px bar over someone 8 px tall across the street — held sideways,
+  //  where the screen is short and everyone in it smaller, most of all.)
+  //  How tall they stand is the camera's: the scope's zoom and a turned phone count.
+  const PLATE_FULL = 36, PLATE_MIN = 0.55, BODY_H = 1.8;
+  const plateFar = (d) => Math.max(PLATE_MIN, Math.min(1, BODY_H * camera.projectionMatrix.elements[5] * innerHeight / 2 / Math.max(1, d) / PLATE_FULL));
   function sizePlates(g, k) {
     const u = g.userData, tag = u.tag, fill = u.hpfill, f = fill.userData.f === undefined ? 1 : fill.userData.f;
     tag.scale.set(PLATE_PX * tag.userData.aspect * k, PLATE_PX * k, 1);
@@ -3753,11 +3773,23 @@
     const tag = nameSprite(name); peer.group.add(tag); peer.group.userData.tag = tag;
   }
 
+  //  where the roster ends — or, upright, the health bar under its edge — for
+  //  the boss bar to go under it (#boss in the CSS)
+  function placeBossBar() {
+    const n = document.getElementById('net'), b = document.getElementById('boss'), h = document.getElementById('hp-bar');
+    if (!n || !b) return;
+    let y = n.getBoundingClientRect().bottom;
+    const w = b.offsetWidth || Math.min(innerWidth * 0.52, 420), x0 = (innerWidth - w) / 2, x1 = x0 + w;
+    if (h) { const r = h.getBoundingClientRect(); if (r.width && r.right > x0 && r.left < x1) y = Math.max(y, r.bottom); }
+    document.documentElement.style.setProperty('--roster-bottom', Math.round(y) + 'px');
+  }
+  addEventListener('resize', () => setTimeout(placeBossBar, 50));
   function renderRoster() {
     const crown = (isKing) => isKing ? '👑 ' : '';
     const rows = ['<div class="me">' + crown(kingId === MP.id) + escHtml(MP.name || '—') + ' (you) · ' + kills + '</div>'];
     for (const [pid, peer] of MP.peers) rows.push('<div>' + crown(kingId === pid) + escHtml(peer.name || '匿名') + ' · ' + (peer.kills || 0) + '</div>');
     netList.innerHTML = rows.join('');
+    placeBossBar();
     const state = MP.connected ? 'ONLINE' : SRV.everUp ? (SRV.tries > 5 ? '接続が切れました' : 'RECONNECTING…') : 'SOLO';
     setNet(state + ' · ' + (MP.peers.size + 1) + (MP.connected && MP.rtt ? ' · ' + MP.rtt + 'ms' : ''), !MP.connected);
   }
@@ -3975,7 +4007,7 @@
       const pw = peer.w === undefined ? WS.NORMAL : peer.w;
       peer.group.visible = !peer.dead && !peer.inv && pw === wState;
       if (peer.hp !== peer.hpShown) { peer.hpShown = peer.hp; setPeerHp(peer); }
-      if (peer.group.visible) sizePlates(peer.group, pk);
+      if (peer.group.visible) sizePlates(peer.group, pk * plateFar(Math.hypot(peer.cur.x - camera.position.x, peer.cur.z - camera.position.z)));
       const spd = Math.hypot(peer.cur.x - px, peer.cur.z - pz) / Math.max(dt, 1e-3);
       const air = (peer.cur.y - height(peer.cur.x, peer.cur.z)) > 0.5;
       const walk = air ? 0 : Math.min(spd / (WALK * 0.7), 1);
@@ -4628,8 +4660,8 @@
     if (hitMonkey) {
       hitMonkey.hp -= DMG; hitMonkey.aggro = true; showHit(hitMonkey.hp <= 0);
       if (hitMonkey.hp <= 0) { hitMonkey.killed = true;   // street monkeys are mobs — they do NOT score
-        creditMyKill();                                  // toward the gate — mine, counted here, always
-        if (troopSim()) emitMonkeyDeath(hitMonkey, MP.id); }
+        if (!MP.srvOwns.m) creditMyKill();               // toward the gate — mine, counted here (while the room runs the
+        if (troopSim()) emitMonkeyDeath(hitMonkey, MP.id); }   // troop, when it says whose it was: applyMonkeyDeath)
       enrageMonkeys();                                 // the whole troop comes for you
       sendMobHit(hitMonkey, DMG);                      // and the owner makes it stick for everyone
     }
@@ -4672,6 +4704,7 @@
   function onRoomHp(msg, shot) {
     if (dead) return;
     if (shot) { lastAttacker = msg.by; lastAttackerT = performance.now(); showHurt(); playHurt(); camShake = 0.28; }
+    if (msg.src === 'monkey') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.22); }   // a swipe, as the room runs the troop
     hp = Math.max(0, Math.min(HP_MAX, +msg.hp || 0));
     updateHpUI();
     if (hp <= 0) onDeath();
@@ -11480,6 +11513,9 @@
     const key = mi + ':' + seq;
     if (deathSeen.has(key)) return;
     deathSeen.add(key);
+    //  the room runs the troop: its word on whose kill it was is what counts
+    //  (a shot it did not believe took nothing down)
+    if (MP.srvOwns.m && by === MP.id) creditMyKill();
   }
   //  'ストシン': cut the tear, step through it, and stand in front of it. The
   //  gate is genuinely there afterwards — it is the way back, and it is what

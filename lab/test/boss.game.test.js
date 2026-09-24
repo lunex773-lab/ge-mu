@@ -92,14 +92,18 @@ const SHOOT = `new Promise((done) => { mode = 'mobile'; for (const e of peds) e.
     check('both see him in the same place', ha.live && hb.live && Math.hypot(ha.x - hb.x, ha.z - hb.z) < 2, JSON.stringify(ha) + ' | ' + JSON.stringify(hb));
 
     // ---- shots ------------------------------------------------------------------
+    //  (standing by him since he was taken, he may have cut them down: up again first)
+    await upAgain(A); await upAgain(B);
     const hp0 = Math.round(boss.st.hp);
-    await near(A, 12); await sleep(300); await ev(A, SHOOT);
+    await near(A, 12); await sleep(300);
+    const sa = await ev(A, 'JSON.stringify({ dead, hp: Math.round(hp), w: wState, mk: monkeyPeds.filter((m) => m.hp > 0 && Math.hypot(m.wx - p.x, m.wz - p.z) < 14).length })');
+    await ev(A, SHOOT);
     const landedA = await until(B, 'Math.round(bzb.hp) < ' + hp0, 3);
     const hp1 = Math.round(boss.st.hp);
     await near(B, 16); await sleep(300); await ev(B, SHOOT);
     const landedB = await until(A, 'Math.round(bzb.hp) < ' + hp1, 3);
     check('both players\' shots land, on the room\'s word, and both see it', landedA && landedB,
-      hp0 + ' → ' + hp1 + ' → ' + Math.round(boss.st.hp) + '; hits sent: A ' + (await ev(A, 'window.__bhits')) + ', B ' + (await ev(B, 'window.__bhits')) +
+      hp0 + ' → ' + hp1 + ' → ' + Math.round(boss.st.hp) + '; hits sent: A ' + (await ev(A, 'window.__bhits')) + ', B ' + (await ev(B, 'window.__bhits')) + '; A when shooting ' + sa +
       (R.lastRefusal ? '; last refused: ' + R.lastRefusal : ''));
 
     // ---- he fights ----------------------------------------------------------------

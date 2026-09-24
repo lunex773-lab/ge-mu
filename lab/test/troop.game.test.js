@@ -14,6 +14,9 @@
 //      whole troop turns on both screens
 //    - taken down: gone on both screens, and it counts towards the tear for
 //      whoever shot it
+//    - one taken down in a rage gets back up, as big as it was on both screens
+//      (it had shrunk away as its body sank, and stayed that small)
+//    - a raging monkey within reach: the room decides the swipe
 //    - the second player leaves: the room gives the troop back, and the game
 //      carries on from where it was
 //
@@ -108,6 +111,35 @@ async function shoot(P, i) { const ok = await ev(P, PLACE(i)); await sleep(300);
     const kills1 = await ev(A, 'myKills');
     check('taken down: gone on both screens, and it counts towards the tear for whoever shot it', down && RT.T.monkeys[target].hp <= 0 && kills1 === kills0 + 1,
       'kills ' + kills0 + ' → ' + kills1 + '; room hp ' + RT.T.monkeys[target].hp);
+
+    // ---- back on its feet, and a swipe ------------------------------------------------------
+    //  in a rage the fallen get back up once their bodies are gone (13 s or so),
+    //  near someone on their feet: the room decides the swipes now, and two
+    //  players standing in a raging troop are soon down — so both get up again
+    //  and step well away from it while they wait
+    const clearAway = (P, dx) => ev(P, `(() => { hp = HP_MAX; dead = false; gameoverEl.classList.remove('show'); updateHpUI(); MP.client.publish(mtopic('spawn'), '{}');
+      for (let r = 0; r < 60; r += 3) for (const s of [1, -1]) { const x = p.x + s * (${dx} + r), z = p.z; if (clearAt(x, z, 1)) { p.set(x, EYE, z); publishState(true); return 1; } }
+      return 0; })()`);
+    await clearAway(A, 140); await clearAway(B, 143);
+    const upA = await until(A, `monkeyPeds[${target}].hp > 0`, 25), upB = await until(B, `monkeyPeds[${target}].hp > 0`, 5);
+    await sleep(500);
+    const size = async (P) => JSON.parse(await ev(P, `JSON.stringify([+monkeyPeds[${target}].group.scale.x.toFixed(2), monkeyPeds[${target}].deadFx ? 1 : 0])`));
+    const [sa, sb] = [await size(A), await size(B)];
+    const full = await ev(A, 'MONKEY_SCALE');
+    check('taken down in a rage, it gets back up: on both screens as big as it was', upA && upB && sa[0] === full && sb[0] === full && !sa[1] && !sb[1], 'A ' + JSON.stringify(sa) + ', B ' + JSON.stringify(sb) + ' (its size ' + full + ')');
+    //  a raging monkey reaches A: the room decides the swipe, and A's game shows it
+    await ev(A, `(() => { window.__swipes = 0; const f = onRoomHp; onRoomHp = function (m, s) { if (m.src === 'monkey') window.__swipes++; return f(m, s); }; return 1; })()`);
+    const hpBefore = await ev(A, 'hp = HP_MAX; dead = false; MP.client.publish(mtopic("spawn"), "{}"); hp');
+    const RM = RT.T.monkeys.find((m) => m.hp > 0 && m.aggro && (!m.pooled || m.active));
+    let swiped = false;
+    for (let i = 0; i < 30 && !swiped; i++) {
+      const at = await ev(A, 'JSON.stringify([p.x, p.z])').then(JSON.parse);
+      RM.wx = RM.rx = at[0] + 0.8; RM.wz = RM.rz = at[1]; RM.meleeCd = 0;
+      await ev(A, 'publishState(true); 1'); await sleep(100);
+      swiped = (await ev(A, 'window.__swipes')) > 0;
+    }
+    const hp1 = await ev(A, 'hp');
+    check('a raging monkey within reach: the room decides the swipe, and the player feels it', swiped && hp1 < hpBefore, 'hp ' + hpBefore + ' → ' + hp1 + ', swipes from the room ' + (await ev(A, 'window.__swipes')));
 
     // ---- given back --------------------------------------------------------------------------
     const last = JSON.parse(await ev(A, TROOP));

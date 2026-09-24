@@ -5,9 +5,9 @@
 //  the same code a player's game runs it with alone (shared/troop.js) — fed
 //  from what the room knows: where each player is, whether they are down.
 //  Everyone is sent the same account of it (the game's own snapshot form),
-//  every shot at a monkey is checked and lands here, and the room says who
-//  took one down. Each player's game still judges a monkey's swipe against
-//  itself, as it always has.
+//  every shot at a monkey is checked and lands here, the room says who took
+//  one down (and so whose it counts towards the tear), and it decides the
+//  swipes: a raging monkey within reach of a player takes 11 off them.
 //
 //  The signals the troop crosses by run on the room's own clock; each phone
 //  runs its walkers and cars on its own — as a follower's always have.
@@ -20,6 +20,9 @@ import { theCity, theFootprints } from './combat.js';
 const STEP = 0.05;                         // s: 20 Hz (a monkey runs 23 cm a step)
 const LIM = RULES.WORLD * 0.46;
 const CHEST = 1.05;                        // m: where a shot at a monkey is aimed (the game's hit sphere)
+//  a swipe (index.html monkeyMelee): within reach, once per SWIPE_CD s a monkey,
+//  and a player takes one at most every HIT_GAP ms (a swarm cannot shred anyone)
+const REACH2 = 1.9 * 1.9, SWIPE = 11, SWIPE_CD = 0.7, HIT_GAP = 400;
 
 export class RoomTroop {
   //  clock(): the city's clock the signals run on (the traffic's, traffic.js)
@@ -94,10 +97,24 @@ export class RoomTroop {
         if (m.pooled && !m.active) continue;
         if (m.hp <= 0) { if (m.corpseT > 0 || !m.deadFx) TROOP.fallen(m, STEP); continue; }
         TROOP.stepMonkey(T, m, STEP);
+        m.meleeCd = Math.max(0, (m.meleeCd || 0) - STEP);
+        if (m.aggro && m.meleeCd <= 0) this.swipe(m, now);
       }
       for (const c of T.corpses) if (c.active) TROOP.stepCorpse(T, c, STEP, true);
       TROOP.assignFeeders(T);
       TROOP.stepRage(T, STEP);
+    }
+  }
+
+  //  the nearest player within reach, if any, takes a swipe
+  swipe(m, now) {
+    for (const [id, p] of this.room.players) {
+      if (p.dead || p.w || now < (p.swipedT || 0)) continue;
+      const q = this.at(p); if (!q) continue;
+      if ((q.x - m.wx) ** 2 + (q.z - m.wz) ** 2 >= REACH2) continue;
+      m.meleeCd = SWIPE_CD; p.swipedT = now + HIT_GAP;
+      this.room.damage(id, SWIPE, null, now, 'monkey');
+      return;
     }
   }
 
@@ -112,7 +129,7 @@ export class RoomTroop {
     me.lastMobHitT = now;
     if (!TROOP.hurt(T, m, RULES.DMG)) return false;
     m.dseq = (m.dseq || 0) + 1;
-    this.room.send('all', 'mdeath', { i, by: from, s: m.dseq });
+    this.room.send('all', 'mdeath', { i, by: from, s: 'r' + m.dseq });   // ('r': not to be taken for one a host announced)
     return true;
   }
   whyNot(me, m, now) {

@@ -31,7 +31,7 @@ const PARTS = [
   ['#minimap', 'box'], ['#hp-label', 'text'], ['#hp-bar', 'box'], ['#kd', 'text'], ['#ammo', 'text'],
   ['#b-view', 'box'], ['#b-mode', 'box'], ['#gear', 'circle'],
   ['#stick', 'circle'], ['#jump', 'circle'], ['#fire', 'circle'], ['#cloak', 'circle'], ['#chatbtn', 'circle'],
-  ['#scopebtn', 'circle'], ['#reloadbtn', 'circle'],
+  ['#scopebtn', 'circle'], ['#reloadbtn', 'circle'], ['#boss', 'box'],
 ];
 
 //  env(safe-area-inset-*) → a variable the tool can set
@@ -93,7 +93,10 @@ function overlap(a, b) {
       //  crown, a long name (the first two-phone game showed "· 2 · 108ms"
       //  reaching the minimap, where one player with no round trip had not)
       await P.eval(() => window.__t.ev(`setNet('ONLINE · 4 · 188ms');
-        netList.innerHTML = ['<div class="me">👑 旅人-3ph (you) · 12</div>', '<div>旅人-mib · 3</div>', '<div>ながいなまえのひと · 0</div>', '<div>旅人-x7k · 1</div>'].join(''); 1`));
+        netList.innerHTML = ['<div class="me">👑 旅人-3ph (you) · 12</div>', '<div>旅人-mib · 3</div>', '<div>ながいなまえのひと · 0</div>', '<div>旅人-x7k · 1</div>'].join('');
+        placeBossBar();
+        //  and a boss's bar up (BEELZEBUB's, near him): it lay across the roster, held sideways
+        bossEl.classList.add('on', 'king'); $('boss-name').textContent = 'BEELZEBUB'; 1`));
       const shapes = await P.eval(measure, PARTS);
       const hits = [];
       for (let i = 0; i < shapes.length; i++) for (let j = i + 1; j < shapes.length; j++) {
