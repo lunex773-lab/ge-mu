@@ -13673,10 +13673,20 @@
             adapter: makeGameAdapter(env.G), body: null, rng: makeRng(env.seed()),
             self: {}, ch: {}, view: null, readout: null, gated: null, resp: {}, dec: null,
             senseAcc: 0, thinkAcc: 0, adaptAcc: 0, saveAcc: 0, toChannels,
-            bodyInfo: null, thinkUs: 0, thinks: 0, now: 0,
+            bodyInfo: null, thinkUs: 0, thinks: 0, now: 0, tally: null,
           };
         }
         function serializeMind(ai) { return { v: 1, fair: ai.fair.serialize(), bank: ai.bank.serialize() }; }
+
+        const MIN_FIGHT = 20;
+        function fightStart(ai) { ai.tally = { landed: 0, flank: 0, predicted: 0, whiff: 0, hurt: 0, fell: 0, secs: 0 }; }
+        function fightScore(ai) {
+          const t = ai.tally;
+          if (!t || t.secs < MIN_FIGHT) return null;
+          const raw = t.landed * 10 + t.flank * 8 + t.predicted * 15 - t.whiff * 10 - t.hurt * 100 - t.fell * 50;
+          const s = raw / Math.max(1, t.secs / 60) / 100;
+          return { s: Math.max(-5, Math.min(5, +s.toFixed(4))), n: Math.round(t.secs) };
+        }
 
         function giveBody(ai, env, x, z, hd, hpMax, gate) {
           const b = new BossBody(env.world, { x, z, hd, hpMax: hpMax / ai.fair.body.health, fairness: ai.fair });
@@ -13706,6 +13716,7 @@
           ai.fair.noteBossHurt(got / b.hpMax, now);
           if (ai.pm) ai.pm.noteOutcome('boss_hurt', now);
           if (now - (ai.missT || -99) < 1) ai.memory.episodic.record(now, 'player_countered', ai.missKind || 'reap', 'close', by);
+          if (ai.tally) { ai.tally.hurt += got / b.hpMax; if (!b.alive) ai.tally.fell = 1; }
           return got;
         }
         function heard(ai, id, x, y, z) { if (ai.body) ai.adapter.noteShot(id, x, y, z); }
@@ -13721,10 +13732,14 @@
               ai.fair.noteLanded(id, ai.now, dmg / 100);
               ai.adapter.noteHit(id, 'self', dmg, 100);
               ai.memory.episodic.record(ai.now, 'boss_attack_landed', kind, band, id);
-              if (ai.view && ai.view.get('player_facing_me') < 0.3) ai.memory.episodic.record(ai.now, 'ambush_success', kind, band, id);
+              const flank = ai.view && ai.view.get('player_facing_me') < 0.3;
+              if (flank) ai.memory.episodic.record(ai.now, 'ambush_success', kind, band, id);
               if (ai.pm) ai.pm.noteOutcome('player_hurt', ai.now);
+              const t = ai.tally;
+              if (t) { t.landed++; if (flank) t.flank++; if (ai.dec && ai.dec.reason && ai.dec.reason.prediction_weight > 0) t.predicted++; }
             },
             miss(kind) {
+              if (ai.tally) ai.tally.whiff++;
               ai.memory.episodic.record(ai.now, 'boss_attack_failed', kind, 'close');
               if (ai.pm) ai.pm.noteOutcome('boss_missed', ai.now);
               ai.missT = ai.now; ai.missKind = kind;
@@ -13770,7 +13785,7 @@
             ai.thinkUs += (env.clock() - t0) * 1000; ai.thinks++;
           }
           if (ai.adaptAcc >= 1) { ai.fair.adapt(now, ai.adaptAcc); ai.adaptAcc = 0; }
-          if (ai.view && ai.view.get('has_target') > 0.5 && ai.view.get('player_confidence') > 0.1) ai.aloneT = 0;
+          if (ai.view && ai.view.get('has_target') > 0.5 && ai.view.get('player_confidence') > 0.1) { ai.aloneT = 0; if (ai.tally) ai.tally.secs += dt; }
           else ai.aloneT = (ai.aloneT || 0) + dt;
           if (ai.aloneT > 20 && b.hp < b.hpMax && b.alive) b.hp = Math.min(b.hpMax, b.hp + b.hpMax * 0.04 * dt);
           if (ai.saveAcc >= 30) { ai.saveAcc = 0; env.onSave(ai); }
@@ -13794,7 +13809,7 @@
         }
 
         if (typeof module !== 'undefined' && module.exports) {
-          module.exports = { KINDS, makeMind, serializeMind, giveBody, adoptBody, hurt, heard, think, apply };
+          module.exports = { KINDS, MIN_FIGHT, makeMind, serializeMind, fightStart, fightScore, giveBody, adoptBody, hurt, heard, think, apply };
         }
 
       },
