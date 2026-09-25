@@ -55,4 +55,13 @@ jobs:
           # (a push that changes nothing of the server keeps the build's
           # fingerprint, and rooms still moving over would pass for new ones)
           VER=$(printf '%s' "$OUT" | grep -o 'Current Version ID: [0-9a-f-]*' | head -n 1 | awk '{print $4}')
-          LIVE_URL="$URL" LIVE_VERSION="$VER" node server/test/room.test.js
+          # Once more, half a minute on, if it fails: in the minute after a
+          # deploy Cloudflare can still move a room to a fresh copy under the
+          # check (seen: the second player welcomed into a room with only
+          # itself in it, its first player's socket gone), which says nothing
+          # of the code. A fault in the code fails both times.
+          LIVE_URL="$URL" LIVE_VERSION="$VER" node server/test/room.test.js || {
+            echo "::warning::The live check failed; once more in 30 s (a room may have been moved under it just after the deploy)"
+            sleep 30
+            LIVE_URL="$URL" LIVE_VERSION="$VER" node server/test/room.test.js
+          }
