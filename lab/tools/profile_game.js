@@ -33,7 +33,7 @@ const INSTRUMENT = `(() => {
     S.t[name] = { n: 0, s: 0, mx: 0 };
     const g = function () { const t0 = performance.now(); const r = f.apply(this, arguments); const ms = performance.now() - t0;
       if (S.on) { const q = S.t[name]; q.n++; q.s += ms; if (ms > q.mx) q.mx = ms; } return r; };
-    eval(name + ' = g'); };
+    try { eval(name + ' = g'); } catch (e) { delete S.t[name]; } };            // (a const — from shared/ — is left alone)
   ${JSON.stringify(WRAP)}.forEach(W);
   const of = frame; frame = function (now) { const t0 = performance.now(); of(now); if (S.on) S.fr.push(performance.now() - t0); };
   return 1; })()`;

@@ -4484,10 +4484,10 @@
   //  — the room server runs the troop with the same code (server/troop.js).
   //  The cycle is tuned so that HALF of it is exactly the time it takes to drive
   //  one block at cruise (66 m at ~8.5 m/s ≈ 7.76 s). That is what lets the
-  //  green wave below actually work — see WAVE_STEP.
+  //  green wave below actually work — see WAVE_STEP (shared/traffic.js).
   let cityT = 0;
   const TR = SH('troop.js');
-  const { SIG, CYCLE, signalPhase } = TR;
+  const { signalPhase } = TR;
 
   // ──────────────────────────────────────────────────────────
   //  Scene
@@ -4929,13 +4929,12 @@
   //  records here, all built; the room builds each the first time it is needed)
   const GROUND = CITYGEN.ground(cityNear);
   const supportHeight = GROUND.supportHeight, cityCollide = GROUND.collide, bldAt = GROUND.bldAt, navNext = GROUND.navNext;
-  const FLOOR_OF = CITYGEN.FLOOR_OF, SAME_FLOOR = CITYGEN.SAME_FLOOR, onSameLevel = CITYGEN.onSameLevel;
+  const onSameLevel = CITYGEN.onSameLevel;
 
   // ray vs AABB (slab method). rayAabb ignores boxes the origin already sits in;
   // aabbTouch also counts those, so the broadphase keeps your own building.
   //  Rays through the city — the gun's line of fire, every creature's line of
   //  sight — are shared/city.js's, the same ones the room server fires.
-  const rayAabb = CITYGEN.rayAabb, aabbTouch = CITYGEN.aabbTouch;
   function rayCity(ro, rd, max) { return CITYGEN.rayCity(cityB, ro, rd, max); }
 
 
@@ -5021,7 +5020,7 @@
   // directions, not just the way the wave runs. The old offsets (i*2 + j*3)*1.7
   // bore no relation to the block time or the cycle, so traffic stopped at
   // almost every intersection no matter which way it was going.
-  const WAVE_STEP = TR.WAVE_STEP;                      // ≈ 7.76 s = 66 m at cruise
+  //  (shared/traffic.js WAVE_STEP ≈ 7.76 s = 66 m at cruise)
   const sigOffset = TR.sigOffset;
   //  The signals' clock: this game's own, or — while the room runs the traffic
   //  (server/traffic.js) — the room's, as it says it in every word ('tv'), so
@@ -5109,6 +5108,7 @@
   // together), and lenses are rewritten only on the frame their state changes.
   const sigPrev = new Int8Array(NSIG);
   function updateSignalLenses() {
+    if (wState === WS.BACK) return;                  // (hidden over there; the first frame back catches up: sigPrev)
     let dirty = false;
     for (let k = 0; k < NSIG; k += 4) {
       const P = phaseAt(sigIJ[k][0], sigIJ[k][1]);
@@ -5136,9 +5136,6 @@
   //  Traffic — cars, a drifting sports car, and pedestrians
   //  moving along the road / sidewalk graph, obeying the signals.
   // ──────────────────────────────────────────────────────────
-  const DIRS = TR.DIRS;
-  const randEdge = () => TR.randEdge();
-  const advanceNode = (a) => TR.advanceNode(a);
 
   // ---- cars: instanced, but detailed — body + glass cabin + 4 wheels + head/tail
   //  lights, and varied silhouettes (sedan / kei / van / taxi) via per-instance scale ----
@@ -5240,7 +5237,7 @@
   //  pose — position eased in with a speed cap, heading swung at a limited rate
   //  — and the resulting turn rate drives the steering, banking and leaning
   //  (shared/troop.js: the monkeys the room runs turn the same way). ----
-  const easeHeading = TR.easeHeading, easePose = TR.easePose;
+  const easePose = TR.easePose;
 
   // ---- pedestrians: instanced *2-segment* articulated humans (thigh + shin and
   //  upper-arm + forearm that bend at the knee/elbow, plus feet and hair) — the
@@ -5281,7 +5278,6 @@
   const _armRu = _mk(_sk, 0.25, 1.44, 0), _armRl = _mk(_armRu, 0, -0.30, 0);
 
   // one number carries a whole outfit (shirt / trousers / skin / hair)
-  const packLook = (s, p, k, h) => ((s * PANTSc.length + p) * SKINc.length + k) * HAIRc.length + h;
   function dressHuman(slot, colr) {
     let v = colr | 0;
     const h = v % HAIRc.length; v = (v / HAIRc.length) | 0;
@@ -5299,7 +5295,7 @@
   const peds = [];
   if (SHIRTc.length * PANTSc.length * SKINc.length * HAIRc.length !== TF.LOOKS) console.warn('traffic.js: LOOKS does not match the outfits');
   for (const e of traffic.walkers) {
-    // the outfit is kept as one packed index (packLook) so a corpse can be
+    // the outfit is kept as one packed index (e.colr) so a corpse can be
     // dressed exactly like the walker it came from, on every screen, from one number
     dressHuman(e.hidx, e.colr);
     peds.push(e);
@@ -5377,7 +5373,6 @@
   const _corpseHit = new THREE.Vector3();
   // Put a walker back on the graph at the sidewalk lane nearest to where it is
   // standing now (shared/troop.js: a monkey back from a chase or a meal too).
-  const reseatPed = TR.reseat;
   function respawnPed(e) { TF.respawn(traffic, e); }
   // run down anything on the crossing — the box test the player already gets
   // (while this game runs the traffic: the room's Ferraris run down its own)
@@ -5452,7 +5447,10 @@
   }
 
   // ---- bananas: a few healing pickups on the sidewalks (respawn after a while) ----
-  const BANANA_HEAL = SH('rules.js').BANANA_HEAL, BANANA_RESPAWN = 22, NUM_BANANA = 8;
+  //  (what they give, how soon they lie there again, how close is close enough:
+  //  shared/items.js, as the room has them)
+  const IR = SH('items.js');
+  const BANANA_HEAL = SH('rules.js').BANANA_HEAL, BANANA_RESPAWN = IR.RESPAWN.banana, REACH2 = IR.REACH * IR.REACH;
   const bananaMat = new THREE.MeshStandardMaterial({ color: 0xF6D21C, emissive: 0x3a3005, roughness: 0.45, metalness: 0.05, flatShading: true });
   function makeBanana() {
     const g = new THREE.Group();
@@ -5463,7 +5461,7 @@
   //  Where every pickup lies is shared/items.js's — the same for everyone in a
   //  room, and on the room server whoever reaches one first gets it. gi is
   //  its place in that one list, which the game and the server both use.
-  const ITEMS = SH('items.js').layout(CITY.buildings);
+  const ITEMS = IR.layout(CITY.buildings);
   const itemByGi = [];
   const bananas = [];
   ITEMS.forEach((it, gi) => {
@@ -5478,7 +5476,6 @@
   //  the look changes: blackened, sagging, and lit from inside like everything
   //  else that grows over there. Placed from the world seed so every client
   //  finds them in the same places.
-  const NUM_ROT = 12;
   const rotMat = new THREE.MeshStandardMaterial({ color: 0x4a4a22, emissive: 0x121a06, roughness: 0.95, metalness: 0, flatShading: true });
   const rotSpotMat = new THREE.MeshStandardMaterial({ color: 0x1b1a10, roughness: 1, metalness: 0, flatShading: true });
   function makeRotBanana() {
@@ -5525,8 +5522,8 @@
   }
   function gotBanana(b, rotten, newHp) {
     hp = newHp; updateHpUI(); playHeal(); publishState(true);
-    reserve = Math.min(RESERVE_MAX, reserve + SH('items.js').AMMO); updateAmmoUI();
-    notify((rotten ? '腐ったバナナ' : 'バナナ') + '  +' + BANANA_HEAL + ' HP  +' + SH('items.js').AMMO + ' AMMO', 1600);
+    reserve = Math.min(RESERVE_MAX, reserve + IR.AMMO); updateAmmoUI();
+    notify((rotten ? '腐ったバナナ' : 'バナナ') + '  +' + BANANA_HEAL + ' HP  +' + IR.AMMO + ' AMMO', 1600);
   }
   function gotCompass() {
     revealT = REVEAL_TIME; playHeal();
@@ -5560,7 +5557,7 @@
       b.mesh.rotation.y += dt * (rotten ? 0.7 : 1.6);
       if (!dead && (hp < HP_MAX || reserve < RESERVE_MAX)) {
         const dx = p.x - b.x, dz = p.z - b.z;
-        if (dx * dx + dz * dz < 3.24) eatBanana(b, arr, rotten);              // within ~1.8 m
+        if (dx * dx + dz * dz < REACH2) eatBanana(b, arr, rotten);            // within 1.8 m
       }
     }
   }
@@ -5572,8 +5569,7 @@
 
   // ---- compasses: five of them, scattered wide. Pick one up and every other
   //  player shows on the map for 30 seconds — the *only* way to see them. ----
-  const REVEAL_TIME = 30, COMPASS_RESPAWN = 45;
-  const COMPASS_SPOTS = [[0, 0], [-0.64, -0.64], [0.64, -0.64], [-0.64, 0.64], [0.64, 0.64]];
+  const REVEAL_TIME = IR.REVEAL_TIME, COMPASS_RESPAWN = IR.RESPAWN.compass;
   const brassMat = new THREE.MeshStandardMaterial({ color: 0xC9A227, roughness: 0.35, metalness: 0.75, emissive: 0x2a2205 });
   const dialMat = new THREE.MeshStandardMaterial({ color: 0xEDEFE8, roughness: 0.6, metalness: 0.05 });
   const needleNMat = new THREE.MeshStandardMaterial({ color: 0xE03A2A, roughness: 0.5, emissive: 0x3a0a06 });
@@ -5602,12 +5598,13 @@
     compassItems.push(itemByGi[gi] = { mesh: m.group, spin: m.case_, needle: m.needle, x: it.x, z: it.z, y: it.y, active: true, respawn: 0, ph: it.ph, gi });
   });
   const revealEl = document.getElementById('reveal'), revealNum = document.getElementById('reveal-t');
+  let revealShown = -1;
   function updateCompasses(dt) {
     if (revealT > 0) {
       revealT -= dt;
-      revealEl.classList.add('on');
-      revealNum.textContent = Math.max(0, Math.ceil(revealT));
-      if (revealT <= 0) { revealT = 0; revealEl.classList.remove('on'); notify('方位磁針の効果が切れた', 1800); }
+      const n = Math.max(0, Math.ceil(revealT));
+      if (n !== revealShown) { revealShown = n; revealEl.classList.add('on'); revealNum.textContent = n; }
+      if (revealT <= 0) { revealT = 0; revealShown = -1; revealEl.classList.remove('on'); notify('方位磁針の効果が切れた', 1800); }
     }
     for (const c of compassItems) {
       if (!c.active) { if (!roomRules()) { c.respawn -= dt; if (c.respawn <= 0) { c.active = true; c.mesh.visible = true; } } continue; }
@@ -5617,7 +5614,7 @@
       c.needle.rotation.y = Math.sin(c.ph * 1.3) * 0.10;         // the needle keeps pointing north
       if (dead || wState === WS.BACK) continue;
       const dx = p.x - c.x, dz = p.z - c.z;
-      if (dx * dx + dz * dz < 3.24) {                            // within ~1.8 m
+      if (dx * dx + dz * dz < REACH2) {                          // within 1.8 m
         if (roomRules()) { askTake(c); continue; }
         gotCompass();
         c.active = false; c.mesh.visible = false; c.respawn = COMPASS_RESPAWN;
@@ -6759,7 +6756,16 @@
     } catch (e) { actx = null; }
   }
   const audioReady = () => actx && sfxOn && master;
-  const applyBgm = () => { if (musicGain) musicGain.gain.value = sfxOn ? bgmVol : 0; };   // BGM has its own volume
+  const applyBgm = () => { if (musicGain) { musicGain.gain.value = sfxOn ? bgmVol : 0; musicGain.gain._aimV = undefined; } };   // BGM has its own volume
+  //  An AudioParam eased toward v with time constant tc — asked again only when
+  //  what it is asked changes. The same target asked a frame later is the same
+  //  curve, and every ask is one more event in the audio thread's timeline
+  //  (the music asked six of them a frame, whatever was playing).
+  function aimParam(prm, v, t, tc) {
+    if (prm._aimV !== undefined && Math.abs(prm._aimV - v) < 1e-4 && prm._aimTc === tc) return;
+    prm._aimV = v; prm._aimTc = tc;
+    prm.setTargetAtTime(v, t, tc);
+  }
   const applySfx = () => { if (master) master.gain.value = sfxOn ? sfxVol : 0; applyBgm(); };
 
   function playShot(vol, pan) {
@@ -7047,11 +7053,11 @@
     //  he is awake and near, the other two layers go, whatever they were doing.
     const throne = back && vecPresent();
     const hunt = back && !throne && mfEngaged();
-    dreadGain.gain.setTargetAtTime(back && !hunt && !throne ? 1 : 0.0001, t, (hunt || throne) ? 2.0 : 1.4);
-    huntGain.gain.setTargetAtTime(hunt ? 1 : 0.0001, t, hunt ? 1.4 : 2.2);
-    throneGain.gain.setTargetAtTime(throne ? 1 : 0.0001, t, throne ? 3.4 : 3.0);
-    intenseGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, musicIntensity), t, 0.4);
-    calmGain.gain.setTargetAtTime(back ? 0.0001 : Math.max(0.0001, 1 - musicIntensity), t, 0.4);
+    aimParam(dreadGain.gain, back && !hunt && !throne ? 1 : 0.0001, t, (hunt || throne) ? 2.0 : 1.4);
+    aimParam(huntGain.gain, hunt ? 1 : 0.0001, t, hunt ? 1.4 : 2.2);
+    aimParam(throneGain.gain, throne ? 1 : 0.0001, t, throne ? 3.4 : 3.0);
+    aimParam(intenseGain.gain, back ? 0.0001 : Math.max(0.0001, musicIntensity), t, 0.4);
+    aimParam(calmGain.gain, back ? 0.0001 : Math.max(0.0001, 1 - musicIntensity), t, 0.4);
     if (musicNext < t) musicNext = t + 0.05;                 // resync after any pause (tab hidden / SFX off)
     while (musicNext < t + 0.25) {
       if (back) {
@@ -7201,7 +7207,7 @@
   }
 
   const _rd = new THREE.Vector3(), _ro = new THREE.Vector3(), _mz = new THREE.Vector3();
-  const _p2 = new THREE.Vector3(), _cc = new THREE.Vector3(), _end = new THREE.Vector3();
+  const _cc = new THREE.Vector3(), _end = new THREE.Vector3();
   function raySphere(ro, rd, c, r) {
     const ox = ro.x - c.x, oy = ro.y - c.y, oz = ro.z - c.z;
     const b = ox * rd.x + oy * rd.y + oz * rd.z;
@@ -7813,7 +7819,10 @@
                (() => { const f = mfDebug(); return !f.live ? '' :
                  'FLAY  hp ' + f.hp + '  linked ' + f.dogs + 'd/' + f.gors + 'g' +
                  '  share ' + f.share + '/s  summon in ' + f.summon + 's' +
-                 (f.panic ? '  PANIC' : '') + (f.thrown ? '  THROWN' : '') + '\n'; })(); })() : '') +
+                 (f.panic ? '  PANIC' : '') + (f.thrown ? '  THROWN' : '') + '\n'; })() +
+               (() => { const v = vecDebug(); return !v.live ? '' :
+                 'VECNA ' + v.st + '  phase ' + v.phase + '  hp ' + v.hp + '  held ' + v.orbit + ' flying ' + v.flying +
+                 '  hive ' + v.hive + '  ' + v.d + 'm' + (v.vuln ? '  OPEN' : '') + (v.held ? '  HOLDING YOU' : '') + '\n'; })(); })() : '') +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2) + '\n' + (wState === WS.NORMAL ? bzbDebugText() : '');
   }
@@ -8373,7 +8382,6 @@
   //  six did.
   //  (how many, how far they see and hear, how hard they bite: shared/dogs.js)
   const DOG_DRAW = 18;
-  const DOG_SEED = 0x0d06;
 
   // ---- the body ----------------------------------------------------
   //  Long thin limbs, a low slung spine, and a head that splits into five
@@ -9237,11 +9245,11 @@
   //  GOR_WILD and stops; the pool goes to NGOR. Without the gap a summon can
   //  never land: the stocker tops the district up every twenty seconds, so by
   //  the time a flayer asks for an escort spawnGorgon has no free slot and
-  //  returns null, mfSummon breaks out of its loop, and the escort quietly
+  //  returns null, the summon breaks out of its loop, and the escort quietly
   //  arrives as dogs only. Measured: gorWant 2, gorgons made 0.
   //  (how many, how hard, how they see and hear: shared/gorgons.js)
   const GR = SH('gorgons.js');
-  const GOR_DRAW = 4, GOR_HP = GR.GOR_HP;
+  const GOR_DRAW = 4;
 
   // ---- the body ----------------------------------------------------
   //  Two legs, arms that hang past the knee, and a head that is mostly mouth.
@@ -9531,7 +9539,6 @@
   function despawnGorgon(g) { GR.despawnGorgon(GORS, g); }
   function clearGorgons() { GR.clearGorgons(GORS); }
   function hurtGorgon(g, dmg, fromX, fromZ) { GR.hurt(GORS, g, dmg, fromX, fromZ); }
-  function killGorgon(g) { GR.kill(GORS, g); }
 
   // ---- audio --------------------------------------------------------
   //  Heavier than a dog and deliberately harder to place as an animal. The
@@ -9550,11 +9557,6 @@
     const gn = actx.createGain(); gn.gain.value = v;
     if (actx.createStereoPanner) { const s = actx.createStereoPanner(); s.pan.value = 0; gn.connect(s); s.connect(master); }
     else gn.connect(master);
-    return gn;
-  }
-  function gorOut(dist, reach, vol, pan) {
-    const gn = gorBus(dist, reach, vol);
-    if (gn && pan !== undefined && gn.numberOfOutputs) { try { gn.context; } catch (e) {} }
     return gn;
   }
   //  Footfalls you hear long before you see it — the encounter the spec asks
@@ -9876,10 +9878,8 @@
   //  blows, its escort — is shared/flayers.js: the room server's flayers are
   //  the same animal (below: what it thinks).
   const FL = SH('flayers.js');
-  const NMF = FL.NMF, MF_DRAW = 2;
+  const MF_DRAW = 2;
   const MF_HP = FL.MF_HP;               // 4200 — ten gorgons
-  const MF_LINK = FL.MF_LINK;           // how far its command reaches
-  const MF_ESC_GOR = FL.MF_ESC_GOR, MF_ESC_DOG = FL.MF_ESC_DOG;
 
   // ---- the body -----------------------------------------------------
   //  A mass slung eleven metres up on six legs that arch above it, so the thing
@@ -10282,11 +10282,9 @@
     k = slot * M_FANG; for (let i = 0; i < M_FANG; i++) mfFangI.setMatrixAt(k + i, _dHideM);
   }
   function clearFlayers() { FL.clearFlayers(MFS); if (bossEl) bossEl.classList.remove('on'); }
-  function mfSummon(m, dogWant, gorWant) { return FL.summon(MFS, m, dogWant, gorWant); }
   function mfShareDamage(x, z, dmg) { FL.shareDamage(MFS, x, z, dmg); }
   function mfCounts(m) { return FL.counts(MFS, m); }
   function hurtFlayer(m, dmg, fromX, fromZ) { FL.hurt(MFS, m, dmg, fromX, fromZ); }
-  function killFlayer(m) { FL.kill(MFS, m); }
 
   // ---- the retinue ----------------------------------------------------
   //  (who follows whom, and how many: shared/flayers.js claimNear, retinueOf —
@@ -10294,10 +10292,6 @@
   //  Resolves the bond and expires it in the same breath, so nothing else has
   //  to remember to check whether the master is still alive or still nearby.
   function lordOf(o, dt) { return DG.lordOf(o, dt, dogMaster); }
-  //  Where a follower stands: its own bearing off its own slot and its own
-  //  radius, so a retinue rings the master instead of queueing up behind it —
-  //  and somewhere you could stand (shared/dogs.js escortSpot says why).
-  function escortSpot(o, L, base, spread, ringMul) { return DG.escortSpot(o, L, base, spread, ringMul, clearAt); }
 
   // ---- audio -----------------------------------------------------------
   //  §42: heavier and lower than either of the others, and built to arrive as
@@ -10761,8 +10755,7 @@
   //  same man (below: what he thinks). Here: what the body is made of.
   const VC = SH('vecna.js');
   const V_HP = VC.V_HP;                    // 12600
-  const V_CLEAR = VC.V_CLEAR;              // nothing of his stands inside this
-  const V_HEIGHT = VC.V_HEIGHT, V_HIP = VC.V_HIP;
+  const V_HIP = VC.V_HIP;
   const VL1 = 1.45, VL2 = 1.38;            // thigh / shin
   const VA1 = 1.15, VA2 = 1.10;            // upper arm / forearm at rest
   const V_EXT = VC.V_EXT;                  // §13: how far past rest the arm goes
@@ -11205,7 +11198,6 @@
     }
   }
   function hurtVecna(dmg, fromX, fromZ) { VC.hurt(VS, dmg, fromX, fromZ); }
-  function killVecna() { VC.kill(VS); }
 
   // ---- the grab ------------------------------------------------------
   //  §15. Off your feet, dragged in, thrown. It hurts and it is frightening
@@ -11261,7 +11253,7 @@
   //  nothing about it reaches outside the game. §19 is a hard line, not a
   //  preference: there is no model of the player here, only a record of the map.
   let psyLevel = 0, psyLevelWant = 0, psyEchoT = 0;
-  const psyEl = { root: null };
+  const psyEl = { root: null, op: '' };
   function psyOnset(level, ms) {
     psyLevelWant = Math.max(psyLevelWant, level);
     psyEchoT = Math.max(psyEchoT, ms / 1000);
@@ -11271,15 +11263,17 @@
     psyLevel += (psyLevelWant - psyLevel) * Math.min(1, dt * 1.6);
     if (psyLevel < 0.002 && psyLevelWant === 0) psyLevel = 0;
     if (!psyEl.root) psyEl.root = $('psy');
-    if (psyEl.root) {
-      psyEl.root.style.opacity = psyLevel.toFixed(3);
+    const op = psyLevel.toFixed(3);                    // (written only when it changes: most frames it is 0)
+    if (psyEl.root && op !== psyEl.op) {
+      psyEl.op = op;
+      psyEl.root.style.opacity = op;
       psyEl.root.classList.toggle('on', psyLevel > 0.02);
     }
     //  §52 audio muffle — the room goes quiet, which is worse than a noise
     if (musicGain && audioReady()) {
       try {
         const want = (sfxOn ? bgmVol : 0) * (1 - psyLevel * 0.72);
-        musicGain.gain.setTargetAtTime(Math.max(0.0001, want), actx.currentTime, 0.35);
+        aimParam(musicGain.gain, Math.max(0.0001, want), actx.currentTime, 0.35);
       } catch (e) {}
     }
     //  §16 false footsteps: something walking that is not there, from a bearing
@@ -14808,7 +14802,6 @@
   //  and the scythe rides the right hand. Fifteen draw calls in all (six
   //  skinned materials, the eye among them; four wings; the cape; three for
   //  the scythe; the sigil), built with the city so his coming never stalls.
-  const BZ_H = 4.6;
   const bzbMat = {
     armor: new THREE.MeshPhongMaterial({ color: 0x18171d, specular: 0x6a6070, shininess: 38, skinning: true }),
     skin:  new THREE.MeshLambertMaterial({ color: 0xbfb9b8, skinning: true }),
@@ -15922,10 +15915,6 @@
     }
     gAudio = { out, pan, lp, f1, f2, voices };
   }
-  function stopGateAudio() {
-    if (!gAudio) return;
-    try { gAudio.out.gain.setTargetAtTime(0, actx.currentTime, 0.2); } catch (e) {}
-  }
   function updateGateAudio(dist) {
     if (!rift.present || !sfxOn) { if (gAudio) try { gAudio.out.gain.value = 0; } catch (e) {} return; }
     if (!gAudio) { startGateAudio(); if (!gAudio) return; }
@@ -15999,6 +15988,10 @@
     if (back) { growVines(); buildWrecks(); poseWrecks(); placeRotBananas(); }
     // the crowd, the traffic and the troop simply are not over here
     for (const o of NORMAL_ONLY) if (o) o.visible = !back;
+    //  (the lamps' glow and the headlight beams among them are night-only: the
+    //  street lights say again whether they are lit — else, back by day, both
+    //  stood there drawn at nothing, the beams re-sent every frame, until dusk)
+    if (!back) lightsLit = null;
     rotWorld(back);
     for (const m of monkeyPeds) if (m.group) m.group.visible = false;
     vineI.visible = budI.visible = sporeI.visible = back;
