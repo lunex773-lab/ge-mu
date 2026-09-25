@@ -260,10 +260,10 @@ async function main() {
     const dOwn = await until(() => G2.of('own').find((m) => m.p.d === 1), 5000);
     for (let i = 0; i < 30; i++) { G1.send('state', { x: 30, y: 0, z: 6, r: 0, w: 1 }); G2.send('state', { x: 32, y: 0, z: 6, r: 0, w: i < 15 ? 0 : 1 }); await sleep(60); }
     const dvG1 = G1.of('dv'), dvG2 = G2.of('dv'), lastDv = dvG1.filter((m) => m.p.kf === 1).pop();
-    const up = lastDv ? lastDv.p.k.length / 7 : 0;
+    const dogsUp = lastDv ? lastDv.p.k.length / 7 : 0;
     check('two in a room: it asks the host\'s game for its dogs, carries on (none: it stocks the district as they cross), and tells only those over there',
-      dq && dOwn && up >= 20 && dvG2.length < dvG1.length && dvG2.length > 0,
-      (dq ? 'asked; ' : 'not asked; ') + up + ' dogs up after 1.8 s; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);
+      dq && dOwn && dogsUp >= 20 && dvG2.length < dvG1.length && dvG2.length > 0,
+      (dq ? 'asked; ' : 'not asked; ') + dogsUp + ' dogs up after 1.8 s; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);
     G1.ws.close(); G2.ws.close();
 
     // ---- leaving -------------------------------------------------------------
