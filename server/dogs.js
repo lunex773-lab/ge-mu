@@ -1,51 +1,48 @@
 //  ============================================================
-//  CONTOUR — the other side's wildlife, run by the room  (B9d, B9e, B9f)
+//  CONTOUR — the other side, run by the room  (B9d–B9g)
 //  ============================================================
-//  With two or more players in the room, the room runs the demodogs, the
-//  demogorgons and the mind flayers that command them — the same code a
+//  With two or more players in the room, the room runs everything on the
+//  other side of the tear: the demodogs, the demogorgons, the mind flayers
+//  that command them and VECNA, whom they all answer to — the same code a
 //  player's game runs them with alone (shared/dogs.js, gorgons.js,
-//  flayers.js) — and they hunt everyone over there, not only the one whose
-//  phone ran them. Fed from what the room knows: where each player is, which
-//  side of the tear, whether they are down or cloaked, which way they face,
-//  how fast they move (a sprint is heard) and when they fire (a shot is
-//  heard across the district). The room decides the bites, the swings and
-//  the flayers' blows and thrown cars, and judges every shot at any of them.
-//  A flayer commands its escort here, in the room: it claims them, hands
-//  them what it knows, summons more, and bleeds when they are hurt.
+//  flayers.js, vecna.js) — and they hunt everyone over there, not only the
+//  one whose phone ran them. Fed from what the room knows: where each player
+//  is, which side of the tear, whether they are down or cloaked, which way
+//  they face, how fast they move (a sprint is heard) and when they fire (a
+//  shot is heard across the district). The room decides every bite, swing,
+//  blow, thrown car and grip, and judges every shot at any of them. The
+//  chain of command is all in here: a flayer claims its escort, VECNA his
+//  court and the flayers; they learn through one another, hand targets down,
+//  summon, bleed and carry each other along.
 //
 //  Everyone over there is sent them ('dv'), in the game's own snapshot
 //  forms, ten times a second: the pack — every dog once in eight, and
 //  between those the ones near someone over there and any whose health,
 //  state or marks changed — every gorgon and every flayer (there are a
-//  handful), a car in the air, and where the cars the flayers threw came
-//  down. Nobody on the day side is sent any of it.
-//
-//  Their king — VECNA — still runs in the host's game (for now). What the
-//  room needs of him it reads from the host's snapshots (where he stands,
-//  and whether he stands); what he does to the dogs, gorgons and flayers the
-//  host's game writes down and sends ('dord': claimed, handed a target, set
-//  going, carried along, summoned — orders; and the wrecks he lifts and
-//  throws), and the room makes it so. The other way, the host's game is told
-//  what the dogs and gorgons know ('dk': he learns through them; the flayers'
-//  own rows in 'dv' say what they know).
+//  handful), VECNA and the street he holds about him, the cars in the air,
+//  and where the cars they moved came to rest. Nobody on the day side is sent
+//  any of it. What a player's game must do because of them — be knocked
+//  down the street, be held off the ground — it is told, and does.
 
 import DOG from '../shared/dogs.js';
 import GOR from '../shared/gorgons.js';
 import FL from '../shared/flayers.js';
+import VC from '../shared/vecna.js';
 import CITY from '../shared/city.js';
 import WR from '../shared/wrecks.js';
 import TF from '../shared/traffic.js';
-import TROOP from '../shared/troop.js';
 import RULES from '../shared/rules.js';
 import { theCity, theFootprints } from './combat.js';
 
 const STEP = 0.05;                         // s: 20 Hz
-const TELL_MS = 100;                       // the pack and the gorgons, to everyone over there
-const KNOW_MS = 500;                       // what they know, to the host's VECNA
-const FULL_EVERY = 8;                      // every eighth word is the whole pack
+const TELL_MS = 100;                       // what they are, to everyone over there
+const FULL_EVERY = 8;                      // every eighth word is the whole of it
 const NEAR = 110;                          // m: a dog this near someone over there goes out every time (index.html DOG_NEAR)
 const BITE_GAP = 420;                      // ms: a player bitten is not bitten again sooner (index.html dogHitCd)
 const CLAW_GAP = 500;                      // ms: nor struck by a gorgon (index.html gorHitCd)
+//  VECNA's grip (index.html updatePsyHold): lifted 0.85 s, dragged in, hurt
+//  0.9 s into the drag, thrown at 1.7 — the game plays it, the room keeps time
+const GRIP_HURT = 1750, GRIP_END = 2700;   // ms after he takes hold
 const CHEST = 1.0;                         // m above its feet: where a shot at a dog is aimed (the game's hit spheres)
 const G_CHEST = 1.55;                      // … and at a gorgon (the second of its column of spheres)
 //  … and at a flayer: the game's spheres on it (index.html fire) — the body,
@@ -54,8 +51,8 @@ const G_CHEST = 1.55;                      // … and at a gorgon (the second of
 //  of them is taken as the one that did.
 const MF_BODY = [[-1.7, FL.M_BODY_Y, 3.0], [1.1, FL.M_BODY_Y, 2.6], [4.4, FL.M_BODY_Y + 0.4, 1.9]];
 const MF_LEGS = [0.52, 1.57, 2.62, -0.52, -1.57, -2.62].map((a) => [a, 8.5, FL.M_BODY_Y * 0.55, 1.5]);
-const HDQ = TROOP.HDQ;
-const LIM = RULES.WORLD * 0.44;
+//  … and at VECNA: hips, chest, head, up as far as he is hovering [up, radius]
+const V_BODY = [[VC.V_HIP, 0.66], [VC.V_HIP + 0.98, 0.86], [VC.V_HIP + 1.94, 0.55]];
 
 //  the city to walk in, once per isolate: its insides built as they are first needed
 let ground = null;
@@ -63,21 +60,22 @@ function theGround() { if (!ground) { const L = CITY.lazyNear(theCity()); ground
 let wreckSet = null;                       // where the wrecks lie (the same as every game: shared/wrecks.js)
 function theWrecks() { return wreckSet || (wreckSet = WR.makeWrecks(TF.makeTraffic({ now: () => 0 }).cars)); }
 const noop = () => {};
-const int = (v) => (Number.isFinite(+v) ? Math.round(+v) : 0);
+const r10 = (v) => Math.round(v * 10);
+//  a wreck as it is said: [k, x·10, z·10, y·10, heading·1000, up (1 held, 2 in the air)]
+const WRECK_N = 6;
+function wreckRow(k, w) { return [k, r10(w.x), r10(w.z), r10(w.y), Math.round(w.rot * 1000), (w.held ? 1 : 0) | (w.thrown ? 2 : 0)]; }
 
 export class RoomDogs {
   constructor(room) {
     this.room = room;                      // the Relay: players
     this.t = 0; this.acc = 0; this.last = undefined; this.frame = 0; this.nowMs = 0;
-    this.tellT = 0; this.knowT = 0; this.seq = 0; this.warm = 0;
+    this.tellT = 0; this.seq = 0; this.warm = 0; this.orbitSaid = '';
     const G = theGround();
     this.F = theFootprints();
-    //  (a room's own copy: its flayers, and the host's VECNA, pick them up and throw them)
-    this.wrecks = theWrecks().map((w) => (w ? Object.assign({}, w) : null));
-    this.mine = new Map();                 // wreck k → what the room last said of it: the ones its flayers moved
+    this.wrecks = theWrecks().map((w) => (w ? Object.assign({}, w) : null));   // (a room's own copy: they are picked up and thrown)
+    this.mine = new Map();                 // wreck k → what the room last said of it: the ones moved here
     this.who = [];                         // the players over there, as the animals see them (look)
     this.byId = new Map();
-    this.vec = null;                       // the host's VECNA (hearMasters)
     const world = {
       now: () => this.t, random: Math.random,
       targets: () => this.who,
@@ -85,9 +83,11 @@ export class RoomDogs {
       rayCity: (ro, rd, max) => CITY.rayLazy(theCity(), ro, rd, max),
       wrecks: () => this.wrecks,
       master: (this.masterFn = (tag, slot) => this.master(tag, slot)),
-      vec: () => this.vec,
+      vec: () => this.V.vec,
     };
     const share = (x, z, dmg) => FL.shareDamage(this.M, x, z, dmg);
+    const moved = (k) => { if (k >= 0 && !this.mine.has(k)) this.mine.set(k, null); };
+    const spawnDog = () => DOG.spawnDog(this.D), spawnGorgon = (at) => GOR.spawnGorgon(this.G, at);
     this.D = DOG.makeDogs(Object.assign({}, world, {
       gorgons: () => this.G.gorgons,
       bite: (d) => this.bite(d),
@@ -98,42 +98,70 @@ export class RoomDogs {
       claw: (g, kind, reach, dmg) => this.claw(g, kind, reach, dmg),
       on: { wind: noop, swing: noop, growl: noop, roar: noop, hurt: noop, death: noop, gone: noop, share },
     }));
-    const moved = (k) => { if (k >= 0 && !this.mine.has(k)) this.mine.set(k, null); };
     this.M = FL.makeFlayers(Object.assign({}, world, {
-      dogs: () => this.D.dogs, gorgons: () => this.G.gorgons,
-      spawnDog: () => DOG.spawnDog(this.D), spawnGorgon: (at) => GOR.spawnGorgon(this.G, at),
+      dogs: () => this.D.dogs, gorgons: () => this.G.gorgons, spawnDog, spawnGorgon,
       hit: (m, t, dmg, kb, ox, oz, shake) => this.blow(t, dmg, kb, ox, oz, shake),
       //  (the crater itself everyone over there sees in the flayer's swing: 'dv')
       stomp: (m, cx, cz, hits) => { for (const h of hits) this.blow(h.t, h.dmg, h.kb, cx, cz, 0); },
       on: { roar: noop, summon: noop, wind: noop, swing: noop, launch: noop, fly: noop, far: noop, panic: noop, hurt: noop, death: noop, rift: noop, gone: noop,
         hold: (m) => moved(m.holdW), land: (T) => moved(T.k), drop: (w, k) => moved(k) },
     }));
+    this.V = VC.makeVecna(Object.assign({}, world, {
+      dogs: () => this.D.dogs, gorgons: () => this.G.gorgons, flayers: () => this.M.flayers, spawnDog, spawnGorgon,
+      hit: (v, t, kind, dmg, ax, az, push, up, shake) => this.vblow(v, t, kind, dmg, push, up, shake),
+      grab: (v, t) => this.grip(t),
+      held: (t) => this.gripped(t),
+      release: (t) => this.letGo(t),
+      on: { lift: (v, ks) => { for (const k of ks) moved(k); }, hurl: (v, k) => moved(k), land: (T) => moved(T.k), drop: (ks) => { for (const k of ks) moved(k); },
+        charge: noop, wave: noop, limb: noop, psy: noop, phase: noop, whisper: noop, voice: noop, command: noop, grew: noop, ordered: noop,
+        hurt: noop, blink: noop, death: noop, fallen: noop, rift: noop, fly: noop, gone: noop },
+    }));
     this.bytes = 0; this.sent = 0;         // (for tests and for a look: what they have cost to send)
   }
   get dogs() { return this.D.dogs; }
   get gorgons() { return this.G.gorgons; }
   get flayers() { return this.M.flayers; }
+  get vec() { return this.V.vec; }
 
-  //  carrying on from what the host's game had (shared/dogs.js, gorgons.js
-  //  and flayers.js fullState: { k: the dogs, g: the gorgons, f: the
-  //  flayers }); none: an empty district, stocked when someone is over there.
-  //  The wrecks start again from where they lie in every game: the host's
-  //  game says which of them are elsewhere (dord 'w'), as the room takes them.
+  //  Carrying on from what the host's game had (shared/dogs.js, gorgons.js,
+  //  flayers.js and vecna.js fullState: { k: the dogs, g: the gorgons, f:
+  //  the flayers, v: VECNA, w: the wrecks that are not where they lay }); none:
+  //  an empty district, stocked when someone is over there.
   adopt(f) {
     this.wrecks = theWrecks().map((w) => (w ? Object.assign({}, w) : null));
-    this.mine.clear();
+    this.mine.clear(); this.orbitSaid = '';
+    if (f && Array.isArray(f.w)) this.wreckFrom(f.w);
     if (f && DOG.fullOk(f)) DOG.adoptFull(this.D, f);
     if (f && GOR.fullOk(f.g)) GOR.adoptFull(this.G, f.g);
     if (f && FL.fullOk(f.f)) FL.adoptFull(this.M, f.f);
+    if (f && VC.fullOk(f.v)) VC.adoptFull(this.V, f.v);
     if (this.M.thrown) this.mine.set(this.M.thrown.k, null);
+    for (const o of this.V.vec.orbit) this.mine.set(o.k, null);
+    for (const T of this.V.thrown) this.mine.set(T.k, null);
     //  (an empty district handed over is stocked at once, as it is when someone crosses)
     if (!this.D.dogs.some((d) => d.live)) this.D.spawnCd = 0;
     if (!this.G.gorgons.some((g) => g.live)) this.G.spawnCd = 0;
     this.took = this.D.dogs.filter((d) => d.live).map((d) => [d.slot, d.x, d.z]);
     this.tookG = this.G.gorgons.filter((g) => g.live).map((g) => [g.slot, g.x, g.z, g.hp]);
     this.tookF = this.M.flayers.filter((m) => m.live).map((m) => [m.slot, m.x, m.z, m.hp]);
+    this.tookV = this.V.vec.live ? [this.V.vec.x, this.V.vec.z, this.V.vec.hp] : null;
   }
-  full() { return Object.assign(DOG.fullState(this.D), { g: GOR.fullState(this.G), f: FL.fullState(this.M) }); }
+  //  the wrecks the host's game had moved (wreckRow each): where they lie, and
+  //  the room says so to whoever crosses later
+  wreckFrom(rows) {
+    for (let i = 0; i + WRECK_N - 1 < rows.length && i < 96 * WRECK_N; i += WRECK_N) {
+      const k = rows[i], w = this.wrecks[k], x = rows[i + 1] / 10, z = rows[i + 2] / 10;
+      if (!w || !Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > RULES.WORLD * 0.5 || Math.abs(z) > RULES.WORLD * 0.5) continue;
+      w.x = x; w.z = z; if (Number.isFinite(rows[i + 3])) w.y = rows[i + 3] / 10; if (Number.isFinite(rows[i + 4])) w.rot = rows[i + 4] / 1000;
+      w.held = false; w.thrown = false;      // (in a hand or in the air: VECNA's and the flayers' own say so)
+      this.mine.set(k, null);
+    }
+  }
+  full() {
+    const w = [];
+    for (const k of this.mine.keys()) { const q = this.wrecks[k]; if (q) w.push(...wreckRow(k, q)); }
+    return Object.assign(DOG.fullState(this.D), { g: GOR.fullState(this.G), f: FL.fullState(this.M), v: VC.fullState(this.V), w });
+  }
 
   //  ---- who is over there -----------------------------------------------------
   //  every player on the other side, as a target: where (their last state),
@@ -176,17 +204,18 @@ export class RoomDogs {
     this.last = now; this.nowMs = now;
     //  nobody over there: none of them (a game clears its own as it leaves) —
     //  and the next to cross finds the district filling at once, not after the
-    //  last top-up's wait
+    //  last top-up's wait (the flayers' and VECNA's go on: they are rare)
     if (!this.look(now)) {
       if (this.D.dogs.some((d) => d.live)) DOG.clearDogs(this.D);
       if (this.G.gorgons.some((g) => g.live)) GOR.clearGorgons(this.G);
-      if (this.M.flayers.some((m) => m.live)) FL.clearFlayers(this.M);   // (its wait for the next goes on: it is rare)
+      if (this.M.flayers.some((m) => m.live)) FL.clearFlayers(this.M);
+      if (this.V.vec.live) VC.clearVecna(this.V);
       this.letFall();
       this.D.spawnCd = 0; this.G.spawnCd = 0; this.acc = 0;
       return;
     }
     this.acc += dt;
-    const D = this.D, G = this.G, M = this.M;
+    const D = this.D, G = this.G, M = this.M, V = this.V, v = V.vec;
     //  One more building's inside, each time, until the room has them all.
     //  Built only when first needed, a dog running along a street would now
     //  and then need several at once (a few tenths of a ms each) — the one
@@ -226,16 +255,33 @@ export class RoomDogs {
         if ((this.frame + m.slot) % every === 0) FL.think(M, m, STEP * every);
         DOG.lordOf(m, STEP, this.masterFn);             // (VECNA's, while he is up and near)
       }
+      //  and VECNA: the cars he threw; one, and he takes his time; a fight every
+      //  step, otherwise every third or eighth past 150 / 300 m (as the game);
+      //  what he holds circles him, and his body eases (his arm's reach is its length)
+      VC.flights(V, STEP);
+      VC.stock(V, STEP);
+      if (v.live && v.dead && v.deadT > 26) VC.clearVecna(V);
+      else if (v.live) {
+        const q = DOG.nearestTo(this.who, v.x, v.z).d, lod = q < 150 ? 0 : q < 300 ? 1 : 2;
+        const every = (VC.fighting(v) || lod === 0) ? 1 : lod === 1 ? 3 : 8;
+        if (this.frame % every === 0) VC.think(V, STEP * every);
+        VC.orbitStep(V, STEP);
+        VC.ease(V, STEP);
+      }
       //  and the dogs get out of the gorgons' way
       for (const g of G.gorgons) if (g.live && !g.dead) DOG.shove(D, g, STEP);
     }
+    this.grips(now);
   }
-  //  a car in the air as they go comes down where it is
+  //  cars in the air as they go come down where they are
   letFall() {
-    const T = this.M.thrown; if (!T) return;
-    const w = this.wrecks[T.k];
-    if (w) { w.x = T.x; w.z = T.z; w.y = theGround().supportHeight(T.x, T.z, T.y + 1); w.thrown = false; this.mine.set(T.k, null); }
-    this.M.thrown = null;
+    const fall = (T) => {
+      const w = this.wrecks[T.k];
+      if (w) { w.x = T.x; w.z = T.z; w.y = theGround().supportHeight(T.x, T.z, T.y + 1); w.thrown = false; w.held = false; this.mine.set(T.k, null); }
+    };
+    if (this.M.thrown) { fall(this.M.thrown); this.M.thrown = null; }
+    for (const T of this.V.thrown) fall(T);
+    this.V.thrown.length = 0;
   }
   //  whoever is in reach of a lunge, on its floor, and not bitten a moment ago
   bite(d) {
@@ -268,52 +314,68 @@ export class RoomDogs {
   //  where, and how hard it shakes ('hp' { src: 'mf', kb: [x·10, z·10, m·10], sh: ·100 })
   blow(t, dmg, kb, ox, oz, shake) {
     const x = { sh: Math.round(shake * 100) };
-    if (kb) x.kb = [Math.round(ox * 10), Math.round(oz * 10), Math.round(kb * 10)];
+    if (kb) x.kb = [r10(ox), r10(oz), r10(kb)];
     this.room.damage(t.id, dmg, null, this.nowMs, 'mf', x);
+  }
+  //  VECNA's (the wave, his arm, a car he threw): as a flayer's, and how hard
+  //  it throws them up ('hp' { src: 'vec', k: what, kb: [his x·10, z·10, m·10],
+  //  up: m/s·10, sh }). The wave breaks his grip on whoever it catches.
+  vblow(v, t, kind, dmg, push, up, shake) {
+    const x = { k: kind, sh: Math.round(shake * 100) };
+    if (push || up) { x.kb = [r10(v.x), r10(v.z), r10(push)]; x.up = r10(up); }
+    if (kind === 'wave' && t.pl.grip) t.pl.grip = null;
+    this.room.damage(t.id, dmg, null, this.nowMs, 'vec', x);
+  }
+  //  ---- VECNA's grip: the player's game lifts, drags and throws them ('grip'
+  //  { x·10, z·10 }: where he stands; { off: 1 }: let go), the room keeps time,
+  //  does the damage the drag does, and knows who he has hold of
+  grip(t) {
+    if (this.gripped(t) || t.dead) return false;
+    t.pl.grip = { at: this.nowMs, hurt: false };
+    this.room.send(t.id, 'grip', { x: r10(this.V.vec.x), z: r10(this.V.vec.z) });
+    return true;
+  }
+  gripped(t) { const g = t.pl.grip; return !!(g && this.nowMs - g.at < GRIP_END); }
+  letGo(t) {
+    for (const q of t ? [t] : this.who) if (q.pl.grip) { q.pl.grip = null; this.room.send(q.id, 'grip', { off: 1 }); }
+  }
+  grips(now) {
+    const v = this.V.vec;
+    for (const t of this.who) {
+      const g = t.pl.grip; if (!g) continue;
+      if (now - g.at >= GRIP_END) { t.pl.grip = null; continue; }
+      //  (as the game lets go: he is gone, or they are dragged too far from him)
+      if (!v.live || v.dead || Math.hypot(v.x - t.x, v.z - t.z) > VC.V_GRAB_R * 1.6 + 8) { this.letGo(t); continue; }
+      if (!g.hurt && now - g.at >= GRIP_HURT) { g.hurt = true; this.room.damage(t.id, VC.V_GRAB_DMG, null, now, 'vecgrip'); }
+    }
   }
 
   //  ---- what everyone over there is told ---------------------------------------
   tell(now) {
-    if (!this.who.length) return;
-    if (now - this.tellT >= TELL_MS) {
-      this.tellT = now;
-      const full = this.seq++ % FULL_EVERY === 0, who = this.who;
-      const k = DOG.snapRows(this.D, full, (d) => who.some((t) => Math.abs(t.x - d.x) < NEAR && Math.abs(t.z - d.z) < NEAR));
-      const p = { q: GOR.snapRows(this.G), f: FL.snapRows(this.M) };
-      if (k) { p.k = k; p.kf = full ? 1 : 0; }
-      const fly = FL.flightRow(this.M), w = this.wreckRows(full);
-      if (fly) p.fly = fly;
-      if (w.length) p.w = w;
-      this.say('dv', p);
-    }
-    //  and the host's game, whose VECNA learns through them: what each knows
-    //  (the flayers say so in their own rows)
-    if (this.vec && now - this.knowT >= KNOW_MS) {
-      this.knowT = now;
-      const host = this.room.host(), rows = [], grows = [];
-      for (const d of this.D.dogs) {
-        if (!d.live || d.dead || !d.hasT) continue;
-        const age = this.t - d.seeT;
-        if (age < 9) rows.push(d.slot, Math.round(d.tx * 10), Math.round(d.tz * 10), Math.round(age * 10));
-      }
-      for (const g of this.G.gorgons) {
-        if (!g.live || g.dead || !g.hasT) continue;
-        const age = this.t - g.seeT;
-        if (age < GOR.G_MEM) grows.push(g.slot, Math.round(g.tx * 10), Math.round(g.tz * 10), Math.round(age * 10));
-      }
-      if (host && this.byId.has(host)) this.room.send(host, 'dk', { k: rows, g: grows });
-    }
+    if (!this.who.length || now - this.tellT < TELL_MS) return;
+    this.tellT = now;
+    const full = this.seq++ % FULL_EVERY === 0, who = this.who;
+    const k = DOG.snapRows(this.D, full, (d) => who.some((t) => Math.abs(t.x - d.x) < NEAR && Math.abs(t.z - d.z) < NEAR));
+    const p = { q: GOR.snapRows(this.G), f: FL.snapRows(this.M), v: VC.snapRow(this.V) };
+    if (k) { p.k = k; p.kf = full ? 1 : 0; }
+    const fly = FL.flightRow(this.M), vf = VC.flightRows(this.V), w = this.wreckRows(full);
+    if (fly) p.fly = fly;
+    if (vf.length) p.vf = vf;
+    if (w.length) p.w = w;
+    //  what he holds: when it changes (a car taken up, thrown, flung out), and with every whole word
+    const o = this.V.vec.live ? this.V.vec.orbit : [];
+    const said = o.map((q) => q.k + ':' + r10(q.r)).join(',');
+    if (full || said !== this.orbitSaid) { p.vo = VC.orbitRows(this.V); this.orbitSaid = said; }
+    this.say('dv', p);
   }
-  //  The wrecks the flayers here moved, per wreck [k, x·10, z·10, y·10,
-  //  heading·1000, up (1 held, 2 in the air)]: those that changed since last
-  //  said, or all of them (full). What VECNA moves is the host's own to say.
+  //  The wrecks moved here, per wreck (wreckRow): those that changed since
+  //  last said, or all of them (full: for whoever crossed since)
   wreckRows(full) {
     const rows = [];
     for (const [k, was] of this.mine) {
       const w = this.wrecks[k]; if (!w) continue;
-      const up = (w.held ? 1 : 0) | (w.thrown ? 2 : 0);
-      const r = [k, Math.round(w.x * 10), Math.round(w.z * 10), Math.round(w.y * 10), Math.round(w.rot * 1000), up];
-      if (full || !was || r.some((v, i) => v !== was[i])) { rows.push(...r); this.mine.set(k, r); }
+      const r = wreckRow(k, w);
+      if (full || !was || r.some((q, i) => q !== was[i])) { rows.push(...r); this.mine.set(k, r); }
     }
     return rows;
   }
@@ -326,98 +388,10 @@ export class RoomDogs {
       this.bytes += text.length; this.sent++;
     }
   }
-
-  //  ---- the host's VECNA ------------------------------------------------------------
-  //  from its snapshot: v [x·10, z·10, heading, hp, state, marks (1 dead, 2
-  //  awake), …]. How fast he moves (an escort keeps pace) is how far he went
-  //  since the last.
-  hearMasters(p, now) {
-    const v = p.v;
-    if (Array.isArray(v) && Number.isFinite(+v[0]) && Number.isFinite(+v[1])) {
-      const x = +v[0] / 10, z = +v[1] / 10, was = this.vec;
-      let sp = was ? was.sp : 0;
-      if (was && was.at) { const dt = (now - was.at) / 1000; if (dt > 0.02) sp = Math.min(12, Math.hypot(x - was.x, z - was.z) / dt) * 0.5 + was.sp * 0.5; }
-      this.vec = { live: true, dead: !!(v[5] & 1), awake: !!(v[5] & 2), x, z, y: 0, hd: +v[2] / HDQ || 0, sp, at: now };
-    } else this.vec = null;
-  }
-  //  the flayer (the room's own) or VECNA (the host's) one is sworn to, if it stands
+  //  the flayer or VECNA one is sworn to, if it stands (and he is awake)
   master(tag, slot) {
-    if (tag === 'vec') { const v = this.vec; return v && v.live && !v.dead && v.awake ? v : null; }
+    if (tag === 'vec') { const v = this.V.vec; return v && v.live && !v.dead && v.awake ? v : null; }
     const f = this.M.flayers[slot]; return f && f.live && !f.dead ? f : null;
-  }
-
-  //  What the host's VECNA did to the dogs, gorgons and flayers (index.html
-  //  dogOrdersSend), each [what, …] — for a gorgon the same with a 'g' before,
-  //  for a flayer with an 'f':
-  //    ['l', dog, lord (0 none, 1 flayer, 2 VECNA), the flayer's slot]   claimed, or let go
-  //    ['t', dog, x·10, z·10, seen ago·10]                             handed a target
-  //    ['s', dog, state (, flee time·10: a flayer)]                    told what to do
-  //    ['p', dog, x·10, z·10]                                          carried (VECNA's blink)
-  //    ['n', x·10, z·10, lord, slot, knows, x·10, z·10, ago·10, state]  summoned
-  //    ['fk', flayer, panicked (1/0)]                                  steadied, or broken
-  //    ['w', wreck, x·10, z·10, heading·1000, up (1 held, 2 thrown)]  a wreck picked up, or where it came down
-  //  A summons past a master's retinue (shared/dogs.js, gorgons.js RETINUE) or
-  //  the district's number is not made; one carried into a wall is not moved;
-  //  a wreck a flayer here has in its hand, or in the air, is its own.
-  orders(p) {
-    const list = Array.isArray(p.o) ? p.o.slice(0, 96) : [];
-    const lordOf = (c, s) => (c === 1 ? ['mf', s === 1 ? 1 : 0] : c === 2 ? ['vec', -1] : [null, -1]);
-    const at = (x, z) => { x = +x / 10; z = +z / 10; return Number.isFinite(x) && Number.isFinite(z) && Math.abs(x) < LIM && Math.abs(z) < LIM ? [x, z] : null; };
-    for (const o of list) {
-      if (!Array.isArray(o) || typeof o[0] !== 'string') continue;
-      if (o[0] === 'w') {
-        const k = int(o[1]), w = this.wrecks[k], q = at(o[2], o[3]), up = int(o[5]);
-        if (!w || !q || this.flayerHas(k)) continue;
-        w.x = q[0]; w.z = q[1]; if (Number.isFinite(+o[4])) w.rot = +o[4] / 1000; w.held = !!(up & 1); w.thrown = !!(up & 2);
-        this.mine.delete(k);
-        continue;
-      }
-      const pre = o[0].length === 2 ? o[0][0] : '', op = pre ? o[0][1] : o[0];
-      const gor = pre === 'g', fl = pre === 'f';
-      if (pre && !gor && !fl) continue;
-      if (op === 'n') { if (!fl) this.summon(o, gor, lordOf, at); continue; }
-      const a = fl ? this.M.flayers[int(o[1])] : gor ? this.G.gorgons[int(o[1])] : this.D.dogs[int(o[1])];
-      if (!a || !a.live || a.dead) continue;
-      if (op === 'l') {
-        const [l, s] = lordOf(int(o[2]), int(o[3]));
-        if (fl && l === 'mf') continue;                // (a flayer answers to VECNA or nobody)
-        a.lord = l; a.lordSlot = s; a.lordFar = 0;
-      } else if (op === 't') { const q = at(o[2], o[3]); if (q) { a.hasT = true; a.tx = q[0]; a.tz = q[1]; a.seeT = this.t - Math.max(0, +o[4] / 10 || 0); } }
-      else if (op === 's') {
-        const st = (fl ? FL.MF_ST : gor ? GOR.G_ST : DOG.D_ST)[int(o[2])];
-        //  (a gorgon or a flayer mid-swing finishes it: it is not told out of one)
-        if (st && st !== a.st && !((gor || fl) && a.atk) && st !== 'attack') {
-          a.st = st; a.stT = 0; a.hasHide = false;
-          if (fl && st === 'flee') { a.fleeT = Math.max(1, Math.min(60, +o[3] / 10 || 30)); a.fleeX = 0; }
-        }
-      } else if (op === 'k') { if (fl) a.panicked = !!int(o[2]); }
-      else if (op === 'p' && !fl) {
-        const q = at(o[2], o[3]);
-        if (q && this.F.clearAt(q[0], q[1], 1.2)) { a.x = a.rx = q[0]; a.z = a.rz = q[1]; a.y = theGround().supportHeight(q[0], q[1], 1); a.stuck = 0; }
-      }
-    }
-  }
-  //  is wreck k in a flayer's hand here, or in the air?
-  flayerHas(k) {
-    if (this.M.thrown && this.M.thrown.k === k) return true;
-    for (const m of this.M.flayers) if (m.live && m.atk && m.atk.kind === 'throw' && m.holdW === k) return true;
-    return false;
-  }
-  summon(o, gor, lordOf, at) {
-    const q = at(o[1], o[2]), [l, s] = lordOf(int(o[3]), int(o[4]));
-    if (!q || !l || !this.F.clearAt(q[0], q[1], 1.0)) return;
-    const all = gor ? this.G.gorgons : this.D.dogs;
-    const have = all.reduce((n, a) => n + (a.live && !a.dead && a.lord === l && (l === 'vec' || a.lordSlot === s) ? 1 : 0), 0);
-    if (have >= (gor ? GOR.RETINUE : DOG.RETINUE)[l]) return;
-    const a = gor ? GOR.spawnGorgon(this.G, { x: q[0], z: q[1] }) : DOG.spawnDog(this.D);
-    if (!a) return;
-    a.x = a.rx = q[0]; a.z = a.rz = q[1]; a.y = theGround().supportHeight(q[0], q[1], 1);
-    a.lord = l; a.lordSlot = s;
-    const tq = at(o[6], o[7]);
-    if (int(o[5]) && tq) { a.hasT = true; a.tx = tq[0]; a.tz = tq[1]; a.seeT = this.t - Math.max(0, +o[8] / 10 || 0); }
-    const st = (gor ? GOR.G_ST : DOG.D_ST)[int(o[9])];
-    a.st = st && st !== 'attack' ? st : a.hasT ? 'chase' : 'escort'; a.stT = 0;
-    a.rise = 0; a.taint = 0.5;
   }
 
   //  ---- a round at one of them -------------------------------------------------------
@@ -448,6 +422,17 @@ export class RoomDogs {
     me.lastMobHitT = now;
     const h = me.hist;
     FL.hurt(this.M, m, RULES.DMG, h[h.length - 3], h[h.length - 1]);
+    return true;
+  }
+  //  … and at VECNA (in a window, a round counts two and a half: shared/vecna.js hurt)
+  vecShot(from, now) {
+    const v = this.V.vec, me = this.room.players.get(from);
+    const lift = (v.hover || 0) * 1.45;
+    const why = this.whyNot(me, v, now, v.live ? V_BODY.map(([up, r]) => [v.x, v.y + up + lift, v.z, r]) : null);
+    if (why) { this.room.refused++; this.room.lastRefusal = 'at VECNA: ' + why; return false; }
+    me.lastMobHitT = now;
+    const h = me.hist;
+    VC.hurt(this.V, RULES.DMG, h[h.length - 3], h[h.length - 1]);
     return true;
   }
   //  pts: where on it a round could land, [x, y, z, radius] — one of them in reach and in sight will do

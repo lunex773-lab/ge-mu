@@ -13,6 +13,7 @@
 import DOG from '../../shared/dogs.js';
 import GOR from '../../shared/gorgons.js';
 import FL from '../../shared/flayers.js';
+import VC from '../../shared/vecna.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -171,14 +172,15 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   heal(A); RD.D.holdSpawn = false;
 }
 
-//  the room's own flayer, commanding them; the host's VECNA: where he stands, his orders
+//  the room's own flayer and VECNA, commanding them
 {
   now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const fx = ax + 30, fz = az;
   const HDQ = 255 / 6.2832;
   const mob = () => say(A, 'mob', { f: [0, Math.round(fx * 10), Math.round(fz * 10), 0, 900, 1, 0], v: [Math.round((ax - 50) * 10), Math.round(az * 10), Math.round(1 * HDQ), 1500, 1, 2, 0, 0], g: null });
   mob();
-  check('the host\'s VECNA, from its snapshot — and not its flayers (the room has its own)', RD.vec && RD.vec.awake && !RD.flayers.some((m) => m.live));
+  check('the host\'s flayers and VECNA are nothing to the room (it has its own)', !RD.vec.live && !RD.flayers.some((m) => m.live));
+  RD.V.holdSpawn = true;
   //  a flayer of the room's, standing still with nothing to hunt (the players far off)
   RD.M.holdSpawn = true;
   const mf = FL.spawnFlayer(RD.M, { x: fx, z: fz });
@@ -193,9 +195,13 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   for (let i = 0; i < 60; i++) { now += 50; mob(); still(); for (const q of RD.dogs) if (q.lord !== 'mf') q.hasT = false; say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); if (d.st === 'escort') escorts++; }
   check('the room\'s flayer claims one loose near it: it is the flayer\'s, and keeps station on it', d.lord === 'mf' && d.lordSlot === mf.slot && escorts > 30 && Math.hypot(d.x - fx, d.z - fz) < 30,
     d.lord + ' ' + d.st + ', ' + Math.hypot(d.x - fx, d.z - fz).toFixed(1) + ' m from it');
-  out.length = 0;
-  say(A, 'dord', { o: [['t', d.slot, Math.round(ax * 10), Math.round(az * 10), 5]] });
-  check('VECNA hands one a target: it knows where', d.hasT && Math.abs(d.tx - ax) < 0.1 && RD.t - d.seeT > 0.4);
+  //  VECNA, the room's, awake 50 m off and knowing where the player is: his order goes out
+  const v = VC.spawnVecna(RD.V, { x: ax - 50, z: az });
+  Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
+  for (const q of RD.dogs) if (q !== d) q.hasT = false;
+  put(d, ax - 50 + 25, az); d.lord = null; d.hasT = false; d.st = 'wander';
+  VC.command(RD.V, 0);
+  check('VECNA hands the nearest a target: it knows where, and goes', d.hasT && Math.abs(d.tx - ax) < 0.1 && d.st === 'chase', d.st + (d.hasT ? ' → ' + d.tx.toFixed(1) : ''));
   //  (a full district has no room for more — as in the game: a few far off are let go first)
   for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - fx, q.z - fz) > 100).slice(0, 8)) DOG.despawnDog(RD.D, q);
   const n0 = RD.dogs.filter((q) => q.live).length;
@@ -203,16 +209,29 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   const sworn = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'mf' && q.lordSlot === mf.slot);
   check('the flayer summons: its retinue is made up to ' + DOG.RETINUE.mf + ', no more, each climbing out', sworn.length === DOG.RETINUE.mf && RD.dogs.filter((q) => q.live).length - n0 <= DOG.RETINUE.mf && sworn.some((q) => q.rise < 1),
     sworn.length + ' sworn to it');
-  const spots = [];
-  for (let k = 0; k < 64 && spots.length < 8; k++) { const x = ax - 50 + Math.sin(k * 0.7) * (40 + k * 0.3), z = az + Math.cos(k * 0.7) * (40 + k * 0.3); if (F.clearAt(x, z, 1.4)) spots.push([x, z]); }
+  for (const q of RD.dogs) if (q.lord === 'vec') q.lord = null;
+  //  (room in the district for them: a few far off are let go first)
+  for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - v.x, q.z - v.z) > 150).slice(0, 10)) DOG.despawnDog(RD.D, q);
   const v0 = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'vec').length;
-  say(A, 'dord', { o: spots.map(([x, z]) => ['n', Math.round(x * 10), Math.round(z * 10), 2, -1, 0, 0, 0, 0, DOG.D_ST.indexOf('escort')]) });
+  for (let i = 0; i < 3; i++) VC.summon(RD.V, 9, 0);             // (however often he calls)
   const vs = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'vec');
   check('VECNA summons: his court is made up to ' + DOG.RETINUE.vec + ', no more', vs.length === DOG.RETINUE.vec && vs.length > v0, v0 + ' → ' + vs.length);
-  out.length = 0;
-  now += 600; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
-  const dk = out.find(([to, m]) => to === A && m.s === 'dk');
-  check('the host\'s game is told what the dogs know (VECNA learns through them)', dk && Array.isArray(dk[1].p.k) && dk[1].p.k.length % 4 === 0 && dk[1].p.k.length > 0, dk && (dk[1].p.k.length / 4 + ' dogs with a target'));
+  //  and what they know, he knows
+  v.hasT = false; v.seeT = -99;
+  for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;
+  const spy = vs[0]; spy.hasT = true; spy.tx = ax + 7; spy.tz = az - 3; spy.seeT = RD.t;
+  VC.command(RD.V, 0.05);
+  check('VECNA learns through them: what one of his knows, he knows', v.hasT && Math.abs(v.tx - (ax + 7)) < 0.01, v.hasT ? v.tx.toFixed(1) + ', ' + v.tz.toFixed(1) : 'nothing');
+  //  shot from far off, he is behind the shooter — his court with him
+  v.blinkCd = 0; v.atk = null;
+  const sx = ax + 120, sz = az;
+  const before = vs.map((q) => Math.hypot(q.x - sx, q.z - sz));
+  VC.hurt(RD.V, RULES.DMG, sx, sz);
+  const after = vs.map((q) => Math.hypot(q.x - sx, q.z - sz));
+  const came = after.filter((dd, i) => dd < before[i] - 60).length;
+  check('shot from far off, he is behind the shooter, and his court comes with him', Math.hypot(v.x - sx, v.z - sz) < 30 && came >= vs.length - 1,
+    Math.hypot(v.x - sx, v.z - sz).toFixed(1) + ' m from the shooter; ' + came + ' of ' + vs.length + ' came with him');
+  VC.clearVecna(RD.V);
   //  a dog linked to the flayer, shot: the flayer bleeds, here
   still();
   put(d, fx + 5, fz); d.hp = DOG.DOG_HP;
@@ -235,8 +254,6 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   }
   pushed = g0.x - gx0;
   check('a gorgon moves them on', pushed > 0.05 || g0.st === 'alert', pushed.toFixed(2) + ' m, ' + g0.st);
-  say(A, 'dord', { o: [['p', g0.slot, Math.round(ax * 10), Math.round((az + 1000) * 10)]] });
-  check('carried into a wall or off the map: not moved', Math.abs(g0.z - (az + 1000)) > 100);
   RD.M.holdSpawn = false;
 }
 

@@ -13,6 +13,7 @@
 import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
 import FL from '../../shared/flayers.js';
+import VC from '../../shared/vecna.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -149,12 +150,13 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   heal(A);
 }
 
-//  the room's own flayer, commanding them; the host's VECNA's orders
+//  the room's own flayer and VECNA, commanding them
 {
   now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const fx = ax + 40, fz = az;
-  const mob = () => say(A, 'mob', { v: [Math.round((ax - 60) * 10), Math.round(az * 10), 0, 1500, 1, 2, 0, 0], g: null });
+  const mob = () => say(A, 'mob', { g: null });
   mob();
+  RD.V.holdSpawn = true;
   for (const g of RD.gorgons) if (g.live) GOR.despawnGorgon(RD.G, g);
   const mf = FL.spawnFlayer(RD.M, { x: fx, z: fz });
   const still = () => { mf.x = mf.rx = fx; mf.z = mf.rz = fz; mf.hasT = false; mf.st = 'wander'; mf.wx = fx; mf.wz = fz; mf.wanderT = 99; mf.summonT = 999; mf.escorted = true; mf.atk = null; };
@@ -166,15 +168,21 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   for (let i = 0; i < 60; i++) { now += 50; mob(); still(); g1.hasT = false; say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); if (g1.st === 'escort') escorts++; }
   check('the room\'s flayer claims one loose near it: it is the flayer\'s, and keeps station on it', g1.lord === 'mf' && g1.lordSlot === mf.slot && escorts > 30 && Math.hypot(g1.x - fx, g1.z - fz) < 40,
     g1.lord + ' ' + g1.st + ', ' + Math.hypot(g1.x - fx, g1.z - fz).toFixed(1) + ' m from it');
-  say(A, 'dord', { o: [['gt', g1.slot, Math.round(ax * 10), Math.round(az * 10), 5]] });
-  check('VECNA hands one a target: it knows where', g1.hasT && Math.abs(g1.tx - ax) < 0.1);
+  //  VECNA, the room's, awake 60 m off and knowing where the player is: his order goes out
+  const v = VC.spawnVecna(RD.V, { x: ax - 60, z: az });
+  Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
+  g1.hasT = false;
+  VC.command(RD.V, 0);
+  check('VECNA hands the nearest a target: it knows where', g1.hasT && Math.abs(g1.tx - ax) < 0.1);
   FL.summon(RD.M, mf, 0, 4);
   const sworn = RD.gorgons.filter((g) => g.live && !g.dead && g.lord === 'mf' && g.lordSlot === mf.slot);
   check('the flayer summons: its gorgons are made up to ' + GOR.RETINUE.mf + ', no more, each climbing out', sworn.length === GOR.RETINUE.mf && sworn.some((g) => g.rise < 1), sworn.length + ' sworn to it');
-  out.length = 0;
-  now += 600; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
-  const dk = out.find(([to, m]) => to === A && m.s === 'dk');
-  check('the host\'s game is told what the gorgons know (VECNA learns through them)', dk && Array.isArray(dk[1].p.g) && dk[1].p.g.length >= 4, dk && (dk[1].p.g.length / 4 + ' gorgons with a target'));
+  //  and what they know, he knows
+  v.hasT = false; v.seeT = -99;
+  for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;
+  g1.hasT = true; g1.tx = ax + 9; g1.tz = az + 2; g1.seeT = RD.t;
+  VC.command(RD.V, 0.05);
+  check('VECNA learns through them: what one of his knows, he knows', v.hasT && Math.abs(v.tx - (ax + 9)) < 0.01, v.hasT ? v.tx.toFixed(1) : 'nothing');
   //  one linked to the flayer, shot: the flayer bleeds, here
   still();
   put(g1, fx + 8, fz); g1.hp = GOR.GOR_HP;
@@ -187,9 +195,12 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   FL.despawnFlayer(RD.M, mf);
   //  VECNA keeps his ground clear of them
   const g2 = sworn.find((g) => g !== g1) || g1;
+  const keep = () => { v.x = v.rx = ax - 60; v.z = v.rz = az; v.st = 'dormant'; v.hasT = false; v.awake = true; v.atk = null; };
+  keep();
   put(g2, ax - 60 + 5, az); g2.st = 'wander'; g2.lord = null;
-  for (let i = 0; i < 6; i++) { now += 50; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  for (let i = 0; i < 6; i++) { now += 50; mob(); keep(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
   check('and VECNA\'s ground is kept clear of them', Math.hypot(g2.x - (ax - 60), g2.z - az) >= DOG.V_CLEAR - 0.5, Math.hypot(g2.x - (ax - 60), g2.z - az).toFixed(1) + ' m from him');
+  VC.clearVecna(RD.V);
   RD.G.holdSpawn = false;
 }
 

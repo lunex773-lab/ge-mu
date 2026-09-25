@@ -17,7 +17,7 @@
 //      having judged it
 //    - it throws a car: the second player sees it fly, and it lies where the
 //      room says it came down
-//    - the host's VECNA still orders it about: the room hears it
+//    - VECNA (the room's too) orders it about: it turns, and both screens show it his
 //    - its escort is its own, in the room: it summons them, and everyone sees them
 //    - the second player leaves: the flayer is given back, and carries on
 //
@@ -25,6 +25,7 @@
 
 const { openRoom, sleep } = require('./harness/page.js');
 const FL = require('../../shared/flayers.js');
+const VC = require('../../shared/vecna.js');
 
 const results = [];
 let pass = 0, fail = 0;
@@ -151,20 +152,28 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
         'the room moved it ' + Math.hypot(w.x - wx, w.z - wz).toFixed(1) + ' m; the second screen heard it in the air ' + onB[3] + ' times, has it ' + Math.hypot(onB[0] - w.x, onB[1] - w.z).toFixed(2) + ' m from the room\'s');
     }
 
-    // ---- VECNA (the host's) orders it about ------------------------------------------------
+    // ---- VECNA (the room's too, now) orders it about ------------------------------------------
     {
-      //  (what the room's flayer is, the moment the orders are made so — a moment later it may see someone for itself)
-      const heard = [];
-      let then = null;
-      { const f = CR.dogOrders.bind(CR); CR.dogOrders = (from, p) => { for (const o of p.o || []) heard.push(o); const r = f(from, p); if ((p.o || []).some((o) => o[0] === 'ft')) then = [mf.st, mf.panicked, mf.tx, mf.tz]; return r; }; }
       mf.atk = null; mf.st = 'flee'; mf.panicked = true; mf.fleeT = 20;
-      await sleep(400);
-      const to = JSON.parse(await ev(A, `(() => { const m = flayers[${mf.slot}]; const x = p.x + 5, z = p.z - 5;
-        withOrders(() => { m.hasT = true; m.tx = x; m.tz = z; m.seeT = cityT; m.panicked = false; m.st = 'track'; m.stT = 0; });
-        return JSON.stringify([x, z]); })()`));
-      await sleep(400);
-      check('the host\'s VECNA still orders it about: the room hears it, and it turns', heard.some((o) => o[0] === 'ft') && heard.some((o) => o[0] === 'fk') && then && then[0] === 'track' && !then[1] && Math.abs(then[2] - to[0]) < 0.1,
-        'heard ' + heard.map((o) => o[0]).join(',') + '; the room\'s ' + JSON.stringify(then));
+      //  him, some way off it, awake, and knowing where someone is
+      const E = RD.V.env;
+      let spot = null;
+      for (let r = 40; r < 100 && !spot; r += 5) for (let q = 0; q < 16 && !spot; q++) { const x = mf.x + Math.sin(q * 0.4) * r, z = mf.z + Math.cos(q * 0.4) * r; if (E.clearAt(x, z, 3)) spot = { x, z }; }
+      RD.V.holdSpawn = true;
+      VC.spawnVecna(RD.V, spot);
+      const v = RD.vec, to = [atB[0] + 5, atB[1] - 5];
+      Object.assign(v, { awake: true, st: 'observe', stT: 0, hasT: true, tx: to[0], tz: to[1], seeT: RD.t, cmdT: 0, atkCd: 99, mentalT: 99 });
+      //  (what the room's flayer is the moment he tells it — a moment later it may see someone for itself)
+      VC.command(RD.V, 0.05);
+      const then = [mf.st, mf.panicked, mf.tx, mf.tz, mf.lord];
+      await sleep(900);
+      const onA = JSON.parse(await ev(A, `JSON.stringify([flayers[${mf.slot}].lord, flayers[${mf.slot}].panicked, vec.live && !vec.dead])`));
+      const onB = JSON.parse(await ev(B, `JSON.stringify([flayers[${mf.slot}].lord, vec.live && !vec.dead])`));
+      check('VECNA — the room\'s too, now — orders it about: it turns, and both screens show it his', then[0] === 'track' && !then[1] && Math.abs(then[2] - to[0]) < 0.1 && then[4] === 'vec' &&
+        onA[0] === 'vec' && !onA[1] && onA[2] && onB[0] === 'vec' && onB[1],
+        'the room\'s ' + JSON.stringify(then) + '; the host\'s screen ' + JSON.stringify(onA) + ', the second ' + JSON.stringify(onB));
+      VC.clearVecna(RD.V);
+      await sleep(300);
     }
 
     // ---- its escort is its own, in the room ---------------------------------------------

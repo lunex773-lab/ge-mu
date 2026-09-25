@@ -4,9 +4,9 @@
 //  Alone in a room, a player's game runs every creature itself, as it
 //  always has: nothing is sent, nothing is waited for. With two or more,
 //  the room runs them — so far Beelzebub (boss.js), the monkey troop
-//  (troop.js), the day side's traffic (traffic.js) and the other side's dogs,
-//  gorgons and mind flayers (dogs.js) — and everyone is told the same,
-//  nobody's phone carrying them for the rest.
+//  (troop.js), the day side's traffic (traffic.js) and everything on the
+//  other side — dogs, gorgons, mind flayers and VECNA (dogs.js) — and
+//  everyone is told the same, nobody's phone carrying them for the rest.
 //
 //  Handing one over, so that it is never run twice and never not at all:
 //
@@ -23,7 +23,7 @@
 //                       for its traffic ('tq' → 'tfull'), carries on from that
 //                       — the host sees no change — and tells everyone ('own'
 //                       { t: 1 }); if no answer comes, it starts the city's own.
-//                       The dogs, gorgons and flayers the same way ('dq' → 'dfull', { d: 1 }); with
+//                       The other side the same way ('dq' → 'dfull', { d: 1 }); with
 //                       no answer, an empty district, stocked as soon as
 //                       someone is over there.
 //    one is left      → the room tells them it no longer does, with its last
@@ -101,9 +101,8 @@ export class Creatures {
     if (took.b || took.m || took.t || took.d) this.room.send('all', 'own', took);
     if (this.own.b) delete p.b;            // (a game from before this still sends them)
     if (this.own.m) { delete p.m; delete p.c; delete p.r; }
-    //  the dogs, gorgons and flayers are the room's to tell of; their king is
-    //  still the host's, and they need to know where he stands
-    if (this.own.d) { delete p.k; delete p.kf; delete p.q; delete p.f; this.dogs.hearMasters(p, this.now || 0); }
+    //  the other side is the room's to tell of (a game from before this still sends it)
+    if (this.own.d) { delete p.k; delete p.kf; delete p.q; delete p.f; delete p.v; }
   }
   //  someone came or went
   recount() {
@@ -196,8 +195,8 @@ export class Creatures {
   gorShot(from, i, now) { if (!this.own.d) return false; this.dogs.shot(from, i, now, true); return true; }
   //  … and at flayer i
   mfShot(from, i, now) { if (!this.own.d) return false; this.dogs.mfShot(from, i, now); return true; }
-  //  what the host's VECNA did to the dogs, gorgons and flayers (dogs.js orders)
-  dogOrders(from, p) { if (this.own.d && from === this.room.host()) this.dogs.orders(p); }
+  //  … and at VECNA
+  vecShot(from, now) { if (!this.own.d) return false; this.dogs.vecShot(from, now); return true; }
 
   //  ---- his memory ------------------------------------------------------------
   //  what the room needs before it runs him: a candidate for the fight, and

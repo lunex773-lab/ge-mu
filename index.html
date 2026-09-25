@@ -3885,7 +3885,7 @@
                           vy: (E.supportHeight(v.tx, v.tz, 2) + 1.2 - sy + 0.5 * 26 * t * t) / t,
                           spin: o.spin, roll: o.roll, t: 0, hit: 0, y0: o.y0, got: [] });
           w.thrown = true; w.held = false;
-          E.on.hurl(v);
+          E.on.hurl(v, o.k);
           return true;
         }
         function flights(V, dt, judge) {
@@ -6225,7 +6225,7 @@
     }
     if (gorsOn && !MP.srvOwns.d) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn && !MP.srvOwns.d) { const f = mfSnapshot(); if (f.length) msg.f = f; }   // (the room's, with the dogs)
-    if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
+    if (vecOn && !MP.srvOwns.d) { const v = vecSnapshot(); if (v) msg.v = v; }   // (the room's, with the rest over there)
     if (!MP.srvOwns.b) { const b = bzbSnapshot(); if (b) msg.b = b; }   // the guardian, when he stands (and is mine to run)
     if (bzb.slain && bzb.seed === rift.seed) msg.bs = 1;   // he has fallen at this tear: the room must not stand him up again
     if (rift.present && !rift.restored) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10),
@@ -6245,7 +6245,7 @@
     if (!MP.srvOwns.d) applyDogSnapshot(msg.k, msg.kf !== 0);   // kf 0: only the dogs near us (publishMobs); the room's: onRoomDogs
     if (!MP.srvOwns.d) applyGorSnapshot(msg.q);        // (the room's: onRoomDogs)
     if (!MP.srvOwns.d) applyMfSnapshot(msg.f);         // (the room's: onRoomDogs)
-    applyVecSnapshot(msg.v);
+    if (!MP.srvOwns.d) applyVecSnapshot(msg.v);        // (the room's: onRoomDogs)
     if (!MP.srvOwns.b) applyBzbSnapshot(msg.b);        // (while the room runs him, it says where he is: onRoomCreatures)
   }
   //  the rage clock, as whoever runs the troop says it
@@ -6336,7 +6336,7 @@
     if (t.slice(-3) === '/tq') { onTrafficAsk(); return; }
     if (t.slice(-3) === '/dv') { onRoomDogs(msg); return; }
     if (t.slice(-3) === '/dq') { onDogAsk(); return; }
-    if (t.slice(-3) === '/dk') { onDogKnow(msg); return; }
+    if (t.slice(-5) === '/grip') { onRoomGrip(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -7361,7 +7361,8 @@
     }
     if (hitVec) {
       showHit(vec.vuln > 0);                             // §58: the window reads as a clean hit
-      hurtVecna(DMG, p.x, p.z);
+      if (MP.srvOwns.d) vec.hp -= DMG * (vec.vuln > 0 ? 2.5 : 1);   // the room decides (server/dogs.js); shown here at once
+      else hurtVecna(DMG, p.x, p.z);
       sendVecHit(DMG);
     }
     if (hitBzb) {
@@ -7383,6 +7384,16 @@
     if (msg.src === 'dog') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.26); }      // a bite, as the room runs the dogs
     if (msg.src === 'gor') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.42); }      // a gorgon's swing
     if (msg.src === 'gorpred') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.85); playGorPredation(0, 0); gorBind = 0.55; }   // … its face
+    if (msg.src === 'vec') {                               // VECNA's wave, his arm, a car he threw: and where it throws you
+      showHurt(); playHurt(); camShake = Math.max(camShake, 0.28, (+msg.sh || 0) / 100);
+      if (msg.k === 'wave' && psyHold) psyRelease(6);
+      if (Array.isArray(msg.kb) && msg.kb.every(Number.isFinite)) {
+        const ox = msg.kb[0] / 10, oz = msg.kb[1] / 10, d = Math.max(1, Math.hypot(p.x - ox, p.z - oz)), push = msg.kb[2] / 10;
+        p.x += (p.x - ox) / d * push; p.z += (p.z - oz) / d * push;
+        vy = Math.max(vy, (+msg.up || 0) / 10); grounded = false;
+      }
+    }
+    if (msg.src === 'vecgrip') { showHurt(); playHurt(); }   // his grip, as it drags you in
     if (msg.src === 'mf') {                                // a flayer's blow, or a car it threw: and how far it knocks you
       showHurt(); playHurt(); camShake = Math.max(camShake, 0.28, (+msg.sh || 0) / 100);
       if (Array.isArray(msg.kb) && msg.kb.every(Number.isFinite)) mfShove(msg.kb[2] / 10, msg.kb[0] / 10, msg.kb[1] / 10);
@@ -7421,7 +7432,8 @@
         for (const a of dogs.concat(gorgons)) if (a.live) { a.netX = a.x; a.netZ = a.z; a.netH = a.hd || 0; a.rx = a.x; a.rz = a.z; a.atk = null; }
         //  (a flayer's swing let go — a car in its hand put down: the room carried on without it)
         for (const m of flayers) if (m.live) { FL.drop(MFS, m); m.atk = null; m.netX = m.x; m.netZ = m.z; m.netH = m.hd || 0; m.rx = m.x; m.rz = m.z; m.netHp = m.hp; }
-        dogSummons.length = 0; gorSummons.length = 0; dogWreckSent = null;
+        //  (his swing let go; what he holds and has thrown he goes on holding and throwing, there)
+        if (vec.live) { vec.atk = null; vec.netX = vec.x; vec.netZ = vec.z; vec.netH = vec.hd || 0; vec.rx = vec.x; vec.rz = vec.z; vec.netHp = vec.hp; }
       }
       if (!MP.srvOwns.d && was) dogsBack(msg.df);
     }
@@ -7497,17 +7509,34 @@
   function troopBack() {
     for (const m of monkeyPeds) { m.feedC = null; m.eating = false; if (TR.inPlay(m)) { const h = m.hd; TR.reseat(m); m.hd = h; } }
   }
-  //  ---- the dogs, gorgons and flayers, as the room runs them (server/dogs.js) -----------
-  //  the pack, the gorgons and the flayers, as the room says them to everyone
-  //  over there ('dv': the snapshots' own forms), a car a flayer threw, and
-  //  where the cars they threw came down
+  //  ---- the other side, as the room runs it (server/dogs.js) --------------------------
+  //  the pack, the gorgons, the flayers and VECNA, as the room says them to
+  //  everyone over there ('dv': the snapshots' own forms), the cars in the air,
+  //  what he holds, and where the cars came to rest
   function onRoomDogs(msg) {
     if (!MP.srvOwns.d || wState !== WS.BACK) return;
     applyDogSnapshot(msg.k, msg.kf !== 0);
     if (Array.isArray(msg.q)) applyGorSnapshot(msg.q);
     if (Array.isArray(msg.f)) applyMfSnapshot(msg.f);
-    if (msg.w) onMfWrecks(msg.w);
+    if ('v' in msg) applyVecSnapshot(msg.v);
+    if (msg.w) onWrecks(msg.w);
     if (msg.fly) onMfFlight(msg.fly);
+    if (msg.vf) onVecFlights(msg.vf);
+    if (msg.vo) onVecOrbit(msg.vo);
+  }
+  //  the wrecks that are not where every game has them (shared/wrecks.js), each
+  //  as it is said [k, x·10, z·10, y·10, heading·1000, up]: what the room is
+  //  handed along with the rest, so that it knows where this game's cars lie
+  let wreckSeed = null;
+  function movedWrecks() {
+    if (!wrecksBuilt) return [];
+    if (!wreckSeed) wreckSeed = WR.makeWrecks(cars);
+    const r = [];
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k], q = wreckSeed[k]; if (!w || !q) continue;
+      if (Math.hypot(w.x - q.x, w.z - q.z) > 0.05 || Math.abs(w.rot - q.rot) > 0.001) r.push(k, Math.round(w.x * 10), Math.round(w.z * 10), Math.round(w.y * 10), Math.round(w.rot * 1000), 0);
+    }
+    return r;
   }
   //  the room asks this game (the host) for them, to carry on from — and
   //  until it says it has them (or for three seconds), no more are added
@@ -7518,7 +7547,7 @@
   function onDogAsk() {
     if (!MP.connected || !MP.client || MP.srvOwns.d) return;
     dogAskT = performance.now();
-    const f = Object.assign(DG.fullState(DOGS), { g: GR.fullState(GORS), f: FL.fullState(MFS) });   // (whichever are up: none, over on this side)
+    const f = Object.assign(DG.fullState(DOGS), { g: GR.fullState(GORS), f: FL.fullState(MFS), v: VC.fullState(VS), w: movedWrecks() });   // (whichever are up: none, over on this side)
     try { MP.client.publish(mtopic('dfull'), JSON.stringify(f)); } catch (e) {}
   }
   //  they are this game's to run again: from the room's last word, or from what is drawn here
@@ -7530,93 +7559,15 @@
     else for (const g of gorgons) if (g.live) { g.x = g.rx; g.z = g.rz; }
     if (df && FL.fullOk(df.f)) FL.adoptFull(MFS, df.f);
     else for (const m of flayers) if (m.live) { m.x = m.rx; m.z = m.rz; m.atk = null; }
+    if (df && Array.isArray(df.w)) onWrecks(df.w);
+    if (df && VC.fullOk(df.v)) VC.adoptFull(VS, df.v);
+    else if (vec.live) { vec.x = vec.rx; vec.z = vec.rz; vec.atk = null; }
     //  a car the room had up (in a hand, or in the air there and not here) comes down where it is
     for (let k = 0; k < wrecks.length; k++) {
       const w = wrecks[k];
       if (w && (w.thrown || w.held) && !(MFS.thrown && MFS.thrown.k === k) && !vecThrown.some((T) => T.k === k) && !(vec.orbit && vec.orbit.some((o) => o.k === k))) { w.thrown = false; w.held = false; }
     }
     poseWrecks();
-  }
-  //  what the room's dogs and gorgons know ('dk': per one with a target [slot,
-  //  x·10, z·10, seen ago·10]): VECNA, running here, learns through them (and
-  //  through the flayers, whose own rows say what they know: applyMfSnapshot)
-  function onDogKnow(msg) {
-    if (!MP.srvOwns.d) return;
-    const know = (list, rows) => {
-      if (!Array.isArray(rows)) return;
-      const had = new Set();
-      for (let i = 0; i + 3 < rows.length; i += 4) {
-        const a = list[rows[i]]; if (!a || !a.live) continue;
-        a.hasT = true; a.tx = rows[i + 1] / 10; a.tz = rows[i + 2] / 10; a.seeT = cityT - rows[i + 3] / 10; had.add(a);
-      }
-      for (const a of list) if (a.live && !had.has(a)) a.hasT = false;
-    };
-    know(dogs, msg.k); know(gorgons, msg.g);
-  }
-  //  The host's VECNA still runs here while the room runs the dogs, gorgons and
-  //  flayers, and still orders them about: claim one, hand it a target, set it
-  //  going, steady a flayer or break it, carry them along, summon more — and
-  //  lift the wrecks and throw them. Whatever he changes of them here (as the
-  //  room says them) and of the wrecks is written down after he has run, each
-  //  frame, and sent ('dord'); the room makes it so (server/dogs.js orders).
-  //  VECNA hurt between frames (a shot, the room's word of one) orders them
-  //  about too: withOrders.
-  const dogMark = [], gorMark = [], flMark = [], dogSummons = [], gorSummons = [];
-  let dogWreckSent = null, ordering = 0;
-  const dogOrdering = () => MP.srvOwns.d && mobPub() && wState === WS.BACK;
-  const lordCode = (o) => (o.lord === 'mf' ? 1 : o.lord === 'vec' ? 2 : 0);
-  const r10 = (v) => Math.round(v * 10);
-  function markAll(list, marks) {
-    for (const a of list) if (a.live) {
-      const m = marks[a.slot] || (marks[a.slot] = []);
-      m[0] = a.lord || null; m[1] = a.lordSlot; m[2] = !!a.hasT; m[3] = a.tx; m[4] = a.tz; m[5] = a.seeT; m[6] = a.st; m[7] = a.x; m[8] = a.z; m[9] = !!a.panicked;
-    }
-  }
-  //  what changed, as orders ([what, …]; pre: '' a dog, 'g' a gorgon, 'f' a flayer)
-  function diffAll(list, marks, pre, ST, summons, o) {
-    const fl = pre === 'f';
-    for (const a of list) {
-      if (!a.live || a.dead) continue;
-      const m = marks[a.slot]; if (!m) continue;
-      if ((a.lord || null) !== m[0] || (a.lord === 'mf' && a.lordSlot !== m[1])) o.push([pre + 'l', a.slot, lordCode(a), a.lord === 'mf' ? a.lordSlot : -1]);
-      if (a.hasT && (!m[2] || a.tx !== m[3] || a.tz !== m[4] || a.seeT !== m[5])) o.push([pre + 't', a.slot, r10(a.tx), r10(a.tz), r10(Math.max(0, cityT - a.seeT))]);
-      if (a.st !== m[6]) o.push(fl && a.st === 'flee' ? [pre + 's', a.slot, ST.indexOf(a.st), r10(a.fleeT || 30)] : [pre + 's', a.slot, ST.indexOf(a.st)]);
-      if (fl && !!a.panicked !== m[9]) o.push(['fk', a.slot, a.panicked ? 1 : 0]);
-      if (!fl && Math.hypot(a.x - m[7], a.z - m[8]) > 1) o.push([pre + 'p', a.slot, r10(a.x), r10(a.z)]);   // (he carries no flayer)
-    }
-    for (const n of summons) o.push([pre + 'n', r10(n.x), r10(n.z), lordCode(n), n.lord === 'mf' ? n.lordSlot : -1,
-      n.hasT ? 1 : 0, r10(n.tx || 0), r10(n.tz || 0), r10(Math.max(0, cityT - (n.seeT === undefined ? cityT : n.seeT))), Math.max(0, ST.indexOf(n.st))]);
-    summons.length = 0;
-  }
-  function dogOrdersMark() {
-    if (!dogOrdering()) return;
-    ordering++;
-    markAll(dogs, dogMark); markAll(gorgons, gorMark); markAll(flayers, flMark);
-  }
-  function dogOrdersSend() {
-    if (ordering) ordering--;
-    if (!dogOrdering()) { dogSummons.length = 0; gorSummons.length = 0; return; }
-    const o = [];
-    diffAll(dogs, dogMark, '', D_ST, dogSummons, o);
-    diffAll(gorgons, gorMark, 'g', G_ST, gorSummons, o);
-    diffAll(flayers, flMark, 'f', MF_ST, [], o);
-    //  the wrecks: up in the air (held, thrown) or not, and where each came down
-    if (!dogWreckSent) dogWreckSent = WR.makeWrecks(cars).map((w) => (w ? [w.x, w.z, w.rot, 0] : null));
-    for (let k = 0; k < wrecks.length; k++) {
-      const w = wrecks[k], q = dogWreckSent[k]; if (!w || !q) continue;
-      const up = (w.held ? 1 : 0) | (w.thrown ? 2 : 0);
-      if (up !== q[3] || (!up && (Math.hypot(w.x - q[0], w.z - q[1]) > 0.3 || Math.abs(w.rot - q[2]) > 0.05))) {
-        q[0] = w.x; q[1] = w.z; q[2] = w.rot; q[3] = up;
-        o.push(['w', k, r10(w.x), r10(w.z), Math.round(w.rot * 1000), up]);
-      }
-    }
-    if (o.length && MP.client) try { MP.client.publish(mtopic('dord'), JSON.stringify({ o })); } catch (e) {}
-  }
-  //  fn, with what it does to the room's dogs, gorgons and flayers sent (unless this frame's own sending will)
-  function withOrders(fn) {
-    if (ordering || !dogOrdering()) return fn();
-    dogOrdersMark();
-    try { return fn(); } finally { dogOrdersSend(); }
   }
   function onRoomPos(msg) {
     if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
@@ -7850,7 +7801,7 @@
       'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
-      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS+GOR+MF ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
+      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  OTHER SIDE ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
       'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
       '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
@@ -8939,12 +8890,7 @@
   }
   //  noise only carries over here
   function dogNoise(x, z, intensity, type) { if (wState === WS.BACK) DG.noise(DOGS, x, z, intensity, type); }
-  //  (while the room runs them, one a flayer or VECNA summons here is the room's
-  //  to make: it is written down, and sent with this frame's orders — dogOrdersSend)
-  function spawnDog() {
-    if (MP.srvOwns.d) { if (!dogOrdering()) return null; const n = { slot: -1, live: true, S: {} }; dogSummons.push(n); return n; }
-    return DG.spawnDog(DOGS);
-  }
+  function spawnDog() { return DG.spawnDog(DOGS); }
   function despawnDog(d) { DG.despawnDog(DOGS, d); }
   function clearDogs() { DG.clearDogs(DOGS); }
   function hurtDog(d, dmg, fromX, fromZ) { DG.hurt(DOGS, d, dmg, fromX, fromZ); }
@@ -9245,7 +9191,7 @@
       d.lunge = st === 'attack' ? 1 : Math.max(0, d.lunge - 0.1);
       const dfl = k[i + 6] | 0;
       d.lordNet = !!(dfl & 2);                    // owned: the follower tints it locally
-      //  (and whose, for a host whose flayer or VECNA counts its own: dogOrders)
+      //  (and whose: the follower's flayer and VECNA, drawn here, count their own by it)
       d.lord = (dfl & 2) ? ((dfl & 4) ? 'vec' : 'mf') : null; d.lordSlot = (dfl & 4) ? -1 : (dfl & 8) ? 1 : 0;
       if ((dfl & 1) && !d.dead) { d.dead = true; d.deadT = 0; playDogDeath(d.tdist, dogPan(d)); }
     }
@@ -9581,16 +9527,7 @@
   });
   const gorgons = GORS.gorgons;
   let gorsOn = false, gorFrame = 0, gorHigh = 0;
-  //  (while the room runs them, one a flayer or VECNA summons here is the room's
-  //  to make: it is written down, and sent with the orders — dogOrdersSend)
-  function spawnGorgon(at) {
-    if (MP.srvOwns.d) {
-      if (!dogOrdering()) return null;
-      const n = { slot: -1, live: true, x: at ? at.x : p.x, z: at ? at.z : p.z, st: 'wander' };
-      gorSummons.push(n); return n;
-    }
-    return GR.spawnGorgon(GORS, at);
-  }
+  function spawnGorgon(at) { return GR.spawnGorgon(GORS, at); }
   function despawnGorgon(g) { GR.despawnGorgon(GORS, g); }
   function clearGorgons() { GR.clearGorgons(GORS); }
   function hurtGorgon(g, dmg, fromX, fromZ) { GR.hurt(GORS, g, dmg, fromX, fromZ); }
@@ -9889,7 +9826,6 @@
       const st = G_ST[k[i + 5] - 1];
       const fl = k[i + 6];
       g.lordNet = !!(fl & 8);            // owned: the follower tints it locally
-      //  (and whose, for a host whose flayer or VECNA counts its own: dogOrdersSend)
       g.lord = (fl & 8) ? ((fl & 16) ? 'vec' : 'mf') : null; g.lordSlot = (fl & 16) ? -1 : (fl & 32) ? 1 : 0;
       if (st && st !== g.st) {
         if (st === 'enrage') playGorRoar(g.tdist, gorPan(g));
@@ -10324,7 +10260,7 @@
       launch: (m) => playMfThrow(m.tdist, mfPan(m)),
       hold: (m, w, lift, x, y, z) => mfWreckAt(m.holdW, w, x, y, z, lift * 1.2, 0),
       fly: (T, w) => mfWreckAt(T.k, w, T.x, T.y, T.z, T.roll, T.roll * 0.6),
-      land: (T, w, gy) => { poseWrecks(); mfLandFx(T, gy); if (!dogSim()) { mfLanded = { k: T.k, at: performance.now() }; mfWreckSaid(T.k); } },
+      land: (T, w, gy) => { poseWrecks(); mfLandFx(T, gy); if (!dogSim()) mfLanded = { k: T.k, at: performance.now() }; },
       drop: () => poseWrecks(),
       far: (m) => { playMfRoar(m.tdist, mfPan(m)); if (m.tdist < 400) notify('遠くで何かが吠えた', 2800); },
       panic: () => notify('地面が震えている', 3000),
@@ -10349,8 +10285,7 @@
   function mfSummon(m, dogWant, gorWant) { return FL.summon(MFS, m, dogWant, gorWant); }
   function mfShareDamage(x, z, dmg) { FL.shareDamage(MFS, x, z, dmg); }
   function mfCounts(m) { return FL.counts(MFS, m); }
-  //  (what it does to the room's dogs and gorgons, when the room runs them, is sent: withOrders)
-  function hurtFlayer(m, dmg, fromX, fromZ) { return withOrders(() => FL.hurt(MFS, m, dmg, fromX, fromZ)); }
+  function hurtFlayer(m, dmg, fromX, fromZ) { FL.hurt(MFS, m, dmg, fromX, fromZ); }
   function killFlayer(m) { FL.kill(MFS, m); }
 
   // ---- the retinue ----------------------------------------------------
@@ -10752,7 +10687,7 @@
   }
   //  a car in the air, as the room says it ('dv' fly: shared/flayers.js
   //  flightRow) — flown here from its first word (it is only falling), and
-  //  put down where the room says it came down (onMfWrecks)
+  //  put down where the room says it came down (onWrecks)
   let mfLanded = { k: -1, at: 0 };
   function onMfFlight(r) {
     if (!Array.isArray(r) || r.length < 9) return;
@@ -10763,32 +10698,29 @@
     if (T && T.k !== k) mfLetFall();
     T = MFS.thrown = { k, t: 0, ty: 0, hit: 1, got: [] };
     T.x = r[1] / 10; T.y = r[2] / 10; T.z = r[3] / 10; T.vx = r[4] / 10; T.vy = r[5] / 10; T.vz = r[6] / 10; T.spin = r[7] / 100; T.roll = r[8] / 100;
-    w.thrown = true; mfWreckSaid(k);
+    w.thrown = true;
   }
-  //  where the cars the room's flayers moved are, and whether up in the air
-  //  ('dv' w: per wreck [k, x·10, z·10, y·10, heading·1000, up (1 held, 2 in the air)])
-  function onMfWrecks(r) {
+  //  where the cars the room's flayers and VECNA moved are, and whether up in
+  //  the air ('dv' w: per wreck [k, x·10, z·10, y·10, heading·1000, up (1 held, 2 in the air)])
+  function onWrecks(r) {
     if (!Array.isArray(r)) return;
     let moved = false;
     for (let i = 0; i + 5 < r.length; i += 6) {
       const k = r[i], w = wrecks[k]; if (!w) continue;
       const up = r[i + 5];
-      if (up) { w.held = !!(up & 1); w.thrown = !!(up & 2); mfWreckSaid(k); continue; }   // up there: its hand, or the flight, draws it
-      const T = MFS.thrown;
+      if (up) { w.held = !!(up & 1); w.thrown = !!(up & 2); continue; }   // up there: a hand, his orbit or the flight draws it
+      const T = MFS.thrown, at = { x: r[i + 1] / 10, z: r[i + 2] / 10 };
       if (T && T.k === k) {                              // down there before it is down here
         MFS.thrown = null; mfLanded = { k, at: performance.now() };
-        mfLandFx({ x: r[i + 1] / 10, z: r[i + 2] / 10 }, r[i + 3] / 10);
+        mfLandFx(at, r[i + 3] / 10);
       }
+      const j = vecThrown.findIndex((q) => q.k === k);
+      if (j >= 0) { vecThrown.splice(j, 1); vecLanded.set(k, performance.now()); vecLandFx(at, r[i + 3] / 10); }
+      if (vec.orbit.some((o) => o.k === k)) vec.orbit = vec.orbit.filter((o) => o.k !== k);
       w.x = r[i + 1] / 10; w.z = r[i + 2] / 10; w.y = r[i + 3] / 10; w.rot = r[i + 4] / 1000; w.held = false; w.thrown = false;
-      mfWreckSaid(k); moved = true;
+      moved = true;
     }
     if (moved) poseWrecks();
-  }
-  //  (what a host's game tells the room of the wrecks — dogOrdersSend — is
-  //  not to echo what the room has just told it)
-  function mfWreckSaid(k) {
-    const q = dogWreckSent && dogWreckSent[k], w = wrecks[k];
-    if (q && w) { q[0] = w.x; q[1] = w.z; q[2] = w.rot; q[3] = (w.held ? 1 : 0) | (w.thrown ? 2 : 0); }
   }
   function sendMfHit(m, dmg) {
     if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;
@@ -11235,7 +11167,7 @@
       death: () => { playVecDeath(); camShake = Math.max(camShake, 1.6); psyOnset(0.85, 4200); },
       fallen: (v) => { _vT.set(v.x, v.y + 2.6, v.z); spawnImpact(_vT); notify('王が倒れた', 4200); },
       rift: (x, z, r, life) => summonRift(x, z, r, life),
-      land: (T, w, gy) => { poseWrecks(); vecLandFx(T, gy); },
+      land: (T, w, gy) => { poseWrecks(); vecLandFx(T, gy); if (!dogSim()) vecLanded.set(T.k, performance.now()); },
       fly: (T, w) => vecWreckAt(T.k, T.x, T.y, T.z, T.roll, w.rot, T.roll * 0.6),
       drop: () => poseWrecks(),
       gone: () => vecHide(),
@@ -11272,8 +11204,7 @@
       vecWreckAt(o.k, x, y, z, o.roll * 0.5, w.rot + o.a * 0.3, o.roll);
     }
   }
-  //  (what he does to the room's dogs and gorgons, when the room runs them, is sent: withOrders)
-  function hurtVecna(dmg, fromX, fromZ) { return withOrders(() => VC.hurt(VS, dmg, fromX, fromZ)); }
+  function hurtVecna(dmg, fromX, fromZ) { VC.hurt(VS, dmg, fromX, fromZ); }
   function killVecna() { VC.kill(VS); }
 
   // ---- the grab ------------------------------------------------------
@@ -11309,7 +11240,7 @@
       const k = Math.min(1, dt * 1.5);
       p.x += (tx - p.x) * k; p.z += (tz - p.z) * k;
       p.y += ((vec.y + 4.2) - p.y) * Math.min(1, dt * 2.0);
-      if (!H.hurt && H.t > 0.9) { H.hurt = 1; applyDamage(V_GRAB_DMG, null); }
+      if (!H.hurt && H.t > 0.9) { H.hurt = 1; if (!H.room) applyDamage(V_GRAB_DMG, null); }   // (the room's grip: the room does it)
       if (H.t > 1.7) { H.ph = 'throw'; H.t = 0; }
     } else {
       //  and away. The throw is a real velocity — you land where physics puts you
@@ -11542,7 +11473,7 @@
       return;
     }
     if (!vecOn) { vecOn = true; for (const q of vecParts) q.visible = true; }
-    const mine = mobSim();
+    const mine = dogSim();                             // (the room runs him with everything else over there: server/dogs.js)
     VC.flights(VS, dt, mine);                          // the cars in the air (who they land on is decided where he runs)
     updatePsyFx(dt);
 
@@ -11570,21 +11501,20 @@
       VC.orbitStep(VS, dt);
       vecDrawOrbit();
     } else {
+      //  where he is told, turning as slowly as he turns, his body easing to
+      //  what it is told; his swing, what he holds and what he throws played out here
       easePose(vec, vec.netX, vec.netZ, vec.netH, dt, 7, 20, 5, 3);
       vec.x = vec.rx; vec.z = vec.rz;
       vec.y += (supportHeight(vec.x, vec.z, vec.y + 1) - vec.y) * Math.min(1, dt * 4);
       vec.sp = vec.rspd; vec.tdist = Math.hypot(dx, dz);
       vec.stagger = Math.max(0, vec.stagger - dt * 1.5);
+      vec.vuln = Math.max(0, vec.vuln - dt);
       if (vec.dead) vec.deadT += dt;
-      //  followers infer the posture from the state word, which is all the
-      //  snapshot carries — cheap, and it never disagrees about where he is
-      const busy = vec.st === 'channel' || vec.st === 'command';
-      vec.hoverWant = busy ? 1 : vec.st === 'dormant' ? 0.25 : 0.4;
-      vec.flareWant = busy ? 1 : 0.4;
-      vec.archWant = busy ? 0.8 : 0;
-      vec.armUpWant[0] = busy ? 1 : 0.1; vec.armUpWant[1] = busy ? 1 : 0.1;
-      vec.spreadWant = busy ? 1 : 0.2;
-      vec.headYawWant = 0; vec.headPitchWant = 0;
+      vecPuppet(dt);
+      VC.orbitStep(VS, dt);
+      vecDrawOrbit();
+      vec.voiceT -= dt;
+      if (vec.st === 'observe' && vec.voiceT <= 0) { vec.voiceT = 14 + Math.random() * 12; playVecVoice(0); }
     }
 
     //  everything the animator reads is eased, never snapped (shared/vecna.js ease)
@@ -11651,37 +11581,154 @@
   // ---- network -------------------------------------------------------
   //  §60: the owner decides everything that matters and the rest is presentation.
   //  Eight integers, once per snapshot, in the same message as everything else.
+  //  Whoever runs him — this game, alone or hosting a room that does not;
+  //  else the room (server/dogs.js) — says him as shared/vecna.js snapRow has
+  //  it: where, how hurt, what he is doing and in which phase, his swing and
+  //  how far into it, what his body is easing toward, what he hunts, and the
+  //  last thing that happened. The room also says what he holds (orbitRows),
+  //  the cars in the air (flightRows) and where the cars came to rest.
+  //  Everyone else follows that: the body walks where it is told and eases to
+  //  what it is told, and his swing is played out here (vecPuppet) — the
+  //  charge, the wave's beat, the arm — so it is felt on every screen.
   const V_ST = VC.V_ST;
-  function vecSnapshot() {
-    if (!vec.live) return null;
-    const h = (((vec.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-    return [Math.round(vec.x * 10), Math.round(vec.z * 10), Math.round(h * HDQ),
-            Math.max(0, Math.round(vec.hp)), V_ST.indexOf(vec.st) + 1,
-            (vec.dead ? 1 : 0) | (vec.awake ? 2 : 0), vec.phase, vec.orbit.length];
-  }
+  function vecSnapshot() { return VC.snapRow(VS); }
   function applyVecSnapshot(k) {
     if (!k) { if (vec.live) clearVecna(); return; }
-    if (!vec.live) {
-      spawnVecna({ x: k[0] / 10, z: k[1] / 10 });
-      vec.rx = vec.x = k[0] / 10; vec.rz = vec.z = k[1] / 10;
+    const fresh = !vec.live, ox = vec.netX, oz = vec.netZ;
+    if (fresh) {
+      VC.spawnVecna(VS, { x: k[0] / 10, z: k[1] / 10 });
+      vec.rx = vec.x = k[0] / 10; vec.rz = vec.z = k[1] / 10; vec.hd = k[2] / HDQ;
+      vec.phase = k[6] || 0; vec.ev = k[25]; vec.netHp = k[3];
     }
     vec.netX = k[0] / 10; vec.netZ = k[1] / 10; vec.netH = k[2] / HDQ;
+    const nh = k[3];
+    if (!fresh && vec.netHp !== undefined && nh < vec.netHp - 0.5 && nh > 0) {      // hurt: he registers it (hard, in a window)
+      vec.stagger = vec.netHp - nh > 60 ? 1 : Math.max(vec.stagger, 0.12);
+      playVecHurt();
+    }
+    vec.netHp = nh;
     //  same bargain as the others: a follower that just shot him keeps its own
-    //  lower number for a moment, so the bar does not blink back up before the
-    //  owner's snapshot has caught up with the damage
-    vec.hp = (vec.hpHold && performance.now() < vec.hpHold) ? Math.min(vec.hp, k[3]) : k[3];
+    //  lower number for a moment, so the bar does not blink back up
+    vec.hp = (vec.hpHold && performance.now() < vec.hpHold) ? Math.min(vec.hp, nh) : nh;
     const st = V_ST[k[4] - 1];
     if (st && st !== vec.st) {
       if (st === 'command') playVecCommand();
-      if (st === 'channel') playVecPhase();
       vec.st = st; vec.stT = 0;
     }
-    if ((k[5] & 1) && !vec.dead) { vec.dead = true; vec.deadT = 0; VC.dropOrbit(VS); playVecDeath(); }
+    const ph = k[6] || 0;
+    if (ph !== vec.phase) { vec.phase = ph; if (ph > 0) VS.env.on.phase(vec, ph); }
     vec.awake = !!(k[5] & 2);
-    vec.phase = k[6] || 0;
+    vec.vuln = (k[5] & 4) ? Math.max(vec.vuln || 0, 0.25) : 0;
+    //  what his body is easing toward
+    vec.headYawWant = k[10] / 100; vec.headPitchWant = k[11] / 100;
+    vec.hoverWant = k[12] / 100; vec.flareWant = k[13] / 100; vec.archWant = k[14] / 100;
+    vec.armUpWant[0] = k[15] / 100; vec.armUpWant[1] = k[16] / 100; vec.armExtWant[0] = k[17] / 100; vec.armExtWant[1] = k[18] / 100;
+    vec.gripWant = k[19] / 100; vec.spreadWant = k[20] / 100; vec.mawWant = k[21] / 100;
+    vec.aimYaw = vec.headYawWant * 0.5; vec.aimPitch = vec.headPitchWant * 0.4;
+    //  what he hunts
+    vec.hasT = k[22] >= 0;
+    if (vec.hasT) { vec.seeT = cityT - k[22] / 10; vec.tx = k[23] / 10; vec.tz = k[24] / 10; }
+    if ((k[5] & 1) && !vec.dead) {
+      if (fresh) { vec.dead = true; vec.deadT = 0; vec.hp = 0; }
+      else {
+        vec.dead = true; vec.deadT = 0; vec.hp = 0; vec.atk = null; vec.hoverWant = 0; vec.flareWant = 0; vec.archWant = 0;
+        VC.dropOrbit(VS); VS.env.on.death(vec); VS.env.on.fallen(vec);
+      }
+    }
+    if (!vec.dead) vecSwingFrom(VC.ATK_KINDS[k[7] - 1], k[8] / 100, k[9]);
+    //  and what happened since
+    if (!fresh && k[25] !== vec.ev) { vec.ev = k[25]; vecHappened(k[26], ox, oz); }
+  }
+  //  his swing as told: kind, how far into it, which arm
+  function vecSwingFrom(kind, t, side) {
+    if (!kind) {
+      //  over there (or broken off): one still winding up here stops
+      if (vec.atk && vec.atk.t < VC.V_ATK[vec.atk.kind].wind) vec.atk = null;
+      return;
+    }
+    const a = vec.atk, A = VC.V_ATK[kind];
+    if (a && a.kind === kind && Math.abs(a.t - t) < 0.35) return;            // playing it already
+    const past = kind === 'wave' ? A.wind * 0.5 : kind === 'grab' ? A.wind * 0.55 : A.wind;
+    vec.atk = { kind, t, side, phase: 0, hit: t > A.wind ? 1 : 0, sfx: t > past ? 1 : 0, got: [] };
+    if (t < 0.3 && (kind === 'wave' || kind === 'grab')) playVecCharge();
+  }
+  //  his swing, this frame, as shared/vecna.js runAtk has it felt — the
+  //  charge's pressure, the wave's beat, the arm — but nobody is struck here:
+  //  who is, is decided where he runs
+  function vecPuppet(dt) {
+    const a = vec.atk;
+    if (!a || vec.dead) { vec.atk = null; return; }
+    const A = VC.V_ATK[a.kind], wind = A.wind, act = wind + A.act;
+    a.t += dt;
+    if (a.kind === 'wave') {
+      if (a.t < wind) { if (!a.sfx && a.t > wind * 0.5) { a.sfx = 1; psyOnset(0.34, 900); } }
+      else if (a.t < act && !a.hit) { a.hit = 1; VS.env.on.wave(vec); }
+    } else if (a.kind === 'limb') {
+      if (a.t >= wind && a.t < act && !a.sfx) { a.sfx = 1; playVecLimb(); }
+    } else if (a.kind === 'grab') {
+      if (a.t < wind && !a.sfx && a.t > wind * 0.55) { a.sfx = 1; psyOnset(0.4, 1200); }
+    }
+    if (a.t >= act + A.rec) vec.atk = null;
+  }
+  //  the last thing that happened, as told (shared/vecna.js EV): felt by those near enough
+  function vecHappened(kind, ox, oz) {
+    const d = Math.hypot(vec.netX - p.x, vec.netZ - p.z);
+    if (kind === VC.EV.whisper) { if (d < 180) VS.env.on.whisper(vec); }
+    else if (kind === VC.EV.grew) { if (d < 250) notify('地面が裂けている', 2600); }
+    else if (kind === VC.EV.ordered) { if (d < 250) notify('何かに命令している', 2400); }
+    else if (kind === VC.EV.blink) {
+      //  he opens the ground where he was and where he lands; and whoever he came for feels it
+      if (Number.isFinite(ox)) summonRift(ox, oz, 7.5, 2.6);
+      if (Math.hypot(vec.tx - p.x, vec.tz - p.z) < 35) VS.env.on.blink(vec, { x: vec.netX, z: vec.netZ });
+      else summonRift(vec.netX, vec.netZ, 8.5, 3.2);
+    }
+  }
+  //  what he holds, as the room says it ('dv' vo: shared/vecna.js orbitRows) —
+  //  circling here from there (orbitStep), a car just taken up heard coming up
+  function onVecOrbit(r) {
+    if (!Array.isArray(r)) return;
+    const had = new Map(vec.orbit.map((o) => [o.k, o])), next = [];
+    let grew = false;
+    for (let i = 0; i + 6 < r.length; i += 7) {
+      const k = r[i]; if (!wrecks[k]) continue;
+      let o = had.get(k);
+      if (!o) { o = { k, roll: 0, rise: r[i + 5] / 100, a: r[i + 1] / 100 }; grew = true; }
+      const ang = r[i + 1] / 100;
+      if (Math.abs(o.a - ang) > 0.5) o.a = ang;
+      o.r = r[i + 2] / 10; o.h = r[i + 3] / 10; o.spin = r[i + 4] / 100; o.y0 = r[i + 6] / 10;
+      wrecks[k].held = true;
+      next.push(o);
+    }
+    vec.orbit = next;
+    if (grew) playVecLift();
+  }
+  //  the cars he threw, as the room says them ('dv' vf: flightRows) — flown
+  //  here from their first word (they are only falling), and put down where
+  //  the room says they came down (onWrecks)
+  const vecLanded = new Map();
+  function onVecFlights(r) {
+    if (!Array.isArray(r)) return;
+    for (let i = 0; i + 8 < r.length; i += 9) {
+      const k = r[i], w = wrecks[k]; if (!w) continue;
+      if (vecThrown.some((T) => T.k === k) || performance.now() - (vecLanded.get(k) || -1e9) < 1500) continue;
+      vecThrown.push({ k, x: r[i + 1] / 10, y: r[i + 2] / 10, z: r[i + 3] / 10, vx: r[i + 4] / 10, vy: r[i + 5] / 10, vz: r[i + 6] / 10,
+                       spin: r[i + 7] / 100, roll: r[i + 8] / 100, t: 0, hit: 1, got: [], y0: w.y });
+      w.thrown = true; w.held = false;
+      vec.orbit = vec.orbit.filter((o) => o.k !== k);
+      playVecHurl();
+    }
+  }
+  //  his grip, as the room says it ('grip' { x·10, z·10 }: he has hold of you
+  //  now; { off: 1 }: he let go) — played out here (updatePsyHold), the harm
+  //  it does the room's to do
+  function onRoomGrip(msg) {
+    if (!MP.srvOwns.d) return;
+    if (msg.off) { psyRelease(0); return; }
+    if (wState !== WS.BACK || dead) return;
+    if (psyGrab()) psyHold.room = true;
   }
   function sendVecHit(dmg) {
-    if (!MP.connected || !MP.client || mobPub()) return;
+    if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;
     vec.hpHold = performance.now() + 1200;
     try { MP.client.publish(mtopic('vhit'), JSON.stringify({ d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
   }
@@ -16023,11 +16070,9 @@
     }
     updateLightning(dt);
     updateDogs(dt);                          // and it clears them out when you leave
-    dogOrdersMark();                         // (what the masters below do to the room's dogs: dogOrdersSend)
     updateGorgons(dt);
     updateFlayers(dt);
     updateVecna(dt);                         // and the king outranks all of it
-    dogOrdersSend();
     updateRifts(dt);                         // and the ground it calls them up through
     updateBzb(dt);                           // and, in this world, the one who guards the tear
     if (wState === WS.BACK) {

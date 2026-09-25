@@ -13,6 +13,7 @@
 //    node server/test/flayers.test.js
 
 import FL from '../../shared/flayers.js';
+import VC from '../../shared/vecna.js';
 import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
 import CITY from '../../shared/city.js';
@@ -154,7 +155,7 @@ out.length = 0;
 say(A, 'dfull', { k: [], g: [], f: F0 });
 check('two here: the room carries on from the host\'s flayer, with its dogs and gorgons', C.own.d && RD.flayers.filter((m) => m.live).length === 1 && Math.abs(RD.flayers.find((m) => m.live).x - F0.r[1] / 100) < 0.01,
   RD.flayers.filter((m) => m.live).length + ' flayer taken');
-RD.D.holdSpawn = true; RD.G.holdSpawn = true; RD.M.holdSpawn = true;
+RD.D.holdSpawn = true; RD.G.holdSpawn = true; RD.M.holdSpawn = true; RD.V.holdSpawn = true;
 for (const d of RD.dogs) if (d.live) DOG.despawnDog(RD.D, d);
 for (const g of RD.gorgons) if (g.live) GOR.despawnGorgon(RD.G, g);
 out.length = 0;
@@ -222,10 +223,13 @@ check('nor one from this side of the tear', mf.hp === FL.MF_HP - RULES.DMG && /o
   const w = RD.wrecks[ow.k], wx = w.x, wz = w.z;
   mf.holdW = ow.k; FL.startAtk(RD.M, mf, 'throw');
   out.length = 0;
-  //  (the host's VECNA does not get to move it while it is the flayer's)
+  //  (and VECNA does not get to take it up while it is the flayer's)
   now += 50; say(A, 'state', { x: ow.px, y: 0, z: ow.pz, r: 0, w: 1 });
-  say(A, 'dord', { o: [['w', ow.k, Math.round((wx + 30) * 10), Math.round(wz * 10), 0, 0]] });
-  const kept = Math.hypot(w.x - wx - 30, w.z - wz) > 5;
+  const vk = VC.spawnVecna(RD.V, { x: wx + 20, z: wz });
+  Object.assign(vk, { awake: true, hasT: true, tx: ow.px + 40, tz: ow.pz, seeT: RD.t });
+  VC.lift(RD.V, 5);
+  const kept = !vk.orbit.some((o) => o.k === ow.k);
+  VC.clearVecna(RD.V);
   let flew = 0, landed = null;
   for (let i = 0; i < 120 && !landed; i++) {
     now += 50; say(A, 'state', { x: ow.px, y: 0, z: ow.pz, r: 0, w: 1 }); heal(A);
@@ -236,7 +240,7 @@ check('nor one from this side of the tear', mf.hp === FL.MF_HP - RULES.DMG && /o
     }
     out.length = 0;
   }
-  check('a car in a flayer\'s hand is its own: VECNA\'s word does not move it', kept);
+  check('a car in a flayer\'s hand is its own: VECNA does not take it up', kept);
   check('it throws the car: those over there are told it in the air, then where it came down — where the room has it', flew >= 3 && landed && Math.abs(landed[1] / 10 - w.x) < 0.06 && Math.abs(landed[2] / 10 - w.z) < 0.06 && Math.hypot(w.x - wx, w.z - wz) > 20 && !w.thrown,
     flew + ' words of it in the air; down at ' + (landed ? landed.slice(1, 3).map((v) => v / 10).join(', ') : '-') + ', ' + Math.hypot(w.x - wx, w.z - wz).toFixed(1) + ' m from where it lay');
   out.length = 0;
@@ -245,22 +249,24 @@ check('nor one from this side of the tear', mf.hp === FL.MF_HP - RULES.DMG && /o
   check('and it is said again with every whole word, for whoever crosses later', again.length >= 1);
 }
 
-//  the host's VECNA: his orders to it
+//  VECNA (the room's): he orders it about, and when he falls it breaks
 {
-  const mob = () => say(A, 'mob', { v: [Math.round((mf.x + 50) * 10), Math.round(mf.z * 10), 0, 1500, 1, 2, 0, 0], g: null });
-  now += 300; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  const v = VC.spawnVecna(RD.V, { x: mf.x + 50, z: mf.z });
+  Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
   mf.lord = null; mf.panicked = true; mf.atk = null; mf.st = 'flee'; mf.fleeT = 20;
-  say(A, 'dord', { o: [['fl', mf.slot, 2, -1], ['ft', mf.slot, Math.round(ax * 10), Math.round(az * 10), 0], ['fk', mf.slot, 0], ['fs', mf.slot, FL.MF_ST.indexOf('track')]] });
+  for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;       // (what they know, he would know: nothing, here)
+  VC.command(RD.V, 0);
   check('VECNA takes it, hands it his target, steadies it and turns it round', mf.lord === 'vec' && mf.hasT && Math.abs(mf.tx - ax) < 0.1 && !mf.panicked && mf.st === 'track', mf.lord + ' ' + mf.st + (mf.panicked ? ' panicked' : ''));
   const f0 = out.filter(([, m]) => m.s === 'dv').length;
-  now += 150; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  const hold = () => { v.x = v.rx = mf.x + 50; v.z = v.rz = mf.z; v.st = 'dormant'; v.atk = null; };
+  for (let i = 0; i < 3; i++) { now += 60; hold(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
   const fr = out.filter(([, m]) => m.s === 'dv').slice(f0).map(([, m]) => m.p.f).pop();
   check('and everyone over there sees it wear his colours', fr && (fr[6] & 4), fr && 'marks ' + fr[6]);
-  say(A, 'dord', { o: [['fl', mf.slot, 1, 0]] });
-  check('a flayer is nobody\'s but VECNA\'s', mf.lord === 'vec');
   mf.atk = null;
-  say(A, 'dord', { o: [['fs', mf.slot, FL.MF_ST.indexOf('flee'), 300], ['fk', mf.slot, 1]] });
-  check('he falls: it breaks, and walks off for as long as it is told', mf.st === 'flee' && Math.abs(mf.fleeT - 30) < 0.01 && mf.panicked, mf.st + ' ' + mf.fleeT);
+  VC.kill(RD.V);
+  check('he falls: it breaks, and walks off', mf.st === 'flee' && Math.abs(mf.fleeT - 30) < 0.01 && mf.panicked, mf.st + ' ' + mf.fleeT);
+  VC.clearVecna(RD.V);
   mf.st = 'track'; mf.panicked = false;
 }
 

@@ -28,9 +28,9 @@
 //      room last had them ('pos'), and put back there
 //    - who runs the creatures: with two or more here the room runs Beelzebub,
 //      the monkey troop, the day side's traffic and the other side's dogs,
-//      gorgons and mind flayers itself (creatures.js), and judges every shot
-//      at them; the rest (VECNA) are the host's, and only the host's
-//      snapshots, kill reports and orders to the dogs are passed on
+//      gorgons, mind flayers and VECNA itself (creatures.js), and judges
+//      every shot at them; with one, they are that player's game's, and only
+//      the host's snapshots and kill reports are passed on
 //    - what Beelzebub learns (mindstore.js, kept for every room): a player's
 //      game may report how a fight it ran went only with the candidate the
 //      memory handed that player, once; and may share what it has learned
@@ -120,15 +120,13 @@ const KINDS = {
   //  judges the shot and says (creatures.js, troop.js)
   mdeath: [8, 16, (p, from, room) => (room.host() === from && !room.creatures.own.m ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
   mobhit: [8, 12, (p, from, room, now) => (room.creatures.monkeyShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, by: from })],
-  //  the dogs (and, below, the gorgons and flayers): the room's to judge when it runs them (dogs.js), else the host's
+  //  the dogs (and, below, the gorgons, flayers and VECNA): the room's to judge when it runs them (dogs.js), else the host's
   dhit: [8, 12, (p, from, room, now) => (room.creatures.dogShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
-  //  the host's game's dogs, when the room asks for them to carry on from ('dq');
-  //  what the host's VECNA did to the room's dogs, gorgons and flayers (dogs.js orders)
+  //  the host's game's other side, when the room asks for it to carry on from ('dq')
   dfull: [1, 2, (p, from, room) => { room.creatures.dogsFrom(from, p); return null; }],
-  dord: [10, 20, (p, from, room) => { room.creatures.dogOrders(from, p); return null; }],
   ghit: [8, 12, (p, from, room, now) => (room.creatures.gorShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   mfhit: [8, 12, (p, from, room, now) => (room.creatures.mfShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
-  vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
+  vhit: [8, 12, (p, from, room, now) => (room.creatures.vecShot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z) })],
   //  at Beelzebub: the room's to judge when it runs him, else the host's
   bhit: [8, 12, (p, from, room, now) => (room.creatures.shot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z), by: from })],
   corpse: [4, 8, (p, from, room) => { room.creatures.corpse(p); return Object.assign(p, { id: from }); }],

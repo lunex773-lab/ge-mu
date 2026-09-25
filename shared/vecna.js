@@ -300,7 +300,7 @@ function hurl(V) {
                   vy: (E.supportHeight(v.tx, v.tz, 2) + 1.2 - sy + 0.5 * 26 * t * t) / t,
                   spin: o.spin, roll: o.roll, t: 0, hit: 0, y0: o.y0, got: [] });
   w.thrown = true; w.held = false;
-  E.on.hurl(v);
+  E.on.hurl(v, o.k);
   return true;
 }
 //  the cars in the air: they fall, they may land on someone, and they come
