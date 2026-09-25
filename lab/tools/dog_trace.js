@@ -28,8 +28,9 @@ const SCENE = `(() => {
   Math.random = rnd; camera.getWorldDirection = (v) => v.set(0, 0, -1);
   const out = [];
   try {
-    clearDogs(); dogsOn = false; dogSpawnCd = 0; dogAiFrame = 0; dogRepack = 0; dogRoles = 0; dogHitCd = 0;
-    dogStepAcc = 0; dogNoiseAcc = 0;
+    clearDogs(); dogsOn = false; dogAiFrame = 0; dogHitCd = 0; dogNoiseAcc = 0;
+    if (typeof DOGS === 'object') { DOGS.spawnCd = 0; DOGS.repack = 0; DOGS.roles = 0; }      // (shared/dogs.js)
+    else { dogSpawnCd = 0; dogRepack = 0; dogRoles = 0; dogStepAcc = 0; }                      // (before it)
     wState = WS.BACK; buildWrecks();
     cityT = 1000; p.set(4, EYE, 6); _dogPX = p.x; _dogPZ = p.z; dead = false; cloak = 0;
     //  the props
