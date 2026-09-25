@@ -145,7 +145,7 @@ function drop(F, m) {
   m.holdW = -1;
   if (!w || (F.thrown && F.thrown.k === k)) return;
   w.thrown = false;
-  F.env.on.drop(w);
+  F.env.on.drop(w, k);
 }
 
 // ---- the retinue ----------------------------------------------------

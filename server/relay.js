@@ -27,10 +27,10 @@
 //      not used to judge shots or pickups, and the player is told where the
 //      room last had them ('pos'), and put back there
 //    - who runs the creatures: with two or more here the room runs Beelzebub,
-//      the monkey troop, the day side's traffic and the other side's dogs
-//      itself (creatures.js), and judges every shot at them; the rest are the
-//      host's, and only the host's snapshots, kill reports and orders to the
-//      dogs are passed on
+//      the monkey troop, the day side's traffic and the other side's dogs,
+//      gorgons and mind flayers itself (creatures.js), and judges every shot
+//      at them; the rest (VECNA) are the host's, and only the host's
+//      snapshots, kill reports and orders to the dogs are passed on
 //    - what Beelzebub learns (mindstore.js, kept for every room): a player's
 //      game may report how a fight it ran went only with the candidate the
 //      memory handed that player, once; and may share what it has learned
@@ -120,14 +120,14 @@ const KINDS = {
   //  judges the shot and says (creatures.js, troop.js)
   mdeath: [8, 16, (p, from, room) => (room.host() === from && !room.creatures.own.m ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
   mobhit: [8, 12, (p, from, room, now) => (room.creatures.monkeyShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, by: from })],
-  //  the dogs (and, below, the gorgons): the room's to judge when it runs them (dogs.js), else the host's
+  //  the dogs (and, below, the gorgons and flayers): the room's to judge when it runs them (dogs.js), else the host's
   dhit: [8, 12, (p, from, room, now) => (room.creatures.dogShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   //  the host's game's dogs, when the room asks for them to carry on from ('dq');
-  //  what the host's flayers and VECNA did to the room's dogs (dogs.js orders)
+  //  what the host's VECNA did to the room's dogs, gorgons and flayers (dogs.js orders)
   dfull: [1, 2, (p, from, room) => { room.creatures.dogsFrom(from, p); return null; }],
   dord: [10, 20, (p, from, room) => { room.creatures.dogOrders(from, p); return null; }],
   ghit: [8, 12, (p, from, room, now) => (room.creatures.gorShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
-  mfhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
+  mfhit: [8, 12, (p, from, room, now) => (room.creatures.mfShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
   //  at Beelzebub: the room's to judge when it runs him, else the host's
   bhit: [8, 12, (p, from, room, now) => (room.creatures.shot(from, now) ? null : { d: DMG, x: int(p.x), z: int(p.z), by: from })],
@@ -229,13 +229,14 @@ export class Relay {
   send(to, s, p, f) { const t = JSON.stringify(f ? { s, p, f } : { s, p }); this.out.push([to, t]); return t; }
 
   //  d damage to player id, by another player (by) or by the city (null;
-  //  src: what of it, for the game to show — 'monkey', a swipe)
-  damage(id, d, by, now, src) {
+  //  src: what of it, for the game to show — 'monkey', a swipe; more: what
+  //  else the game is to do about it — a flayer's blow knocks them away)
+  damage(id, d, by, now, src, more) {
     const v = this.players.get(id);
     if (!v || v.dead) return;
     v.hp = Math.max(0, v.hp - d); this.dirty.add(id);
     if (by) { v.lastBy = by; v.lastByT = now; this.send(id, 'hurt', { d, by, hp: v.hp }); }
-    else this.send(id, 'hp', src ? { hp: v.hp, src } : { hp: v.hp });
+    else this.send(id, 'hp', src ? Object.assign({ hp: v.hp, src }, more) : { hp: v.hp });
     if (v.hp <= 0) this.die(id, now);
   }
   //  a death, and whose kill it is: whoever shot them in the last 12 s

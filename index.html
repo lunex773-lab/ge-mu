@@ -3064,7 +3064,7 @@
           m.holdW = -1;
           if (!w || (F.thrown && F.thrown.k === k)) return;
           w.thrown = false;
-          F.env.on.drop(w);
+          F.env.on.drop(w, k);
         }
 
         function claimNear(arr, mx, mz, take, want, tag, slot) {
@@ -5437,7 +5437,7 @@
       if (k) { msg.k = k; msg.kf = full ? 1 : 0; }
     }
     if (gorsOn && !MP.srvOwns.d) { const q = gorSnapshot(); if (q.length) msg.q = q; }
-    if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
+    if (mfOn && !MP.srvOwns.d) { const f = mfSnapshot(); if (f.length) msg.f = f; }   // (the room's, with the dogs)
     if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
     if (!MP.srvOwns.b) { const b = bzbSnapshot(); if (b) msg.b = b; }   // the guardian, when he stands (and is mine to run)
     if (bzb.slain && bzb.seed === rift.seed) msg.bs = 1;   // he has fallen at this tear: the room must not stand him up again
@@ -5457,7 +5457,7 @@
     }
     if (!MP.srvOwns.d) applyDogSnapshot(msg.k, msg.kf !== 0);   // kf 0: only the dogs near us (publishMobs); the room's: onRoomDogs
     if (!MP.srvOwns.d) applyGorSnapshot(msg.q);        // (the room's: onRoomDogs)
-    applyMfSnapshot(msg.f);
+    if (!MP.srvOwns.d) applyMfSnapshot(msg.f);         // (the room's: onRoomDogs)
     applyVecSnapshot(msg.v);
     if (!MP.srvOwns.b) applyBzbSnapshot(msg.b);        // (while the room runs him, it says where he is: onRoomCreatures)
   }
@@ -5550,7 +5550,6 @@
     if (t.slice(-3) === '/dv') { onRoomDogs(msg); return; }
     if (t.slice(-3) === '/dq') { onDogAsk(); return; }
     if (t.slice(-3) === '/dk') { onDogKnow(msg); return; }
-    if (t.slice(-7) === '/dshare') { onDogShare(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -6569,7 +6568,8 @@
     }
     if (hitMf) {
       showHit(hitMf.hp - DMG <= 0);
-      hurtFlayer(hitMf, DMG, p.x, p.z);
+      if (MP.srvOwns.d) hitMf.hp -= DMG;               // the room decides (server/dogs.js); shown here at once
+      else hurtFlayer(hitMf, DMG, p.x, p.z);
       sendMfHit(hitMf, DMG);
     }
     if (hitVec) {
@@ -6596,6 +6596,10 @@
     if (msg.src === 'dog') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.26); }      // a bite, as the room runs the dogs
     if (msg.src === 'gor') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.42); }      // a gorgon's swing
     if (msg.src === 'gorpred') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.85); playGorPredation(0, 0); gorBind = 0.55; }   // … its face
+    if (msg.src === 'mf') {                                // a flayer's blow, or a car it threw: and how far it knocks you
+      showHurt(); playHurt(); camShake = Math.max(camShake, 0.28, (+msg.sh || 0) / 100);
+      if (Array.isArray(msg.kb) && msg.kb.every(Number.isFinite)) mfShove(msg.kb[2] / 10, msg.kb[0] / 10, msg.kb[1] / 10);
+    }
     hp = Math.max(0, Math.min(HP_MAX, +msg.hp || 0));
     updateHpUI();
     if (hp <= 0) onDeath();
@@ -6625,8 +6629,11 @@
     if ('d' in msg) {
       const was = MP.srvOwns.d;
       MP.srvOwns.d = !!msg.d;
+      dogAskT = -1e9;
       if (MP.srvOwns.d && !was) {                  // the room's now: ease onto what it says, from where they are
         for (const a of dogs.concat(gorgons)) if (a.live) { a.netX = a.x; a.netZ = a.z; a.netH = a.hd || 0; a.rx = a.x; a.rz = a.z; a.atk = null; }
+        //  (a flayer's swing let go — a car in its hand put down: the room carried on without it)
+        for (const m of flayers) if (m.live) { FL.drop(MFS, m); m.atk = null; m.netX = m.x; m.netZ = m.z; m.netH = m.hd || 0; m.rx = m.x; m.rz = m.z; m.netHp = m.hp; }
         dogSummons.length = 0; gorSummons.length = 0; dogWreckSent = null;
       }
       if (!MP.srvOwns.d && was) dogsBack(msg.df);
@@ -6703,18 +6710,28 @@
   function troopBack() {
     for (const m of monkeyPeds) { m.feedC = null; m.eating = false; if (TR.inPlay(m)) { const h = m.hd; TR.reseat(m); m.hd = h; } }
   }
-  //  ---- the dogs and gorgons, as the room runs them (server/dogs.js) -----------------
-  //  the pack and the gorgons, as the room says them to everyone over there
-  //  ('dv': the snapshots' own forms)
+  //  ---- the dogs, gorgons and flayers, as the room runs them (server/dogs.js) -----------
+  //  the pack, the gorgons and the flayers, as the room says them to everyone
+  //  over there ('dv': the snapshots' own forms), a car a flayer threw, and
+  //  where the cars they threw came down
   function onRoomDogs(msg) {
     if (!MP.srvOwns.d || wState !== WS.BACK) return;
     applyDogSnapshot(msg.k, msg.kf !== 0);
     if (Array.isArray(msg.q)) applyGorSnapshot(msg.q);
+    if (Array.isArray(msg.f)) applyMfSnapshot(msg.f);
+    if (msg.w) onMfWrecks(msg.w);
+    if (msg.fly) onMfFlight(msg.fly);
   }
-  //  the room asks this game (the host) for them, to carry on from
+  //  the room asks this game (the host) for them, to carry on from — and
+  //  until it says it has them (or for three seconds), no more are added
+  //  here: one added after this word went would be a stranger to the room,
+  //  which fills that slot with one of its own somewhere else
+  let dogAskT = -1e9;
+  function dogsAsked() { return performance.now() - dogAskT < 3000; }
   function onDogAsk() {
     if (!MP.connected || !MP.client || MP.srvOwns.d) return;
-    const f = Object.assign(DG.fullState(DOGS), { g: GR.fullState(GORS) });      // (whichever are up: none, over on this side)
+    dogAskT = performance.now();
+    const f = Object.assign(DG.fullState(DOGS), { g: GR.fullState(GORS), f: FL.fullState(MFS) });   // (whichever are up: none, over on this side)
     try { MP.client.publish(mtopic('dfull'), JSON.stringify(f)); } catch (e) {}
   }
   //  they are this game's to run again: from the room's last word, or from what is drawn here
@@ -6724,9 +6741,18 @@
     else { for (const d of dogs) if (d.live) { d.x = d.rx; d.z = d.rz; d.stuck = 0; } DOGS.repack = 0; }
     if (df && GR.fullOk(df.g)) GR.adoptFull(GORS, df.g);
     else for (const g of gorgons) if (g.live) { g.x = g.rx; g.z = g.rz; }
+    if (df && FL.fullOk(df.f)) FL.adoptFull(MFS, df.f);
+    else for (const m of flayers) if (m.live) { m.x = m.rx; m.z = m.rz; m.atk = null; }
+    //  a car the room had up (in a hand, or in the air there and not here) comes down where it is
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k];
+      if (w && (w.thrown || w.held) && !(MFS.thrown && MFS.thrown.k === k) && !vecThrown.some((T) => T.k === k) && !(vec.orbit && vec.orbit.some((o) => o.k === k))) { w.thrown = false; w.held = false; }
+    }
+    poseWrecks();
   }
   //  what the room's dogs and gorgons know ('dk': per one with a target [slot,
-  //  x·10, z·10, seen ago·10]): the flayers and VECNA running here learn through them
+  //  x·10, z·10, seen ago·10]): VECNA, running here, learns through them (and
+  //  through the flayers, whose own rows say what they know: applyMfSnapshot)
   function onDogKnow(msg) {
     if (!MP.srvOwns.d) return;
     const know = (list, rows) => {
@@ -6740,19 +6766,15 @@
     };
     know(dogs, msg.k); know(gorgons, msg.g);
   }
-  //  one within a flayer's link was hurt ('dshare'): the flayer running here bleeds a share
-  function onDogShare(msg) {
-    if (!MP.srvOwns.d || !mobSim() || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
-    mfShareDamage(msg.x / 10, msg.z / 10, Math.max(0, Math.min(DMG, +msg.d || 0)));
-  }
-  //  The host's flayers and VECNA still run here while the room runs the dogs
-  //  and gorgons, and still order them about: claim one, hand it a target, set
-  //  it going, carry it along, summon more — and pick the wrecks up and throw
-  //  them. Whatever they change of them here (as the room says them) and of the
-  //  wrecks is written down after they have run, each frame, and sent ('dord');
-  //  the room makes it so (server/dogs.js orders). A flayer or VECNA hurt between
-  //  frames (a shot, the room's word of one) orders them about too: withOrders.
-  const dogMark = [], gorMark = [], dogSummons = [], gorSummons = [];
+  //  The host's VECNA still runs here while the room runs the dogs, gorgons and
+  //  flayers, and still orders them about: claim one, hand it a target, set it
+  //  going, steady a flayer or break it, carry them along, summon more — and
+  //  lift the wrecks and throw them. Whatever he changes of them here (as the
+  //  room says them) and of the wrecks is written down after he has run, each
+  //  frame, and sent ('dord'); the room makes it so (server/dogs.js orders).
+  //  VECNA hurt between frames (a shot, the room's word of one) orders them
+  //  about too: withOrders.
+  const dogMark = [], gorMark = [], flMark = [], dogSummons = [], gorSummons = [];
   let dogWreckSent = null, ordering = 0;
   const dogOrdering = () => MP.srvOwns.d && mobPub() && wState === WS.BACK;
   const lordCode = (o) => (o.lord === 'mf' ? 1 : o.lord === 'vec' ? 2 : 0);
@@ -6760,18 +6782,20 @@
   function markAll(list, marks) {
     for (const a of list) if (a.live) {
       const m = marks[a.slot] || (marks[a.slot] = []);
-      m[0] = a.lord || null; m[1] = a.lordSlot; m[2] = !!a.hasT; m[3] = a.tx; m[4] = a.tz; m[5] = a.seeT; m[6] = a.st; m[7] = a.x; m[8] = a.z;
+      m[0] = a.lord || null; m[1] = a.lordSlot; m[2] = !!a.hasT; m[3] = a.tx; m[4] = a.tz; m[5] = a.seeT; m[6] = a.st; m[7] = a.x; m[8] = a.z; m[9] = !!a.panicked;
     }
   }
-  //  what changed, as orders ([what, …]; pre: '' a dog, 'g' a gorgon)
+  //  what changed, as orders ([what, …]; pre: '' a dog, 'g' a gorgon, 'f' a flayer)
   function diffAll(list, marks, pre, ST, summons, o) {
+    const fl = pre === 'f';
     for (const a of list) {
       if (!a.live || a.dead) continue;
       const m = marks[a.slot]; if (!m) continue;
       if ((a.lord || null) !== m[0] || (a.lord === 'mf' && a.lordSlot !== m[1])) o.push([pre + 'l', a.slot, lordCode(a), a.lord === 'mf' ? a.lordSlot : -1]);
       if (a.hasT && (!m[2] || a.tx !== m[3] || a.tz !== m[4] || a.seeT !== m[5])) o.push([pre + 't', a.slot, r10(a.tx), r10(a.tz), r10(Math.max(0, cityT - a.seeT))]);
-      if (a.st !== m[6]) o.push([pre + 's', a.slot, ST.indexOf(a.st)]);
-      if (Math.hypot(a.x - m[7], a.z - m[8]) > 1) o.push([pre + 'p', a.slot, r10(a.x), r10(a.z)]);
+      if (a.st !== m[6]) o.push(fl && a.st === 'flee' ? [pre + 's', a.slot, ST.indexOf(a.st), r10(a.fleeT || 30)] : [pre + 's', a.slot, ST.indexOf(a.st)]);
+      if (fl && !!a.panicked !== m[9]) o.push(['fk', a.slot, a.panicked ? 1 : 0]);
+      if (!fl && Math.hypot(a.x - m[7], a.z - m[8]) > 1) o.push([pre + 'p', a.slot, r10(a.x), r10(a.z)]);   // (he carries no flayer)
     }
     for (const n of summons) o.push([pre + 'n', r10(n.x), r10(n.z), lordCode(n), n.lord === 'mf' ? n.lordSlot : -1,
       n.hasT ? 1 : 0, r10(n.tx || 0), r10(n.tz || 0), r10(Math.max(0, cityT - (n.seeT === undefined ? cityT : n.seeT))), Math.max(0, ST.indexOf(n.st))]);
@@ -6780,7 +6804,7 @@
   function dogOrdersMark() {
     if (!dogOrdering()) return;
     ordering++;
-    markAll(dogs, dogMark); markAll(gorgons, gorMark);
+    markAll(dogs, dogMark); markAll(gorgons, gorMark); markAll(flayers, flMark);
   }
   function dogOrdersSend() {
     if (ordering) ordering--;
@@ -6788,6 +6812,7 @@
     const o = [];
     diffAll(dogs, dogMark, '', D_ST, dogSummons, o);
     diffAll(gorgons, gorMark, 'g', G_ST, gorSummons, o);
+    diffAll(flayers, flMark, 'f', MF_ST, [], o);
     //  the wrecks: up in the air (held, thrown) or not, and where each came down
     if (!dogWreckSent) dogWreckSent = WR.makeWrecks(cars).map((w) => (w ? [w.x, w.z, w.rot, 0] : null));
     for (let k = 0; k < wrecks.length; k++) {
@@ -6800,7 +6825,7 @@
     }
     if (o.length && MP.client) try { MP.client.publish(mtopic('dord'), JSON.stringify({ o })); } catch (e) {}
   }
-  //  fn, with what it does to the room's dogs and gorgons sent (unless this frame's own sending will)
+  //  fn, with what it does to the room's dogs, gorgons and flayers sent (unless this frame's own sending will)
   function withOrders(fn) {
     if (ordering || !dogOrdering()) return fn();
     dogOrdersMark();
@@ -7038,7 +7063,7 @@
       'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
-      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS+GOR ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
+      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS+GOR+MF ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
       'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
       '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
@@ -8283,7 +8308,7 @@
     }
 
     // keep the streets stocked, but never in a hurry and never in your face
-    if (mine) DG.stock(DOGS, dt);
+    if (mine && !dogsAsked()) DG.stock(DOGS, dt);
 
     dogAiFrame++;
     for (const d of dogs) {
@@ -8965,7 +8990,7 @@
     const mine = dogSim();                             // (the room runs them with the dogs: server/dogs.js)
 
     //  a handful across the whole district, kept apart, only a body ever cleared
-    if (mine) GR.stock(GORS, dt);
+    if (mine && !dogsAsked()) GR.stock(GORS, dt);
 
     gorFrame++;
     for (const g of gorgons) {
@@ -9512,7 +9537,7 @@
       launch: (m) => playMfThrow(m.tdist, mfPan(m)),
       hold: (m, w, lift, x, y, z) => mfWreckAt(m.holdW, w, x, y, z, lift * 1.2, 0),
       fly: (T, w) => mfWreckAt(T.k, w, T.x, T.y, T.z, T.roll, T.roll * 0.6),
-      land: (T, w, gy) => { poseWrecks(); mfLandFx(T, gy); },
+      land: (T, w, gy) => { poseWrecks(); mfLandFx(T, gy); if (!dogSim()) { mfLanded = { k: T.k, at: performance.now() }; mfWreckSaid(T.k); } },
       drop: () => poseWrecks(),
       far: (m) => { playMfRoar(m.tdist, mfPan(m)); if (m.tdist < 400) notify('遠くで何かが吠えた', 2800); },
       panic: () => notify('地面が震えている', 3000),
@@ -9742,11 +9767,11 @@
     }
     if (!mfOn) { mfOn = true; for (const q of mfParts) q.visible = true; }
     mfHigh = 0;
-    const mine = mobSim();
-    FL.flight(MFS, dt);                                // a car in the air
+    const mine = dogSim();                             // (the room runs them with the dogs: server/dogs.js)
+    FL.flight(MFS, dt, mine);                          // a car in the air (who it lands on is decided where they run)
 
     //  one at a time, rare, and §6: it never arrives alone
-    if (mine) FL.stock(MFS, dt);
+    if (mine && !dogsAsked()) FL.stock(MFS, dt);
 
     mfFrame++;
     let nearest = null;
@@ -9764,15 +9789,17 @@
         if ((mfFrame + m.slot) % every === 0) FL.think(MFS, m, dt * every);
         m.rx = m.x; m.rz = m.z;
       } else {
-        easePose(m, m.netX, m.netZ, m.netH, dt, 9, 22, 5, 3);
+        //  where it is told, turning as slowly as it turns; its swing, its
+        //  rearing up and the car in its hand played out here (mfPuppet)
+        const turn = easePose(m, m.netX, m.netZ, m.netH, dt, 9, 22, 5, 3);
+        m.lean += (-turn * 0.10 - m.lean) * Math.min(1, dt * 5);
         m.x = m.rx; m.z = m.rz;
         m.y += (supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
         m.sp = m.rspd; m.tdist = Math.hypot(dx, dz);
         m.stagger = Math.max(0, m.stagger - dt * 1.4);
         m.swell = Math.max(0, m.swell - dt * 0.7);
         if (m.dead) m.deadT += dt;
-        m.mawWant = m.st === 'summon' || m.st === 'alert' ? 1 : 0.15;
-        m.headYawWant = 0; m.headPitchWant = 0;
+        mfPuppet(m, dt);
       }
 
       const ez = Math.min(1, dt * 4);
@@ -9800,7 +9827,7 @@
       //  §21: an officer of his wears his colours. The bond expires the same
       //  way a minion's does, so a flayer he has walked away from goes back to
       //  its own hide rather than staying marked for the rest of the fight.
-      const mt2 = lordOf(m, dt) ? 1 : 0;
+      const mt2 = (mine ? lordOf(m, dt) : m.lord) ? 1 : 0;       // (followed: whose it is, as told)
       m.taint = (m.taint || 0) + (mt2 - (m.taint || 0)) * Math.min(1, dt * 1.2);
 
       if (m.lod >= 2 && !m.dead) continue;
@@ -9840,28 +9867,38 @@
   }
 
   // ---- network ---------------------------------------------------------
-  const MF_ST = ['idle', 'wander', 'alert', 'track', 'attack', 'summon', 'flee'];
-  function mfSnapshot() {
-    const k = [];
-    for (const m of flayers) {
-      if (!m.live) continue;
-      const h = (((m.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-      k.push(m.slot, Math.round(m.x * 10), Math.round(m.z * 10), Math.round(h * HDQ),
-             Math.max(0, Math.round(m.hp)), MF_ST.indexOf(m.st) + 1,
-             (m.dead ? 1 : 0) | (m.panicked ? 2 : 0));
-    }
-    return k;
-  }
+  //  Whoever runs them — this game, alone or hosting a room that does not;
+  //  else the room (server/dogs.js) — says each flayer as shared/flayers.js
+  //  snapRows has it: where, how hurt, what it is doing, its swing and how far
+  //  into it, where it looks, the car in its hand, what it hunts. The room
+  //  also says a car in the air (flightRow) and where the cars its flayers
+  //  threw came down. Everyone else follows that: the body walks where it is
+  //  told, and the swing, the rearing and the lift are played out here
+  //  (mfPuppet), so a blow is seen coming on every screen, not only on the
+  //  one that decides it.
+  const MF_ST = FL.MF_ST;
+  function mfSnapshot() { return FL.snapRows(MFS); }
   function applyMfSnapshot(k) {
     if (!k) { if (flayers.some((o) => o.live)) clearFlayers(); return; }
     for (const o of flayers) o.netSeen = false;
-    for (let i = 0; i + 6 < k.length; i += 7) {
-      let m = flayers[k[i]];
-      if (!m) { while (flayers.length <= k[i]) flayers.push({ slot: flayers.length, live: false }); m = flayers[k[i]]; }
-      if (!m.live) { spawnFlayer({ x: k[i + 1] / 10, z: k[i + 2] / 10 }); m = flayers[k[i]] || m; }
+    const N = FL.SNAP_N;
+    for (let i = 0; i + N - 1 < k.length; i += N) {
+      const slot = k[i];
+      if (!(slot >= 0 && slot < FL.NMF)) continue;
+      let m = flayers[slot];
+      const fresh = !m || !m.live;
+      if (fresh) {                                       // (in its own slot: this is only what someone else says)
+        m = FL.spawnFlayer(MFS, { x: k[i + 1] / 10, z: k[i + 2] / 10 }, slot) || flayers[slot];
+        m.hd = k[i + 3] / HDQ; m.escorted = true;
+      }
       m.netSeen = true;
       m.netX = k[i + 1] / 10; m.netZ = k[i + 2] / 10; m.netH = k[i + 3] / HDQ;
       const nh = k[i + 4];
+      if (!fresh && m.netHp !== undefined && nh < m.netHp - 0.5 && nh > 0) {      // hurt: the body registers it
+        m.swell = Math.min(1, m.swell + 0.5); m.stagger = Math.max(m.stagger, m.netHp - nh > 60 ? 1 : 0.2);
+        playMfHurt(m.tdist, mfPan(m));
+      }
+      m.netHp = nh;
       m.hp = (m.hpHold && performance.now() < m.hpHold) ? Math.min(m.hp, nh) : nh;
       const st = MF_ST[k[i + 5] - 1];
       const fl = k[i + 6];
@@ -9870,13 +9907,110 @@
         if (st === 'summon') playMfSummon(m.tdist, mfPan(m));
         m.st = st; m.stT = 0;
       }
-      if ((fl & 2) && !m.panicked) m.panicked = true;
-      if ((fl & 1) && !m.dead) { m.dead = true; m.deadT = 0; playMfDeath(m.tdist, mfPan(m)); }
+      if ((fl & 2) && !m.panicked && !fresh) notify('地面が震えている', 3000);
+      m.panicked = !!(fl & 2);
+      m.lord = (fl & 4) ? 'vec' : null; m.lordSlot = -1;
+      //  what it hunts (VECNA, running here, learns through it)
+      m.hasT = k[i + 13] >= 0;
+      if (m.hasT) { m.seeT = cityT - k[i + 13] / 10; m.tx = k[i + 14] / 10; m.tz = k[i + 15] / 10; }
+      m.headYawWant = k[i + 9] / 100; m.headPitchWant = k[i + 10] / 100; m.mawWant = k[i + 11] / 100;
+      if ((fl & 1) && !m.dead) {
+        m.atk = null;                                    // (the car in its hand: where it lands, the room says)
+        if (fresh) { m.dead = true; m.deadT = 0; m.hp = 0; } else FL.kill(MFS, m);
+      }
+      if (!m.dead) mfSwingFrom(m, FL.ATK_KINDS[k[i + 7] - 1], k[i + 8] / 100, (fl & 8) ? 3 : 0, k[i + 12]);
     }
     for (const o of flayers) if (o.live && !o.netSeen) despawnFlayer(o);
   }
+  //  its swing as told: kind, how far into it, which foreleg, the car in its hand
+  function mfSwingFrom(m, kind, t, leg, holdW) {
+    m.holdW = kind === 'throw' ? holdW : -1;
+    if (!kind) {
+      //  over there (or broken off): one still winding up here stops
+      if (m.atk && m.atk.t < FL.MF_ATK[m.atk.kind].wind) m.atk = null;
+      return;
+    }
+    const a = m.atk, A = FL.MF_ATK[kind];
+    if (a && a.kind === kind && Math.abs(a.t - t) < 0.35) return;          // playing it already
+    m.atk = { kind, t, leg, side: leg === 0 ? 1 : -1, phase: -1, got: [],
+              hit: t > A.wind + A.swing * 0.45 ? 1 : 0, sfx: t > A.wind + A.swing * 0.3 ? 1 : 0,
+              //  (where a stamp comes down: from where it stands here as it begins)
+              px: m.x + Math.sin(m.hd) * FL.MF_STOMP_OFF, pz: m.z + Math.cos(m.hd) * FL.MF_STOMP_OFF };
+    if (t < 0.3) playMfWind(m.tdist, mfPan(m), kind);
+  }
+  //  a flayer someone else runs, this frame: its swing played out as shared/flayers.js
+  //  runAtk plays it — the rearing up, the lift, the sound, the crater — but no blow:
+  //  who is hit is decided where it runs
+  function mfPuppet(m, dt) {
+    const a = m.atk;
+    if (m.dead || !a) {
+      m.atk = m.dead ? null : a;
+      if (!m.dead && (m.st === 'alert' || m.st === 'summon')) m.rear = Math.min(1, m.rear + dt * (m.st === 'summon' ? 2.2 : 1.6));
+      else m.rear = Math.max(0, m.rear - dt * 1.4);
+      return;
+    }
+    const A = FL.MF_ATK[a.kind];
+    a.t += dt;
+    if (a.t < A.wind) {
+      a.phase = -(1 - a.t / A.wind);
+      m.rear = Math.min(1, m.rear + dt * 1.8);
+      const w = a.kind === 'throw' && m.holdW >= 0 ? wrecks[m.holdW] : null;
+      if (w && !(MFS.thrown && MFS.thrown.k === m.holdW)) {
+        const lift = Math.min(1, a.t / (A.wind * 0.8));
+        const hx = m.x + Math.sin(m.hd) * 9, hz = m.z + Math.cos(m.hd) * 9;
+        mfWreckAt(m.holdW, w, w.x + (hx - w.x) * lift, w.y + lift * 11, w.z + (hz - w.z) * lift, lift * 1.2, 0);
+      }
+    } else if (a.t < A.wind + A.swing) {
+      const k = (a.t - A.wind) / A.swing;
+      a.phase = k;
+      m.rear = Math.max(0, m.rear - dt * 3);
+      if (!a.sfx && k > 0.3) { a.sfx = 1; playMfSwing(m.tdist, mfPan(m)); if (a.kind === 'throw') playMfThrow(m.tdist, mfPan(m)); }
+      if (a.kind === 'stomp' && !a.hit && k > 0.45) { a.hit = 1; if (!dead) mfStompFx(m, a.px, a.pz, Math.hypot(p.x - a.px, p.z - a.pz)); }
+    } else a.phase = 1;
+    if (a.t >= A.wind + A.swing + A.rec) m.atk = null;
+  }
+  //  a car in the air, as the room says it ('dv' fly: shared/flayers.js
+  //  flightRow) — flown here from its first word (it is only falling), and
+  //  put down where the room says it came down (onMfWrecks)
+  let mfLanded = { k: -1, at: 0 };
+  function onMfFlight(r) {
+    if (!Array.isArray(r) || r.length < 9) return;
+    const k = r[0], w = wrecks[k]; if (!w) return;
+    if (mfLanded.k === k && performance.now() - mfLanded.at < 1500) return;   // (down here already: the room is a moment behind)
+    let T = MFS.thrown;
+    if (T && T.k === k && Math.hypot(T.x - r[1] / 10, T.y - r[2] / 10, T.z - r[3] / 10) < 4) return;
+    if (T && T.k !== k) mfLetFall();
+    T = MFS.thrown = { k, t: 0, ty: 0, hit: 1, got: [] };
+    T.x = r[1] / 10; T.y = r[2] / 10; T.z = r[3] / 10; T.vx = r[4] / 10; T.vy = r[5] / 10; T.vz = r[6] / 10; T.spin = r[7] / 100; T.roll = r[8] / 100;
+    w.thrown = true; mfWreckSaid(k);
+  }
+  //  where the cars the room's flayers moved are, and whether up in the air
+  //  ('dv' w: per wreck [k, x·10, z·10, y·10, heading·1000, up (1 held, 2 in the air)])
+  function onMfWrecks(r) {
+    if (!Array.isArray(r)) return;
+    let moved = false;
+    for (let i = 0; i + 5 < r.length; i += 6) {
+      const k = r[i], w = wrecks[k]; if (!w) continue;
+      const up = r[i + 5];
+      if (up) { w.held = !!(up & 1); w.thrown = !!(up & 2); mfWreckSaid(k); continue; }   // up there: its hand, or the flight, draws it
+      const T = MFS.thrown;
+      if (T && T.k === k) {                              // down there before it is down here
+        MFS.thrown = null; mfLanded = { k, at: performance.now() };
+        mfLandFx({ x: r[i + 1] / 10, z: r[i + 2] / 10 }, r[i + 3] / 10);
+      }
+      w.x = r[i + 1] / 10; w.z = r[i + 2] / 10; w.y = r[i + 3] / 10; w.rot = r[i + 4] / 1000; w.held = false; w.thrown = false;
+      mfWreckSaid(k); moved = true;
+    }
+    if (moved) poseWrecks();
+  }
+  //  (what a host's game tells the room of the wrecks — dogOrdersSend — is
+  //  not to echo what the room has just told it)
+  function mfWreckSaid(k) {
+    const q = dogWreckSent && dogWreckSent[k], w = wrecks[k];
+    if (q && w) { q[0] = w.x; q[1] = w.z; q[2] = w.rot; q[3] = (w.held ? 1 : 0) | (w.thrown ? 2 : 0); }
+  }
   function sendMfHit(m, dmg) {
-    if (!MP.connected || !MP.client || mobPub()) return;
+    if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;
     m.hpHold = performance.now() + 1200;
     try { MP.client.publish(mtopic('mfhit'), JSON.stringify({ i: m.slot, d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
   }

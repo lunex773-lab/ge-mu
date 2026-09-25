@@ -13,8 +13,8 @@
 //    - they hunt the second player too (a host's game only ever hunted its
 //      own player): the room decides the bite
 //    - a dog one shoots is hurt on both screens, the room having judged it
-//    - the host's flayer still runs in its game, and summons its escort:
-//      the room makes the dogs, sworn to it, and everyone sees them
+//    - the mind flayer runs in the room with them, and summons its escort:
+//      the dogs are sworn to it there, and everyone sees them so
 //    - what it costs: the host's game's time on the dogs, and what the
 //      other receives for them
 //    - the second player leaves: the dogs are given back, and carry on
@@ -22,6 +22,7 @@
 //    node lab/test/dogs.game.test.js     (about two minutes)
 
 const { openRoom, sleep } = require('./harness/page.js');
+const FL = require('../../shared/flayers.js');
 
 const results = [];
 let pass = 0, fail = 0;
@@ -59,7 +60,7 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
     const B = await room.player({ room: 'dogs', nick: 'Ben' });
     await ev(B, 'window.__t.noRender(); 1');
     await A.join(); await sleep(2000);
-    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; vecHoldSpawn = true; GORS.holdSpawn = true; 1');
+    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; MFS.spawnCd = 1e9; vecHoldSpawn = true; GORS.holdSpawn = true; 1');
     await ev(A, TIMING);
     await ev(A, 'setWorld(WS.BACK); 1');
     const at = JSON.parse(await ev(A, STAND(11, 10)));
@@ -126,17 +127,21 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
         'the room ' + hp0 + ' → ' + d.hp + ', the host\'s screen ' + onA + (room.rooms.get('dogs').relay.lastRefusal ? '; last refused: ' + room.rooms.get('dogs').relay.lastRefusal : ''));
     }
 
-    // ---- the host's flayer summons its escort -------------------------------------------
+    // ---- the flayer, in the room with them, summons its escort ---------------------------------
     {
-      await ev(A, `(() => { for (const d of dogs) d.x = d.x; const m = spawnFlayer({ x: p.x + 40, z: p.z }); if (!m) return 0; m.escorted = true; mfSummon(m, MF_ESC_DOG, 0); return 1; })()`);
-      const f = await ev(A, 'JSON.stringify(flayers.filter((m) => m.live).map((m) => [m.x, m.z]))');
-      let sworn = [];
-      for (let i = 0; i < 30 && sworn.length < 1; i++) { await sleep(100); sworn = RD.dogs.filter((q) => q.live && q.lord === 'mf'); }
+      const ax = JSON.parse(await ev(A, 'JSON.stringify([p.x, p.z])'));
+      //  (a district full of dogs has no room for more: a few far off are let go first, as in the game)
+      for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - ax[0], q.z - ax[1]) > 100).slice(0, 6)) require('../../shared/dogs.js').despawnDog(RD.D, q);
+      const m = FL.spawnFlayer(RD.M, { x: ax[0] + 40, z: ax[1] });
+      m.escorted = true; m.summonT = 999; m.claimT = 99;
+      const made = FL.summon(RD.M, m, FL.MF_ESC_DOG, 0);
       await sleep(1500);
-      sworn = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'mf');
+      const sworn = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot);
       const onB = JSON.parse(await ev(B, DOGS)).filter((q) => q && q[5] === 'mf').length;
-      check('the host\'s flayer summons its escort: the room makes them, sworn to it, and everyone sees them', sworn.length >= 1 && sworn.length <= 3 && onB === sworn.length,
-        sworn.length + ' sworn to the flayer at ' + f + ' (the second screen shows ' + onB + ')');
+      const onA = await ev(A, 'flayers.filter((f) => f.live).length');
+      check('the flayer, run by the room with them, summons its escort: sworn to it there, and everyone sees them so', made >= 1 && sworn.length === made && onB === sworn.length && onA === 1,
+        made + ' summoned, ' + sworn.length + ' sworn to it (the second screen shows ' + onB + '; the host sees ' + onA + ' flayer)');
+      FL.despawnFlayer(RD.M, m);
     }
 
     // ---- what it costs ---------------------------------------------------------------

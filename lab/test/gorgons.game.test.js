@@ -13,13 +13,15 @@
 //    - the second player crosses over: both see the same gorgons
 //    - they hunt the second player too: the room decides the swing
 //    - a gorgon one shoots is hurt on both screens, the room having judged it
-//    - the host's flayer still runs in its game, and summons its gorgons: the
-//      room makes them, sworn to it, and everyone sees them
+//    - the mind flayer runs in the room with them, and summons its gorgons:
+//      sworn to it there, and everyone sees them so; shot from far off, it
+//      sends them after the shooter
 //    - the second player leaves: the gorgons are given back, and carry on
 //
 //    node lab/test/gorgons.game.test.js     (about two minutes)
 
 const { openRoom, sleep } = require('./harness/page.js');
+const FL = require('../../shared/flayers.js');
 
 const results = [];
 let pass = 0, fail = 0;
@@ -44,7 +46,7 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
     const B = await room.player({ room: 'gors', nick: 'Ben' });
     await ev(B, 'window.__t.noRender(); 1');
     await A.join(); await sleep(2000);
-    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; vecHoldSpawn = true; DOGS.holdSpawn = true; 1');
+    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; MFS.spawnCd = 1e9; vecHoldSpawn = true; DOGS.holdSpawn = true; 1');
     await ev(A, 'setWorld(WS.BACK); 1');
     const at = JSON.parse(await ev(A, STAND(11, 10)));
     //  (stocked at once: the district fills a gorgon every few seconds of the game's
@@ -119,28 +121,24 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
         'the room 420 → ' + g.hp + ', the host\'s screen ' + onA + (room.rooms.get('gors').relay.lastRefusal ? '; last refused: ' + room.rooms.get('gors').relay.lastRefusal : ''));
     }
 
-    // ---- the host's flayer summons its gorgons --------------------------------------------
+    // ---- the flayer, in the room with them, summons its gorgons --------------------------------
     {
       for (const q of RD.gorgons) if (q.live && q.lord) q.lord = null;
-      await ev(A, `(() => { const m = spawnFlayer({ x: p.x + 45, z: p.z }); if (!m) return 0; m.escorted = true; mfSummon(m, 0, MF_ESC_GOR); return 1; })()`);
-      let sworn = [];
-      for (let i = 0; i < 30 && sworn.length < 1; i++) { await sleep(100); sworn = RD.gorgons.filter((q) => q.live && q.lord === 'mf'); }
+      const ax = JSON.parse(await ev(A, 'JSON.stringify([p.x, p.z])'));
+      const m = FL.spawnFlayer(RD.M, { x: ax[0] + 45, z: ax[1] });
+      m.escorted = true; m.summonT = 999;
+      const made = FL.summon(RD.M, m, 0, FL.MF_ESC_GOR);
       await sleep(1500);
-      sworn = RD.gorgons.filter((q) => q.live && !q.dead && q.lord === 'mf');
+      const sworn = RD.gorgons.filter((q) => q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot);
       const onB = JSON.parse(await ev(B, GORS_)).filter((q) => q && q[5] === 'mf').length;
-      check('the host\'s flayer summons its gorgons: the room makes them, sworn to it, and everyone sees them', sworn.length >= 1 && sworn.length <= 2 && onB === sworn.length,
-        sworn.length + ' sworn to the flayer (the second screen shows ' + onB + ')');
-      //  shot from far off, between frames (as a round or the room's word of one
-      //  arrives): it sends everything about it after the shooter — and the
-      //  room's gorgons go, the order sent with the shot (withOrders)
-      //  (what the room does with it is its own: a gorgon that can see a player goes for them)
-      const heard = [];
-      { const f = CR.dogOrders.bind(CR); CR.dogOrders = (from, p) => { for (const o of p.o || []) heard.push(o); return f(from, p); }; }
-      const far = JSON.parse(await ev(A, `(() => { const m = flayers.find((f) => f.live && !f.dead); const x = m.x + 300, z = m.z; hurtFlayer(m, 20, x, z); return JSON.stringify([x, z]); })()`));
-      let sent = [];
-      for (let i = 0; i < 20 && !sent.length; i++) { await sleep(100); sent = heard.filter((o) => o[0] === 'gt' && Math.abs(o[2] / 10 - far[0]) < 1); }
-      check('the flayer, shot from far off between frames, sends its gorgons after the shooter: the room hears it', sent.length >= 1,
-        sent.length + ' gorgons sent after ' + far.map((v) => v.toFixed(0)).join(',') + ' (' + heard.length + ' orders heard)');
+      check('the flayer, run by the room with them, summons its gorgons: sworn to it there, and everyone sees them so', made >= 1 && sworn.length === made && onB === sworn.length,
+        made + ' summoned, ' + sworn.length + ' sworn to it (the second screen shows ' + onB + ')');
+      //  shot from far off: it sends everything about it after the shooter — all in the room now
+      const x = m.x + 300, z = m.z;
+      FL.hurt(RD.M, m, 20, x, z);
+      const sent = sworn.filter((g) => g.hasT && Math.abs(g.tx - x) < 1 && g.st === 'chase');
+      check('the flayer, shot from far off, sends its gorgons after the shooter', sent.length === sworn.length && sent.length >= 1, sent.length + ' of ' + sworn.length + ' sent');
+      FL.despawnFlayer(RD.M, m);
     }
 
     // ---- given back --------------------------------------------------------------------

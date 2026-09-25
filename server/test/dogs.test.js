@@ -5,13 +5,14 @@
 //  break off and die, whoever runs them — and server/dogs.js with the room's
 //  own rules (relay.js): taken over from the host, told to those over there
 //  and nobody else, every shot at a dog judged here, the bites decided here,
-//  the host's flayers' and VECNA's orders made so, given back — and what a
-//  call costs.
+//  the room's own flayer commanding them, the host's VECNA's orders made so,
+//  given back — and what a call costs.
 //
 //    node server/test/dogs.test.js
 
 import DOG from '../../shared/dogs.js';
 import GOR from '../../shared/gorgons.js';
+import FL from '../../shared/flayers.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -170,48 +171,59 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   heal(A); RD.D.holdSpawn = false;
 }
 
-//  the host's flayer and VECNA: where they stand, their orders
+//  the room's own flayer, commanding them; the host's VECNA: where he stands, his orders
 {
   now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const fx = ax + 30, fz = az;
   const HDQ = 255 / 6.2832;
   const mob = () => say(A, 'mob', { f: [0, Math.round(fx * 10), Math.round(fz * 10), 0, 900, 1, 0], v: [Math.round((ax - 50) * 10), Math.round(az * 10), Math.round(1 * HDQ), 1500, 1, 2, 0, 0], g: null });
   mob();
-  check('the host\'s flayer and VECNA, from its snapshot', RD.mf[0] && Math.abs(RD.mf[0].x - fx) < 0.1 && RD.vec && RD.vec.awake);
+  check('the host\'s VECNA, from its snapshot — and not its flayers (the room has its own)', RD.vec && RD.vec.awake && !RD.flayers.some((m) => m.live));
+  //  a flayer of the room's, standing still with nothing to hunt (the players far off)
+  RD.M.holdSpawn = true;
+  const mf = FL.spawnFlayer(RD.M, { x: fx, z: fz });
+  const still = () => { mf.x = mf.rx = fx; mf.z = mf.rz = fz; mf.hasT = false; mf.st = 'wander'; mf.wx = fx; mf.wz = fz; mf.wanderT = 99; mf.summonT = 999; mf.escorted = true; mf.atk = null; };
+  still();
   const d = RD.dogs.find((q) => q.live && !q.dead && q.slot !== dog.slot);
   put(d, fx + 8, fz); d.st = 'wander'; d.lord = null;
   //  (nothing it knows of the players: with nothing to hunt, an escort keeps station)
   for (const q of RD.dogs) q.hasT = false;
   for (const pk of RD.D.packs) pk.tT = -99;
-  say(A, 'dord', { o: [['l', d.slot, 1, 0], ['s', d.slot, DOG.D_ST.indexOf('escort')]] });
   let escorts = 0;
-  for (let i = 0; i < 40; i++) { now += 50; mob(); say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); if (d.st === 'escort') escorts++; }
-  check('claimed by the host\'s flayer: it is the flayer\'s, and keeps station on it', d.lord === 'mf' && d.lordSlot === 0 && escorts > 30 && Math.hypot(d.x - fx, d.z - fz) < 30,
+  for (let i = 0; i < 60; i++) { now += 50; mob(); still(); for (const q of RD.dogs) if (q.lord !== 'mf') q.hasT = false; say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); if (d.st === 'escort') escorts++; }
+  check('the room\'s flayer claims one loose near it: it is the flayer\'s, and keeps station on it', d.lord === 'mf' && d.lordSlot === mf.slot && escorts > 30 && Math.hypot(d.x - fx, d.z - fz) < 30,
     d.lord + ' ' + d.st + ', ' + Math.hypot(d.x - fx, d.z - fz).toFixed(1) + ' m from it');
   out.length = 0;
   say(A, 'dord', { o: [['t', d.slot, Math.round(ax * 10), Math.round(az * 10), 5]] });
-  check('handed a target: it knows where', d.hasT && Math.abs(d.tx - ax) < 0.1 && RD.t - d.seeT > 0.4);
+  check('VECNA hands one a target: it knows where', d.hasT && Math.abs(d.tx - ax) < 0.1 && RD.t - d.seeT > 0.4);
   //  (a full district has no room for more — as in the game: a few far off are let go first)
-  for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - fx, q.z - fz) > 100).slice(0, 4)) DOG.despawnDog(RD.D, q);
+  for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - fx, q.z - fz) > 100).slice(0, 8)) DOG.despawnDog(RD.D, q);
   const n0 = RD.dogs.filter((q) => q.live).length;
-  const spots = [];
-  for (let k = 0; k < 64 && spots.length < 5; k++) { const x = fx + Math.sin(k * 0.7) * (12 + k * 0.3), z = fz + Math.cos(k * 0.7) * (12 + k * 0.3); if (F.clearAt(x, z, 1.4)) spots.push([x, z]); }
-  say(A, 'dord', { o: spots.map(([x, z]) => ['n', Math.round(x * 10), Math.round(z * 10), 1, 0, 0, 0, 0, 0, DOG.D_ST.indexOf('escort')]) });
-  const sworn = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'mf' && q.lordSlot === 0);
-  check('summoned: the flayer\'s retinue is made up to ' + DOG.RETINUE.mf + ', no more, each climbing out', sworn.length === DOG.RETINUE.mf && RD.dogs.filter((q) => q.live).length - n0 <= DOG.RETINUE.mf && sworn.some((q) => q.rise < 1),
+  FL.summon(RD.M, mf, 5, 0);
+  const sworn = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'mf' && q.lordSlot === mf.slot);
+  check('the flayer summons: its retinue is made up to ' + DOG.RETINUE.mf + ', no more, each climbing out', sworn.length === DOG.RETINUE.mf && RD.dogs.filter((q) => q.live).length - n0 <= DOG.RETINUE.mf && sworn.some((q) => q.rise < 1),
     sworn.length + ' sworn to it');
+  const spots = [];
+  for (let k = 0; k < 64 && spots.length < 8; k++) { const x = ax - 50 + Math.sin(k * 0.7) * (40 + k * 0.3), z = az + Math.cos(k * 0.7) * (40 + k * 0.3); if (F.clearAt(x, z, 1.4)) spots.push([x, z]); }
+  const v0 = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'vec').length;
+  say(A, 'dord', { o: spots.map(([x, z]) => ['n', Math.round(x * 10), Math.round(z * 10), 2, -1, 0, 0, 0, 0, DOG.D_ST.indexOf('escort')]) });
+  const vs = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'vec');
+  check('VECNA summons: his court is made up to ' + DOG.RETINUE.vec + ', no more', vs.length === DOG.RETINUE.vec && vs.length > v0, v0 + ' → ' + vs.length);
   out.length = 0;
   now += 600; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const dk = out.find(([to, m]) => to === A && m.s === 'dk');
-  check('the host\'s game is told what the dogs know (its flayer and VECNA learn through them)', dk && Array.isArray(dk[1].p.k) && dk[1].p.k.length % 4 === 0 && dk[1].p.k.length > 0, dk && (dk[1].p.k.length / 4 + ' dogs with a target'));
-  //  a dog linked to the flayer, shot: the flayer bleeds
+  check('the host\'s game is told what the dogs know (VECNA learns through them)', dk && Array.isArray(dk[1].p.k) && dk[1].p.k.length % 4 === 0 && dk[1].p.k.length > 0, dk && (dk[1].p.k.length / 4 + ' dogs with a target'));
+  //  a dog linked to the flayer, shot: the flayer bleeds, here
+  still();
   put(d, fx + 5, fz); d.hp = DOG.DOG_HP;
   now += 300; say(A, 'state', { x: fx + 15, y: 0, z: fz, r: 0, w: 1 });
   put(d, fx + 5, fz);
+  const hp0 = mf.hp;
   out.length = 0;
   say(A, 'dhit', { i: d.slot });
-  const sh = out.find(([to, m]) => to === A && m.s === 'dshare');
-  check('a dog within the flayer\'s link, shot: the host\'s game is told, so the flayer bleeds too', sh && sh[1].p.d === RULES.DMG, JSON.stringify(sh && sh[1].p));
+  check('a dog within the flayer\'s link, shot: the flayer bleeds a share, in the room, and nobody need be told', mf.hp < hp0 && Math.abs(hp0 - mf.hp - RULES.DMG * FL.MF_SHARE) < 0.01 && !out.some(([, m]) => m.s === 'dshare'),
+    hp0 + ' → ' + mf.hp);
+  FL.despawnFlayer(RD.M, mf);
   //  a gorgon (the room's own) moves them on; VECNA's carry
   const G0 = RD.gorgons.find((g) => g.live && !g.dead) || GOR.spawnGorgon(RD.G, { x: ax + 5, z: az + 60 });
   const g0 = RD.dogs.find((q) => q.live && !q.dead && !q.lord);
@@ -225,6 +237,7 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   check('a gorgon moves them on', pushed > 0.05 || g0.st === 'alert', pushed.toFixed(2) + ' m, ' + g0.st);
   say(A, 'dord', { o: [['p', g0.slot, Math.round(ax * 10), Math.round((az + 1000) * 10)]] });
   check('carried into a wall or off the map: not moved', Math.abs(g0.z - (az + 1000)) > 100);
+  RD.M.holdSpawn = false;
 }
 
 //  when nobody is over there: no dogs, and nothing sent
@@ -240,12 +253,15 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
 
 //  a minute of it, two players over there, the dogs on them: what a call costs
 let worst = 0, sum = 0, n = 0, thrown = null, bytes0 = RD.bytes;
+const part = {};                           // bytes a second, by what they carry
 try {
   for (let i = 0; i < 1200; i++) {
     now += 50;
     const t0 = process.hrtime.bigint();
     const k = i % 2, x = ax + Math.sin(i / 80) * 20, z = az + Math.cos(i / 80) * 20;
+    out.length = 0;
     say(k ? B : A, 'state', k ? { x: x - 4, y: 0, z, r: 0, w: 1 } : { x, y: 0, z, r: 0, w: 1 });
+    for (const [to, m] of out) if (to === A && m.s === 'dv') for (const key in m.p) part[key] = (part[key] || 0) + JSON.stringify(m.p[key]).length / 60;
     if (i % 40 === 0) say(A, 'shot', {});
     heal(A); R.players.get(B).hp = 100;
     const d = ms(t0); worst = Math.max(worst, d); sum += d; n++;
@@ -254,7 +270,8 @@ try {
 const engaged = RD.dogs.filter((d) => d.live && !d.dead && (d.st === 'chase' || d.st === 'attack' || d.st === 'reposition' || d.st === 'observe')).length;
 check('a minute of the pack on two players: no error, and no call near the 10 ms a call has', !thrown && worst < 9.5,
   (thrown ? thrown.message + ' ' : '') + 'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; ' + engaged + ' dogs on them at the end; the room built ' + theCity().built() + ' insides');
-check('and what it sends: a few KB a second to each over there', (RD.bytes - bytes0) / 60 / 2 < 8000, ((RD.bytes - bytes0) / 60 / 2 / 1024).toFixed(2) + ' KB/s each');
+check('and what it sends: a few KB a second to each over there', (RD.bytes - bytes0) / 60 / 2 < 8000, ((RD.bytes - bytes0) / 60 / 2 / 1024).toFixed(2) + ' KB/s each (' +
+  Object.entries(part).map(([key, b]) => key + ' ' + Math.round(b) + ' B/s').join(', ') + ')');
 
 //  one left: given back
 out.length = 0;

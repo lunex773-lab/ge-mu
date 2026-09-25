@@ -5,13 +5,14 @@
 //  round, swing, rage and die, whoever runs them — and the room running them
 //  beside the dogs (server/dogs.js) with its own rules: taken over from the
 //  host, told to those over there, every shot at one judged here, every
-//  swing's hit decided here, the host's flayers' and VECNA's orders made so,
-//  given back — and what a call costs.
+//  swing's hit decided here, the room's own flayer commanding them and the
+//  host's VECNA's orders made so, given back — and what a call costs.
 //
 //    node server/test/gorgons.test.js
 
 import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
+import FL from '../../shared/flayers.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -104,6 +105,7 @@ out.length = 0;
 for (let i = 0; i < 4; i++) { now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
 const dv = out.filter(([, m]) => m.s === 'dv');
 check('those over there are told every gorgon, nobody else', dv.length >= 1 && dv.every(([to]) => to === A) && dv.every(([, m]) => Array.isArray(m.p.q) && m.p.q.length === RD.gorgons.filter((g) => g.live).length * 7));
+RD.M.holdSpawn = true;                     // (no flayer of the room's own until one is wanted, below)
 out.length = 0;
 say(A, 'mob', { q: [1, 2, 3, 4, 5, 6, 7], g: null });
 check('the host\'s own gorgons are not passed on any more', out.find(([, m]) => m.s === 'mob')[1].p.q === undefined);
@@ -147,40 +149,42 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   heal(A);
 }
 
-//  the host's flayer and VECNA: their orders to the gorgons
+//  the room's own flayer, commanding them; the host's VECNA's orders
 {
   now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const fx = ax + 40, fz = az;
-  const mob = () => say(A, 'mob', { f: [0, Math.round(fx * 10), Math.round(fz * 10), 0, 900, 1, 0], v: [Math.round((ax - 60) * 10), Math.round(az * 10), 0, 1500, 1, 2, 0, 0], g: null });
+  const mob = () => say(A, 'mob', { v: [Math.round((ax - 60) * 10), Math.round(az * 10), 0, 1500, 1, 2, 0, 0], g: null });
   mob();
   for (const g of RD.gorgons) if (g.live) GOR.despawnGorgon(RD.G, g);
+  const mf = FL.spawnFlayer(RD.M, { x: fx, z: fz });
+  const still = () => { mf.x = mf.rx = fx; mf.z = mf.rz = fz; mf.hasT = false; mf.st = 'wander'; mf.wx = fx; mf.wz = fz; mf.wanderT = 99; mf.summonT = 999; mf.escorted = true; mf.atk = null; };
+  still();
   const s1 = spotNear(fx, fz, 14);
   const g1 = GOR.spawnGorgon(RD.G, s1);
   g1.hasT = false;
-  say(A, 'dord', { o: [['gl', g1.slot, 1, 0], ['gs', g1.slot, GOR.G_ST.indexOf('escort')]] });
   let escorts = 0;
-  for (let i = 0; i < 40; i++) { now += 50; mob(); say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); if (g1.st === 'escort') escorts++; }
-  check('claimed by the host\'s flayer: it is the flayer\'s, and keeps station on it', g1.lord === 'mf' && escorts > 30 && Math.hypot(g1.x - fx, g1.z - fz) < 40,
+  for (let i = 0; i < 60; i++) { now += 50; mob(); still(); g1.hasT = false; say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); if (g1.st === 'escort') escorts++; }
+  check('the room\'s flayer claims one loose near it: it is the flayer\'s, and keeps station on it', g1.lord === 'mf' && g1.lordSlot === mf.slot && escorts > 30 && Math.hypot(g1.x - fx, g1.z - fz) < 40,
     g1.lord + ' ' + g1.st + ', ' + Math.hypot(g1.x - fx, g1.z - fz).toFixed(1) + ' m from it');
   say(A, 'dord', { o: [['gt', g1.slot, Math.round(ax * 10), Math.round(az * 10), 5]] });
-  check('handed a target: it knows where', g1.hasT && Math.abs(g1.tx - ax) < 0.1);
-  const spots = [];
-  for (let k = 0; k < 64 && spots.length < 4; k++) { const q = spotNear(fx + Math.sin(k) * 20, fz + Math.cos(k) * 20, 4 + k * 0.3); if (q && !spots.some((o) => Math.hypot(o.x - q.x, o.z - q.z) < 4)) spots.push(q); }
-  say(A, 'dord', { o: spots.map((q) => ['gn', Math.round(q.x * 10), Math.round(q.z * 10), 1, 0, 0, 0, 0, 0, GOR.G_ST.indexOf('escort')]) });
-  const sworn = RD.gorgons.filter((g) => g.live && !g.dead && g.lord === 'mf' && g.lordSlot === 0);
-  check('summoned: the flayer\'s gorgons are made up to ' + GOR.RETINUE.mf + ', no more, each climbing out', sworn.length === GOR.RETINUE.mf && sworn.some((g) => g.rise < 1), sworn.length + ' sworn to it');
+  check('VECNA hands one a target: it knows where', g1.hasT && Math.abs(g1.tx - ax) < 0.1);
+  FL.summon(RD.M, mf, 0, 4);
+  const sworn = RD.gorgons.filter((g) => g.live && !g.dead && g.lord === 'mf' && g.lordSlot === mf.slot);
+  check('the flayer summons: its gorgons are made up to ' + GOR.RETINUE.mf + ', no more, each climbing out', sworn.length === GOR.RETINUE.mf && sworn.some((g) => g.rise < 1), sworn.length + ' sworn to it');
   out.length = 0;
   now += 600; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const dk = out.find(([to, m]) => to === A && m.s === 'dk');
-  check('the host\'s game is told what the gorgons know (its flayer and VECNA learn through them)', dk && Array.isArray(dk[1].p.g) && dk[1].p.g.length >= 4, dk && (dk[1].p.g.length / 4 + ' gorgons with a target'));
-  //  one linked to the flayer, shot: the flayer bleeds
+  check('the host\'s game is told what the gorgons know (VECNA learns through them)', dk && Array.isArray(dk[1].p.g) && dk[1].p.g.length >= 4, dk && (dk[1].p.g.length / 4 + ' gorgons with a target'));
+  //  one linked to the flayer, shot: the flayer bleeds, here
+  still();
   put(g1, fx + 8, fz); g1.hp = GOR.GOR_HP;
   now += 300; say(A, 'state', { x: fx + 20, y: 0, z: fz, r: 0, w: 1 });
   put(g1, fx + 8, fz);
+  const hp0 = mf.hp;
   out.length = 0;
   say(A, 'ghit', { i: g1.slot });
-  const sh = out.find(([to, m]) => to === A && m.s === 'dshare');
-  check('a gorgon within the flayer\'s link, shot: the host\'s game is told, so the flayer bleeds too', sh && sh[1].p.d === RULES.DMG, JSON.stringify(sh && sh[1].p));
+  check('a gorgon within the flayer\'s link, shot: the flayer bleeds a share, in the room', Math.abs(hp0 - mf.hp - RULES.DMG * FL.MF_SHARE) < 0.01 && !out.some(([, m]) => m.s === 'dshare'), hp0 + ' → ' + mf.hp);
+  FL.despawnFlayer(RD.M, mf);
   //  VECNA keeps his ground clear of them
   const g2 = sworn.find((g) => g !== g1) || g1;
   put(g2, ax - 60 + 5, az); g2.st = 'wander'; g2.lord = null;
