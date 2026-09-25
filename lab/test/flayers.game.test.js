@@ -49,7 +49,7 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
     const B = await room.player({ room: 'mfs', nick: 'Ben' });
     await ev(B, 'window.__t.noRender(); 1');
     await A.join(); await sleep(2000);
-    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; MFS.spawnCd = 1e9; vecHoldSpawn = true; DOGS.holdSpawn = true; GORS.holdSpawn = true; 1');
+    await ev(A, 'window.__t.noRender(); MFS.holdSpawn = true; MFS.spawnCd = 1e9; VS.holdSpawn = true; DOGS.holdSpawn = true; GORS.holdSpawn = true; 1');
     await ev(A, 'setWorld(WS.BACK); 1');
     const at = JSON.parse(await ev(A, STAND(11, 10)));
     //  one, 70 m off, standing about with nothing to hunt, a little hurt
