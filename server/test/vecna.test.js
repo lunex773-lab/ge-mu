@@ -278,10 +278,12 @@ rv.vuln = 0;
   const wq = RD.wrecks[k2]; wq.x = rv.x + 10; wq.z = rv.z; wq.y = 0;
   rv.hasT = true; rv.tx = ax; rv.tz = az; rv.seeT = RD.t;
   out.length = 0;
-  const took = VC.lift(RD.V, 1);
+  const took = VC.lift(RD.V, 1), up = rv.orbit.length ? rv.orbit[0].k : -1;
   for (let i = 0; i < 20; i++) { put(s8.x, s8.z); now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  //  (he may take up another of his own meanwhile: what he is told to hold is what he holds)
   const vo = out.filter(([, m]) => m.s === 'dv' && Array.isArray(m.p.vo)).map(([, m]) => m.p.vo).pop();
-  check('he takes a car up: those over there are told what he holds', took === 1 && vo && vo.length === 7 && vo[0] === rv.orbit[0].k, vo && JSON.stringify(vo));
+  const ks = vo ? vo.filter((q, i) => i % 7 === 0) : [];
+  check('he takes a car up: those over there are told what he holds', took === 1 && vo && ks.includes(up) && vo.length === 7 * rv.orbit.length && rv.orbit.every((o) => ks.includes(o.k)), vo && JSON.stringify(vo));
   out.length = 0;
   rv.atkCd = 0; VC.startAtk(RD.V, 'hurl');
   let flew = 0, down = null;
