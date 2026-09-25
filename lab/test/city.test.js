@@ -102,6 +102,17 @@ const ev = (P, src) => P.eval((s) => window.__t.ev(s), src);
         return Q.length + ' places: ' + inside + ' inside a building, ' + pushed + ' pushed out of a wall, ' + routed + ' sent by a door or a stair; the room built ' + L.built() + ' of ' + B.length + ' insides';
       });
     }
+    //  the other side's wrecks (shared/wrecks.js): where the game has them, the
+    //  room has them — from the same seed and the same cars' shapes
+    {
+      const inGame = JSON.parse(await ev(A, 'buildWrecks(); JSON.stringify(wrecks)'));
+      const WR = require('../../shared/wrecks.js'), TF = require('../../shared/traffic.js');
+      const inRoom = JSON.parse(JSON.stringify(WR.makeWrecks(TF.makeTraffic({ now: () => 0 }).cars)));
+      test('the wrecks on the other side: the same in the game and in the room', () => {
+        assert.deepStrictEqual(inRoom, inGame);
+        return inGame.filter(Boolean).length + ' wrecks';
+      });
+    }
     await A.close();
   } finally { await room.close(); }
   console.log('\nTHE CITY, SHARED — the same city for the game and the server\n');
