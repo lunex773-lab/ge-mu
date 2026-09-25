@@ -335,4 +335,159 @@ function footprints(buildings) {
   return { clearAt, roof };
 }
 
-module.exports = { N, PITCH, RW, SWW, HALF, FH, WGRID_H, WGRID_V, ACC_MAX, SEED, BTYPE, GLASS, mulberry32, planBuildings, interior, buildCity, lazyCity, rayAabb, aabbTouch, rayCity, rayLazy, footprints };
+//  ---- walking about inside it: floors, walls, doors and stairs --------------
+//  What is underfoot at a point, pushing a body out of the walls it overlaps,
+//  which building a point is in, and the way to another floor of it — for
+//  the player and for every creature, in the game and in the room server.
+//
+//  near(x, z) lists the buildings in the 3×3 cells about a point. The game
+//  has every building's record built, and a table of them (index.html
+//  cityNear). The room builds a building's inside only when something first
+//  stands in it (lazyNear): what near gives it are stand-ins — the
+//  building's bounds, centre and size — and full(q) the record itself.
+//  Every question checks the bounds before it reads the inside, so the
+//  answers are the same numbers either way.
+function ground(near, full) {
+  const rec = full || ((q) => q);
+  // highest walkable surface at (x,z) no more than a small step above the feet
+  function supportHeight(x, z, feetY) {
+    let s = 0; const step = 0.62, list = near(x, z);
+    for (let i = 0; i < list.length; i++) {
+      const q = list[i];
+      if (x < q.bounds.x0 || x > q.bounds.x1 || z < q.bounds.z0 || z > q.bounds.z1) continue;
+      const r = rec(q);
+      for (const b of r.slabs) if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && b.y1 <= feetY + step && b.y1 > s) s = b.y1;
+      for (const m of r.ramps) if (x >= m.x0 && x <= m.x1 && z >= m.z0 && z <= m.z1) {
+        const ry = m.yA + (m.yB - m.yA) * Math.max(0, Math.min(1, (z - m.z0) / (m.z1 - m.z0)));
+        if (ry <= feetY + step && ry > s) s = ry;
+      }
+    }
+    return s;
+  }
+  // push out of any wall the body actually overlaps vertically (so doorways pass
+  // and window bands stay open above the sill). (wx0…wz1: where the building's
+  // walls reach — its bounds, sideways: wallReach)
+  function collide(pos, feetY, headY, rad) {
+    for (let pass = 0; pass < 2; pass++) {
+      const list = near(pos.x, pos.z);
+      for (let i = 0; i < list.length; i++) {
+        const q = list[i];
+        if (pos.x <= q.wx0 - rad || pos.x >= q.wx1 + rad || pos.z <= q.wz0 - rad || pos.z >= q.wz1 + rad) continue;
+        const walls = rec(q).walls;
+        for (let j = 0; j < walls.length; j++) {
+          const b = walls[j];
+          if (headY <= b.y0 || feetY >= b.y1) continue;
+          const minx = b.x0 - rad, maxx = b.x1 + rad, minz = b.z0 - rad, maxz = b.z1 + rad;
+          if (pos.x > minx && pos.x < maxx && pos.z > minz && pos.z < maxz) {
+            const dxL = pos.x - minx, dxR = maxx - pos.x, dzL = pos.z - minz, dzR = maxz - pos.z;
+            if (Math.min(dxL, dxR) < Math.min(dzL, dzR)) pos.x = dxL < dxR ? minx : maxx;
+            else pos.z = dzL < dzR ? minz : maxz;
+          }
+        }
+      }
+    }
+  }
+  // ---- getting in, and getting upstairs -------------------------------
+  //  A creature used to steer straight at you and press its face against the
+  //  wall you were standing behind — or, worse, walk through it, because a
+  //  0.32 m wall is thinner than one frame of a nine-metre-a-second charge.
+  //  These four give it the same route you have: the door, then the flights.
+  function bldAt(x, z) {
+    const list = near(x, z);
+    for (let i = 0; i < list.length; i++) {
+      const q = list[i];
+      if (x > q.cx - q.hw && x < q.cx + q.hw && z > q.cz - q.hd && z < q.cz + q.hd) return rec(q);
+    }
+    return null;
+  }
+  //  The next foothold on the way to a floor of this building. Stateless on
+  //  purpose: it is recomputed from where the animal actually is, so shoving it
+  //  off a step or killing the one in front never leaves anybody following a
+  //  plan that has stopped being true.
+  function stairStep(r, ax, az, ay, want) {
+    const S = r.stair, here = FLOOR_OF(ay);
+    if (S.top < 1) return null;                        // nothing to climb
+    const inShaft = ax > S.x0 - 0.5 && ax < S.x1 + 0.5 && az > S.z0 - 0.5 && az < S.z1 + 0.5;
+    if (!inShaft) return { x: S.ex, z: S.land };       // find the stairwell first
+    const up = want > here, west = ax < (S.x0 + S.x1) / 2;
+    //  Going up you take the west run outward and the east run back; going down
+    //  it is the other way about, because that is the way the flights are built.
+    const climbX = up ? S.wx : S.ex, backX = up ? S.ex : S.wx;
+    if (az < S.foot + 0.6) {                           // on an arrival landing
+      return (west === (climbX === S.wx)) ? { x: climbX, z: S.head } : { x: climbX, z: S.land };
+    }
+    if (az > S.head - 0.6) {                           // at the turn
+      return Math.abs(ax - backX) > 0.7 ? { x: backX, z: S.half } : { x: backX, z: S.foot };
+    }
+    return { x: west ? S.wx : S.ex, z: (west === up) ? S.head : S.foot };   // mid-flight: keep going
+  }
+  //  null means "the way is clear, walk at them". Anything else is somewhere to
+  //  put your feet first.
+  function navNext(ax, az, ay, tx, tz, ty) {
+    const me = bldAt(ax, az), you = bldAt(tx, tz);
+    const mf = FLOOR_OF(ay);
+    if (me === you) {
+      if (!me) return null;                            // both out on the street
+      const yf = FLOOR_OF(ty);
+      return mf === yf ? null : stairStep(me, ax, az, ay, yf);
+    }
+    if (me) {                                          // in the wrong building: leave it
+      if (mf > 0) return stairStep(me, ax, az, ay, 0);
+      //  On the ground and still in the stairwell, the door is not reachable in
+      //  a straight line: the shaft is walled along its side and its only mouth
+      //  is past the end of the flights. Aiming at the entrance from in here
+      //  presses an animal into that side wall until something else moves it,
+      //  which is precisely what one of them spent forty-nine seconds doing.
+      const S = me.stair;
+      if (ax > S.x0 - 0.5 && ax < S.x1 + 0.5 && az > S.z0 - 0.5 && az < S.z1 + 0.5) {
+        if (az > S.foot + 0.4) return { x: (S.x0 + S.x1) / 2, z: S.land };   // down to the landing
+        return { x: S.x1 + 1.8, z: S.land };                                  // and out of the shaft
+      }
+      return { x: me.door.x, z: me.door.out };
+    }
+    //  Outside, and you are in there. Two waypoints, not one: standing *at* the
+    //  approach point still leaves it outside, so a single door target has it
+    //  arrive and then queue there for ever, nose against the canopy. The
+    //  second one is through the opening, which is what makes it a door rather
+    //  than a place to stand.
+    const dd = Math.hypot(ax - you.door.x, az - you.door.out);
+    return dd < 3.6 ? { x: you.door.x, z: you.door.in } : { x: you.door.x, z: you.door.out };
+  }
+  return { supportHeight, collide, bldAt, stairStep, navNext };
+}
+const FLOOR_OF = (y) => Math.max(0, Math.round(y / FH));
+//  Reachable at all? Two metres of height difference is a different storey,
+//  and nothing bites through a floor slab.
+const SAME_FLOOR = 2.1;
+const onSameLevel = (ay, ty) => Math.abs(ay - ty) < SAME_FLOOR;
+//  where a building's walls reach, sideways: set on its record (wx0, wx1, wz0,
+//  wz1) so a body nowhere near them skips the lot with four compares
+function wallReach(r) {
+  r.wx0 = r.wz0 = Infinity; r.wx1 = r.wz1 = -Infinity;
+  for (const b of r.walls) { r.wx0 = Math.min(r.wx0, b.x0); r.wx1 = Math.max(r.wx1, b.x1); r.wz0 = Math.min(r.wz0, b.z0); r.wz1 = Math.max(r.wz1, b.z1); }
+  return r;
+}
+//  near() for lazyCity(): per cell, stand-ins for the buildings about it
+//  (their bounds; the walls reach exactly as far sideways — the ground
+//  floor's shell), each building's inside built the first time it is asked
+//  for. Returns { near, full }, for ground().
+function lazyNear(city) {
+  const R = N + 3, W = 2 * R + 1, none = [], table = [], cell = new Map();
+  const stand = city.buildings.map((b, i) => { const bb = city.bounds[i];
+    return { i, bounds: bb, cx: b.cx, cz: b.cz, hw: b.hw, hd: b.hd, wx0: bb.x0, wx1: bb.x1, wz0: bb.z0, wz1: bb.z1 }; });
+  for (const q of stand) { const k = Math.round(q.cx / PITCH) + ',' + Math.round(q.cz / PITCH); let a = cell.get(k); if (!a) cell.set(k, a = []); a.push(q); }
+  for (let i = -R; i <= R; i++) for (let j = -R; j <= R; j++) {
+    const list = [];
+    for (let oi = -1; oi <= 1; oi++) for (let oj = -1; oj <= 1; oj++) { const a = cell.get((i + oi) + ',' + (j + oj)); if (a) for (const q of a) list.push(q); }
+    table[(i + R) * W + (j + R)] = list;
+  }
+  function near(x, z) {
+    const bi = Math.round(x / PITCH), bj = Math.round(z / PITCH);
+    if (bi < -R || bi > R || bj < -R || bj > R) return none;
+    return table[(bi + R) * W + (bj + R)];
+  }
+  return { near, full: (q) => city.rec(q.i) };
+}
+
+module.exports = { N, PITCH, RW, SWW, HALF, FH, WGRID_H, WGRID_V, ACC_MAX, SEED, BTYPE, GLASS, mulberry32, planBuildings, interior, buildCity, lazyCity, rayAabb, aabbTouch, rayCity, rayLazy, footprints,
+  ground, FLOOR_OF, SAME_FLOOR, onSameLevel, wallReach, lazyNear };

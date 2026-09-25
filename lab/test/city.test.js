@@ -69,6 +69,39 @@ const ev = (P, src) => P.eval((s) => window.__t.ev(s), src);
       }
       return spots.length + ' spots, ' + blocked + ' inside a footprint, ' + roofed + ' under a roof';
     });
+    //  walking about inside it (shared/city.js ground): the game, with every
+    //  building built, and the room, building each only when first stood in,
+    //  give the same floor underfoot, push a body out of the same walls, find
+    //  the same building, and take the same way to the door and up the stairs
+    {
+      const rnd = C.mulberry32(0xd06);
+      const B = shared.buildings, Q = [];
+      for (let i = 0; i < 6000; i++) {
+        let x, z;
+        if (i % 3) { const b = B[(rnd() * B.length) | 0]; x = b.cx + (rnd() * 2 - 1) * (b.hw + 2); z = b.cz + (rnd() * 2 - 1) * (b.hd + 2); }
+        else { x = (rnd() * 2 - 1) * 360; z = (rnd() * 2 - 1) * 360; }
+        const y = rnd() < 0.5 ? 0 : Math.floor(rnd() * 6) * C.FH + rnd() * 1.5;
+        const t = B[(rnd() * B.length) | 0], tx = rnd() < 0.5 ? t.cx + (rnd() - 0.5) * t.hw : x + (rnd() - 0.5) * 60, tz = rnd() < 0.5 ? t.cz + (rnd() - 0.5) * t.hd : z + (rnd() - 0.5) * 60;
+        Q.push([+x.toFixed(3), +z.toFixed(3), +y.toFixed(3), +tx.toFixed(3), +tz.toFixed(3), Math.floor(rnd() * 6) * C.FH]);
+      }
+      const ask = (G, id) => Q.map(([x, z, y, tx, tz, ty]) => {
+        const pos = { x, z }; G.collide(pos, y + 0.05, y + 0.95, 0.42);
+        const b = G.bldAt(x, z), w = G.navNext(x, z, y, tx, tz, ty);
+        return [G.supportHeight(x, z, y + 0.5), pos.x, pos.z, b ? id(b) : -1, w ? [w.x, w.z] : null];
+      });
+      const inGame = JSON.parse(await ev(A, `(() => { const Q = ${JSON.stringify(Q)}; const G = { supportHeight, collide: (p, f, h, r) => { const v = new THREE.Vector3(p.x, 0, p.z); cityCollide(v, f, h, r); p.x = v.x; p.z = v.z; }, bldAt, navNext };
+        return JSON.stringify((${ask.toString()})(G, (b) => cityB.indexOf(b))); })()`));
+      const L = C.lazyCity(), LN = C.lazyNear(L), G = C.ground(LN.near, LN.full);
+      const inRoom = ask(G, (b) => shared.recs.findIndex((r) => r.cx === b.cx && r.cz === b.cz));
+      test('walking about inside: the same floor, walls, building and way, in the game and in the room', () => {
+        let inside = 0, pushed = 0, routed = 0;
+        Q.forEach((q, i) => {
+          assert.deepStrictEqual(inRoom[i], inGame[i], 'at ' + JSON.stringify(q));
+          if (inGame[i][3] >= 0) inside++; if (inGame[i][1] !== q[0] || inGame[i][2] !== q[1]) pushed++; if (inGame[i][4]) routed++;
+        });
+        return Q.length + ' places: ' + inside + ' inside a building, ' + pushed + ' pushed out of a wall, ' + routed + ' sent by a door or a stair; the room built ' + L.built() + ' of ' + B.length + ' insides';
+      });
+    }
     await A.close();
   } finally { await room.close(); }
   console.log('\nTHE CITY, SHARED — the same city for the game and the server\n');
