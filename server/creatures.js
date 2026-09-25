@@ -5,8 +5,8 @@
 //  always has: nothing is sent, nothing is waited for. With two or more,
 //  the room runs them — so far Beelzebub (boss.js), the monkey troop
 //  (troop.js), the day side's traffic (traffic.js) and the other side's dogs
-//  (dogs.js) — and everyone is told the same, nobody's phone carrying them
-//  for the rest.
+//  and gorgons (dogs.js) — and everyone is told the same, nobody's phone
+//  carrying them for the rest.
 //
 //  Handing one over, so that it is never run twice and never not at all:
 //
@@ -23,7 +23,7 @@
 //                       for its traffic ('tq' → 'tfull'), carries on from that
 //                       — the host sees no change — and tells everyone ('own'
 //                       { t: 1 }); if no answer comes, it starts the city's own.
-//                       The dogs the same way ('dq' → 'dfull', { d: 1 }); with
+//                       The dogs and gorgons the same way ('dq' → 'dfull', { d: 1 }); with
 //                       no answer, an empty district, stocked as soon as
 //                       someone is over there.
 //    one is left      → the room tells them it no longer does, with its last
@@ -103,7 +103,7 @@ export class Creatures {
     if (this.own.m) { delete p.m; delete p.c; delete p.r; }
     //  the dogs are the room's to tell of; their masters are still the host's,
     //  and the dogs need to know where they stand
-    if (this.own.d) { delete p.k; delete p.kf; this.dogs.hearMasters(p, this.now || 0); }
+    if (this.own.d) { delete p.k; delete p.kf; delete p.q; this.dogs.hearMasters(p, this.now || 0); }
   }
   //  someone came or went
   recount() {
@@ -192,6 +192,8 @@ export class Creatures {
   }
   //  a round at dog i, when the room runs the dogs (false when it does not)
   dogShot(from, i, now) { if (!this.own.d) return false; this.dogs.shot(from, i, now); return true; }
+  //  … and at gorgon i
+  gorShot(from, i, now) { if (!this.own.d) return false; this.dogs.shot(from, i, now, true); return true; }
   //  what the host's flayers and VECNA did to the dogs (dogs.js orders)
   dogOrders(from, p) { if (this.own.d && from === this.room.host()) this.dogs.orders(p); }
 

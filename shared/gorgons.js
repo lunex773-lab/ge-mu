@@ -47,6 +47,7 @@ const G_PRED_R = 2.9, G_PRED_DMG = 34;             // heavy, never lethal from f
 const G_ENRAGE = 0.30;
 const G_RISE_T = 2.4;                 // s climbing out of the ground
 const G_KEEP = 58, G_APART = 150;     // never spawned this near anyone, nor this near another
+const RETINUE = { mf: 2, vec: 2 };    // how many a flayer, and VECNA, keep about them
 const WORLD = RULES.WORLD;
 //  a gorgon's state, as a snapshot numbers it (index 1…)
 const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage', 'escort', 'flank'];
@@ -217,9 +218,11 @@ function spawnSpot(G) {
   }
   return best;
 }
-function spawnGorgon(G, at) {
+//  (slot: this one, when a snapshot says which — else the first free)
+function spawnGorgon(G, at, slot) {
   const E = G.env, rnd = E.random, gorgons = G.gorgons;
-  let g = gorgons.find((o) => !o.live);
+  if (slot !== undefined) while (gorgons.length <= slot) gorgons.push({ slot: gorgons.length, live: false });
+  let g = slot === undefined ? gorgons.find((o) => !o.live) : gorgons[slot];
   if (!g && gorgons.length >= NGOR) return null;
   const spot = at || spawnSpot(G); if (!spot) return null;
   if (!g) { g = { slot: gorgons.length, live: false }; gorgons.push(g); }
@@ -553,7 +556,7 @@ function adoptFull(G, r) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    NGOR, GOR_WILD, GOR_HP, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
+    NGOR, GOR_WILD, GOR_HP, RETINUE, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
     makeGorgons, startAtk, runAtk, step, see, spawnSpot, spawnGorgon, despawnGorgon, clearGorgons, think, hurt, kill, stock, fighting,
     marks, snapRows, fullState, fullOk, adoptFull,
   };

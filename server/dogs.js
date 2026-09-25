@@ -1,29 +1,33 @@
 //  ============================================================
-//  CONTOUR — the other side's dogs, run by the room  (B9d)
+//  CONTOUR — the other side's wildlife, run by the room  (B9d, B9e)
 //  ============================================================
-//  With two or more players in the room, the room runs the demodogs — the
-//  same code a player's game runs them with alone (shared/dogs.js) — and
-//  they hunt everyone over there, not only the one whose phone ran them.
-//  Fed from what the room knows: where each player is, which side of the
-//  tear, whether they are down or cloaked, which way they face, how fast
-//  they move (a sprint is heard) and when they fire (a shot is heard across
-//  the district). The room decides the bites, and judges every shot at a dog.
+//  With two or more players in the room, the room runs the demodogs and
+//  the demogorgons — the same code a player's game runs them with alone
+//  (shared/dogs.js, shared/gorgons.js) — and they hunt everyone over there,
+//  not only the one whose phone ran them. Fed from what the room knows:
+//  where each player is, which side of the tear, whether they are down or
+//  cloaked, which way they face, how fast they move (a sprint is heard) and
+//  when they fire (a shot is heard across the district). The room decides
+//  the bites and the swings, and judges every shot at a dog or a gorgon.
 //
-//  Everyone over there is sent the pack ('dv'), in the game's own snapshot
-//  form, ten times a second: every dog once in eight, and between those the
-//  ones near someone over there and any whose health, state or marks
-//  changed. Nobody on the day side is sent any of it.
+//  Everyone over there is sent them ('dv'), in the game's own snapshot
+//  forms, ten times a second: the pack — every dog once in eight, and
+//  between those the ones near someone over there and any whose health,
+//  state or marks changed — and every gorgon (there are a handful). Nobody
+//  on the day side is sent any of it.
 //
-//  Their masters — the flayers and VECNA — and the gorgons still run in the
-//  host's game (for now). What the room needs of them it reads from the
-//  host's snapshots (where they stand, and who is sworn to whom); what they
-//  do to the dogs, the host's game writes down and sends ('dord': a dog
-//  claimed, handed a target, carried along, summoned — orders), and the
-//  room makes it so. The other way, the host's game is told what the dogs
-//  know ('dk': their masters learn through them) and when a dog linked to a
-//  flayer is hurt ('dshare': the flayer bleeds too).
+//  Their masters — the flayers and VECNA — still run in the host's game
+//  (for now). What the room needs of them it reads from the host's
+//  snapshots (where they stand, and whether they stand); what they do to the
+//  dogs and gorgons the host's game writes down and sends ('dord': claimed,
+//  handed a target, set going, carried along, summoned — orders; and the
+//  wrecks they pick up and throw), and the room makes it so. The other way,
+//  the host's game is told what the dogs and gorgons know ('dk': their
+//  masters learn through them) and when one linked to a flayer is hurt
+//  ('dshare': the flayer bleeds too).
 
 import DOG from '../shared/dogs.js';
+import GOR from '../shared/gorgons.js';
 import CITY from '../shared/city.js';
 import WR from '../shared/wrecks.js';
 import TF from '../shared/traffic.js';
@@ -32,12 +36,14 @@ import RULES from '../shared/rules.js';
 import { theCity, theFootprints } from './combat.js';
 
 const STEP = 0.05;                         // s: 20 Hz
-const TELL_MS = 100;                       // the pack, to everyone over there
-const KNOW_MS = 500;                       // what the dogs know, to the host's flayers and VECNA
+const TELL_MS = 100;                       // the pack and the gorgons, to everyone over there
+const KNOW_MS = 500;                       // what they know, to the host's flayers and VECNA
 const FULL_EVERY = 8;                      // every eighth word is the whole pack
 const NEAR = 110;                          // m: a dog this near someone over there goes out every time (index.html DOG_NEAR)
 const BITE_GAP = 420;                      // ms: a player bitten is not bitten again sooner (index.html dogHitCd)
+const CLAW_GAP = 500;                      // ms: nor struck by a gorgon (index.html gorHitCd)
 const CHEST = 1.0;                         // m above its feet: where a shot at a dog is aimed (the game's hit spheres)
+const G_CHEST = 1.55;                      // … and at a gorgon (the second of its column of spheres)
 const HDQ = TROOP.HDQ;
 const LIM = RULES.WORLD * 0.44;
 
@@ -58,30 +64,43 @@ export class RoomDogs {
     this.F = theFootprints();
     //  (a room's own copy: the host's flayers and VECNA pick them up and throw them)
     this.wrecks = theWrecks().map((w) => (w ? Object.assign({}, w) : null));
-    this.who = [];                         // the players over there, as the dogs see them (look)
+    this.who = [];                         // the players over there, as the animals see them (look)
     this.byId = new Map();
-    this.mf = []; this.vec = null; this.gors = [];   // the host's flayers, VECNA and gorgons (hearMasters)
-    this.D = DOG.makeDogs({
+    this.mf = []; this.vec = null;         // the host's flayers and VECNA (hearMasters)
+    const world = {
       now: () => this.t, random: Math.random,
       targets: () => this.who,
       clearAt: this.F.clearAt, supportHeight: G.supportHeight, collide: G.collide, bldAt: G.bldAt, navNext: G.navNext,
       rayCity: (ro, rd, max) => CITY.rayLazy(theCity(), ro, rd, max),
       wrecks: () => this.wrecks,
       master: (tag, slot) => this.master(tag, slot),
-      gorgons: () => this.gors, vec: () => this.vec,
+      vec: () => this.vec,
+    };
+    this.D = DOG.makeDogs(Object.assign({}, world, {
+      gorgons: () => this.G.gorgons,
       bite: (d) => this.bite(d),
       on: { call: noop, hurt: noop, death: noop, gone: noop, share: (x, z, dmg) => this.share(x, z, dmg) },
-    });
-    this.bytes = 0; this.sent = 0;         // (for tests and for a look: what the pack has cost to send)
+    }));
+    this.G = GOR.makeGorgons(Object.assign({}, world, {
+      noises: () => this.D.noises,
+      claw: (g, kind, reach, dmg) => this.claw(g, kind, reach, dmg),
+      on: { wind: noop, swing: noop, growl: noop, roar: noop, hurt: noop, death: noop, gone: noop, share: (x, z, dmg) => this.share(x, z, dmg) },
+    }));
+    this.bytes = 0; this.sent = 0;         // (for tests and for a look: what they have cost to send)
   }
   get dogs() { return this.D.dogs; }
+  get gorgons() { return this.G.gorgons; }
 
-  //  carrying on from what the host's game had (shared/dogs.js fullState); none: an empty district, stocked when someone is over there
+  //  carrying on from what the host's game had (shared/dogs.js and gorgons.js
+  //  fullState: { k: the dogs, g: the gorgons }); none: an empty district,
+  //  stocked when someone is over there
   adopt(f) {
     if (f && DOG.fullOk(f)) DOG.adoptFull(this.D, f);
+    if (f && GOR.fullOk(f.g)) GOR.adoptFull(this.G, f.g);
     this.took = this.D.dogs.filter((d) => d.live).map((d) => [d.slot, d.x, d.z]);
+    this.tookG = this.G.gorgons.filter((g) => g.live).map((g) => [g.slot, g.x, g.z, g.hp]);
   }
-  full() { return DOG.fullState(this.D); }
+  full() { return Object.assign(DOG.fullState(this.D), { g: GOR.fullState(this.G) }); }
 
   //  ---- who is over there -----------------------------------------------------
   //  every player on the other side, as a target: where (their last state),
@@ -93,12 +112,12 @@ export class RoomDogs {
       const h = p.hist;
       if (!p.w || h.length < 4) { this.byId.delete(id); continue; }
       let t = this.byId.get(id);
-      if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, noiseT: 0 });
+      if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0 });
       const n = h.length;
       t.x = h[n - 3]; t.y = h[n - 2]; t.z = h[n - 1]; t.ey = t.y + RULES.EYE;
       t.dead = !!p.dead; t.cloak = !!p.inv;
       const yaw = Number.isFinite(p.yaw) ? p.yaw : 0;
-      t.fx = -Math.sin(yaw); t.fz = -Math.cos(yaw);
+      t.yaw = yaw; t.fx = -Math.sin(yaw); t.fz = -Math.cos(yaw);
       //  how fast, over the last quarter second or so
       let k = n - 4;
       while (k >= 4 && h[n - 4] - h[k] < 250) k -= 4;
@@ -112,7 +131,7 @@ export class RoomDogs {
     }
     return who.length;
   }
-  //  a shot fired over there: every dog in the district hears it
+  //  a shot fired over there: everything in the district hears it
   heard(from) {
     const t = this.byId.get(from);
     if (t && !t.dead) DOG.noise(this.D, t.x, t.z, 1.0, 'shot');
@@ -122,12 +141,17 @@ export class RoomDogs {
   step(now) {
     const dt = this.last === undefined ? 0 : Math.min(0.5, (now - this.last) / 1000);
     this.last = now; this.nowMs = now;
-    //  nobody over there: no dogs (a game clears its own as it leaves)
-    //  (and the next to cross finds the district filling at once, not after the
-    //  last top-up's wait)
-    if (!this.look(now)) { if (this.D.dogs.some((d) => d.live)) DOG.clearDogs(this.D); this.D.spawnCd = 0; this.acc = 0; return; }
+    //  nobody over there: none of them (a game clears its own as it leaves) —
+    //  and the next to cross finds the district filling at once, not after the
+    //  last top-up's wait
+    if (!this.look(now)) {
+      if (this.D.dogs.some((d) => d.live)) DOG.clearDogs(this.D);
+      if (this.G.gorgons.some((g) => g.live)) GOR.clearGorgons(this.G);
+      this.D.spawnCd = 0; this.G.spawnCd = 0; this.acc = 0;
+      return;
+    }
     this.acc += dt;
-    const D = this.D;
+    const D = this.D, G = this.G;
     //  One more building's inside, each time, until the room has them all.
     //  Built only when first needed, a dog running along a street would now
     //  and then need several at once (a few tenths of a ms each) — the one
@@ -137,6 +161,7 @@ export class RoomDogs {
     while (this.acc >= STEP) {
       this.acc -= STEP; this.t += STEP;
       DOG.stock(D, STEP);
+      GOR.stock(G, STEP);
       this.frame++;
       for (const d of D.dogs) {
         if (!d.live) continue;
@@ -147,7 +172,16 @@ export class RoomDogs {
         const every = lod === 0 ? 1 : lod === 1 ? 3 : lod === 2 ? 8 : 24;
         if ((this.frame + d.slot) % every === 0) DOG.tick(D, d, STEP * every);
       }
-      for (const g of this.gors) if (g.live && !g.dead) DOG.shove(D, g, STEP);
+      for (const g of G.gorgons) {
+        if (!g.live) continue;
+        if (g.rise < 1) g.rise = Math.min(1, g.rise + STEP / GOR.G_RISE_T);
+        //  a fight always every step; otherwise by distance (50 / 110 / 220 m), as the game does
+        const q = DOG.nearestTo(this.who, g.x, g.z).d, lod = q < 50 ? 0 : q < 110 ? 1 : q < 220 ? 2 : 3;
+        const every = (GOR.fighting(g) || lod === 0) ? 1 : lod === 1 ? 3 : lod === 2 ? 8 : 24;
+        if ((this.frame + g.slot) % every === 0) GOR.think(G, g, STEP * every);
+      }
+      //  and the dogs get out of the gorgons' way
+      for (const g of G.gorgons) if (g.live && !g.dead) DOG.shove(D, g, STEP);
     }
   }
   //  whoever is in reach of a lunge, on its floor, and not bitten a moment ago
@@ -162,6 +196,20 @@ export class RoomDogs {
     best.pl.bittenT = this.nowMs + BITE_GAP;
     this.room.damage(best.id, DOG.D_BITE_DMG, null, this.nowMs, 'dog');
   }
+  //  a gorgon's swing, its window open: whoever is in reach, on its floor, and
+  //  not struck a moment ago takes it (the face — 'pred' — they feel as such)
+  claw(g, kind, reach, dmg) {
+    let best = null, bd = reach;
+    for (const t of this.who) {
+      if (t.dead || this.nowMs < (t.pl.clawedT || 0)) continue;
+      const e = Math.hypot(t.x - g.x, t.z - g.z);
+      if (e < bd && CITY.onSameLevel(g.y, t.y)) { bd = e; best = t; }
+    }
+    if (!best) return false;
+    best.pl.clawedT = this.nowMs + CLAW_GAP;
+    this.room.damage(best.id, dmg, null, this.nowMs, kind === 'pred' ? 'gorpred' : 'gor');
+    return true;
+  }
 
   //  ---- what everyone over there is told ---------------------------------------
   tell(now) {
@@ -170,18 +218,26 @@ export class RoomDogs {
       this.tellT = now;
       const full = this.seq++ % FULL_EVERY === 0, who = this.who;
       const k = DOG.snapRows(this.D, full, (d) => who.some((t) => Math.abs(t.x - d.x) < NEAR && Math.abs(t.z - d.z) < NEAR));
-      if (k) this.say('dv', { k, kf: full ? 1 : 0 });
+      const q = GOR.snapRows(this.G);
+      const p = { q };
+      if (k) { p.k = k; p.kf = full ? 1 : 0; }
+      this.say('dv', p);
     }
     //  and the host's game, whose flayers and VECNA learn through them: what each knows
     if ((this.mf.length || this.vec) && now - this.knowT >= KNOW_MS) {
       this.knowT = now;
-      const host = this.room.host(), rows = [];
+      const host = this.room.host(), rows = [], grows = [];
       for (const d of this.D.dogs) {
         if (!d.live || d.dead || !d.hasT) continue;
         const age = this.t - d.seeT;
         if (age < 9) rows.push(d.slot, Math.round(d.tx * 10), Math.round(d.tz * 10), Math.round(age * 10));
       }
-      if (host && this.byId.has(host)) this.room.send(host, 'dk', { k: rows });
+      for (const g of this.G.gorgons) {
+        if (!g.live || g.dead || !g.hasT) continue;
+        const age = this.t - g.seeT;
+        if (age < GOR.G_MEM) grows.push(g.slot, Math.round(g.tx * 10), Math.round(g.tz * 10), Math.round(age * 10));
+      }
+      if (host && this.byId.has(host)) this.room.send(host, 'dk', { k: rows, g: grows });
     }
   }
   //  the same word to everyone over there
@@ -194,12 +250,10 @@ export class RoomDogs {
     }
   }
 
-  //  ---- the host's flayers, VECNA and gorgons ------------------------------------
+  //  ---- the host's flayers and VECNA ---------------------------------------------
   //  from its snapshot: f [slot, x·10, z·10, heading, hp, state, marks (1 dead)],
-  //  v [x·10, z·10, heading, hp, state, marks (1 dead, 2 awake), …], q [slot,
-  //  x·10, z·10, heading, hp, state, marks (1 dead; 8 sworn, 16 to VECNA, 32 to
-  //  the second flayer)]. How fast each moves (an escort keeps pace) is how far
-  //  it went since the last.
+  //  v [x·10, z·10, heading, hp, state, marks (1 dead, 2 awake), …]. How fast
+  //  each moves (an escort keeps pace) is how far it went since the last.
   hearMasters(p, now) {
     const pace = (was, x, z) => {
       if (!was || !was.at) return 0;
@@ -218,93 +272,94 @@ export class RoomDogs {
       const x = +v[0] / 10, z = +v[1] / 10;
       this.vec = { live: true, dead: !!(v[5] & 1), awake: !!(v[5] & 2), x, z, y: 0, hd: +v[2] / HDQ || 0, sp: pace(this.vec, x, z), at: now };
     } else this.vec = null;
-    const gors = [];
-    if (Array.isArray(p.q)) for (let i = 0; i + 6 < p.q.length; i += 7) {
-      const x = +p.q[i + 1] / 10, z = +p.q[i + 2] / 10, fl = int(p.q[i + 6]);
-      if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-      gors.push({ live: true, dead: !!(fl & 1), x, z, lord: (fl & 8) ? ((fl & 16) ? 'vec' : 'mf') : null, lordSlot: (fl & 16) ? -1 : (fl & 32) ? 1 : 0 });
-    }
-    this.gors = gors;
   }
   master(tag, slot) {
     if (tag === 'vec') { const v = this.vec; return v && v.live && !v.dead && v.awake ? v : null; }
     const f = this.mf[slot]; return f && f.live && !f.dead ? f : null;
   }
-  //  a dog within a flayer's link was hurt: the flayer bleeds a share (the host's game works out how much)
+  //  one within a flayer's link was hurt: the flayer bleeds a share (the host's game works out how much)
   share(x, z, dmg) {
     if (!this.mf.some((f) => f && !f.dead && Math.hypot(f.x - x, f.z - z) <= DOG.MF_LINK)) return;
     const host = this.room.host();
     if (host) this.room.send(host, 'dshare', { x: Math.round(x * 10), z: Math.round(z * 10), d: dmg });
   }
 
-  //  What the host's flayers and VECNA did to the dogs this frame (index.html
-  //  dogOrders), each [what, …]:
+  //  What the host's flayers and VECNA did to the dogs and gorgons (index.html
+  //  dogOrdersSend), each [what, …] — for a gorgon the same with a 'g' before:
   //    ['l', dog, lord (0 none, 1 flayer, 2 VECNA), the flayer's slot]   claimed, or let go
   //    ['t', dog, x·10, z·10, seen ago·10]                             handed a target
   //    ['s', dog, state]                                               told what to do
   //    ['p', dog, x·10, z·10]                                          carried (VECNA's blink)
   //    ['n', x·10, z·10, lord, slot, knows, x·10, z·10, ago·10, state]  summoned
   //    ['w', wreck, x·10, z·10, heading·1000, up (1 held, 2 thrown)]  a wreck picked up, or where it came down
-  //  A summons past a master's retinue (shared/dogs.js RETINUE) or the district's
-  //  number is not made; a dog carried into a wall is not moved.
+  //  A summons past a master's retinue (shared/dogs.js, gorgons.js RETINUE) or
+  //  the district's number is not made; one carried into a wall is not moved.
   orders(p) {
-    const D = this.D, list = Array.isArray(p.o) ? p.o.slice(0, 96) : [];
+    const list = Array.isArray(p.o) ? p.o.slice(0, 96) : [];
     const lordOf = (c, s) => (c === 1 ? ['mf', s === 1 ? 1 : 0] : c === 2 ? ['vec', -1] : [null, -1]);
     const at = (x, z) => { x = +x / 10; z = +z / 10; return Number.isFinite(x) && Number.isFinite(z) && Math.abs(x) < LIM && Math.abs(z) < LIM ? [x, z] : null; };
     for (const o of list) {
       if (!Array.isArray(o) || typeof o[0] !== 'string') continue;
-      if (o[0] === 'n') { this.summon(o, lordOf, at); continue; }
       if (o[0] === 'w') {
-        const w = this.wrecks[int(o[1])], q = at(o[2], o[3]), up = int(o[4 + 1]);
+        const w = this.wrecks[int(o[1])], q = at(o[2], o[3]), up = int(o[5]);
         if (w && q) { w.x = q[0]; w.z = q[1]; if (Number.isFinite(+o[4])) w.rot = +o[4] / 1000; w.held = !!(up & 1); w.thrown = !!(up & 2); }
         continue;
       }
-      const d = D.dogs[int(o[1])];
-      if (!d || !d.live || d.dead) continue;
-      if (o[0] === 'l') { const [l, s] = lordOf(int(o[2]), int(o[3])); d.lord = l; d.lordSlot = s; d.lordFar = 0; }
-      else if (o[0] === 't') { const q = at(o[2], o[3]); if (q) { d.hasT = true; d.tx = q[0]; d.tz = q[1]; d.seeT = this.t - Math.max(0, +o[4] / 10 || 0); } }
-      else if (o[0] === 's') { const st = DOG.D_ST[int(o[2])]; if (st && st !== d.st) { d.st = st; d.stT = 0; d.hasHide = false; } }
-      else if (o[0] === 'p') {
+      const gor = o[0].length === 2 && o[0][0] === 'g', op = gor ? o[0][1] : o[0];
+      if (op === 'n') { this.summon(o, gor, lordOf, at); continue; }
+      const a = gor ? this.G.gorgons[int(o[1])] : this.D.dogs[int(o[1])];
+      if (!a || !a.live || a.dead) continue;
+      if (op === 'l') { const [l, s] = lordOf(int(o[2]), int(o[3])); a.lord = l; a.lordSlot = s; a.lordFar = 0; }
+      else if (op === 't') { const q = at(o[2], o[3]); if (q) { a.hasT = true; a.tx = q[0]; a.tz = q[1]; a.seeT = this.t - Math.max(0, +o[4] / 10 || 0); } }
+      else if (op === 's') {
+        const st = (gor ? GOR.G_ST : DOG.D_ST)[int(o[2])];
+        //  (a gorgon mid-swing finishes it: it is not told out of one)
+        if (st && st !== a.st && !(gor && a.atk) && st !== 'attack') { a.st = st; a.stT = 0; a.hasHide = false; }
+      } else if (op === 'p') {
         const q = at(o[2], o[3]);
-        if (q && this.F.clearAt(q[0], q[1], 1.2)) { d.x = d.rx = q[0]; d.z = d.rz = q[1]; d.y = theGround().supportHeight(q[0], q[1], 1); d.stuck = 0; }
+        if (q && this.F.clearAt(q[0], q[1], 1.2)) { a.x = a.rx = q[0]; a.z = a.rz = q[1]; a.y = theGround().supportHeight(q[0], q[1], 1); a.stuck = 0; }
       }
     }
   }
-  summon(o, lordOf, at) {
-    const D = this.D, q = at(o[1], o[2]), [l, s] = lordOf(int(o[3]), int(o[4]));
+  summon(o, gor, lordOf, at) {
+    const q = at(o[1], o[2]), [l, s] = lordOf(int(o[3]), int(o[4]));
     if (!q || !l || !this.F.clearAt(q[0], q[1], 1.0)) return;
-    const have = D.dogs.reduce((a, d) => a + (d.live && !d.dead && d.lord === l && (l === 'vec' || d.lordSlot === s) ? 1 : 0), 0);
-    if (have >= DOG.RETINUE[l] || D.dogs.filter((d) => d.live).length >= DOG.NDOG) return;
-    const d = DOG.spawnDog(D); if (!d) return;
-    d.x = d.rx = q[0]; d.z = d.rz = q[1]; d.y = theGround().supportHeight(q[0], q[1], 1);
-    d.lord = l; d.lordSlot = s;
+    const all = gor ? this.G.gorgons : this.D.dogs;
+    const have = all.reduce((n, a) => n + (a.live && !a.dead && a.lord === l && (l === 'vec' || a.lordSlot === s) ? 1 : 0), 0);
+    if (have >= (gor ? GOR.RETINUE : DOG.RETINUE)[l]) return;
+    const a = gor ? GOR.spawnGorgon(this.G, { x: q[0], z: q[1] }) : DOG.spawnDog(this.D);
+    if (!a) return;
+    a.x = a.rx = q[0]; a.z = a.rz = q[1]; a.y = theGround().supportHeight(q[0], q[1], 1);
+    a.lord = l; a.lordSlot = s;
     const tq = at(o[6], o[7]);
-    if (int(o[5]) && tq) { d.hasT = true; d.tx = tq[0]; d.tz = tq[1]; d.seeT = this.t - Math.max(0, +o[8] / 10 || 0); }
-    d.st = DOG.D_ST[int(o[9])] || (d.hasT ? 'chase' : 'escort'); d.stT = 0;
-    d.rise = 0; d.taint = 0.5;
+    if (int(o[5]) && tq) { a.hasT = true; a.tx = tq[0]; a.tz = tq[1]; a.seeT = this.t - Math.max(0, +o[8] / 10 || 0); }
+    const st = (gor ? GOR.G_ST : DOG.D_ST)[int(o[9])];
+    a.st = st && st !== 'attack' ? st : a.hasT ? 'chase' : 'escort'; a.stT = 0;
+    a.rise = 0; a.taint = 0.5;
   }
 
-  //  ---- a round at a dog -----------------------------------------------------------
-  //  From player `from` at dog i: checked (the gun ready, the shooter up and
-  //  over there, the dog in reach and in sight), and if it stands it lands
-  //  here, as it would in the game that ran them. Returns whether it stood.
-  shot(from, i, now) {
-    const d = this.D.dogs[i], me = this.room.players.get(from);
-    const why = this.whyNot(me, d, now);
-    if (why) { this.room.refused++; this.room.lastRefusal = 'at a dog: ' + why; return false; }
+  //  ---- a round at one of them -------------------------------------------------------
+  //  From player `from` at dog (or gorgon) i: checked (the gun ready, the
+  //  shooter up and over there, it in reach and in sight), and if it stands it
+  //  lands here, as it would in the game that ran them. Returns whether it stood.
+  shot(from, i, now, gor) {
+    const a = gor ? this.G.gorgons[i] : this.D.dogs[i], me = this.room.players.get(from);
+    const why = this.whyNot(me, a, now, gor ? G_CHEST : CHEST);
+    if (why) { this.room.refused++; this.room.lastRefusal = 'at a ' + (gor ? 'gorgon' : 'dog') + ': ' + why; return false; }
     me.lastMobHitT = now;
     const h = me.hist;
-    DOG.hurt(this.D, d, RULES.DMG, h[h.length - 3], h[h.length - 1]);
+    if (gor) GOR.hurt(this.G, a, RULES.DMG, h[h.length - 3], h[h.length - 1]);
+    else DOG.hurt(this.D, a, RULES.DMG, h[h.length - 3], h[h.length - 1]);
     return true;
   }
-  whyNot(me, d, now) {
+  whyNot(me, a, now, chest) {
     if (!me || me.dead) return 'shooter is down';
     if (!me.w) return 'other side of the tear';
-    if (!d || !d.live || d.dead) return 'no such dog';
+    if (!a || !a.live || a.dead) return 'no such one';
     if (now - (me.lastMobHitT || -1e9) < RULES.FIRE_INTERVAL * 1000 * 0.75) return 'faster than the gun';
     const h = me.hist; if (h.length < 4) return 'not seen yet';
     const ro = { x: h[h.length - 3], y: h[h.length - 2] + RULES.EYE, z: h[h.length - 1] };
-    const dx = d.x - ro.x, dy = d.y + CHEST - ro.y, dz = d.z - ro.z, dist = Math.hypot(dx, dy, dz);
+    const dx = a.x - ro.x, dy = a.y + chest - ro.y, dz = a.z - ro.z, dist = Math.hypot(dx, dy, dz);
     if (dist > RULES.MAX_RANGE + 5) return 'out of range';
     //  (it moves while the shot is on its way here: a wall within a couple of
     //  metres of where the room has it is not taken as in the way)

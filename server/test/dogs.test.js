@@ -11,6 +11,7 @@
 //    node server/test/dogs.test.js
 
 import DOG from '../../shared/dogs.js';
+import GOR from '../../shared/gorgons.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -174,9 +175,9 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const fx = ax + 30, fz = az;
   const HDQ = 255 / 6.2832;
-  const mob = () => say(A, 'mob', { f: [0, Math.round(fx * 10), Math.round(fz * 10), 0, 900, 1, 0], v: [Math.round((ax - 50) * 10), Math.round(az * 10), Math.round(1 * HDQ), 1500, 1, 2, 0, 0], q: [0, Math.round((ax + 5) * 10), Math.round((az + 60) * 10), 0, 300, 1, 8 | 16], g: null });
+  const mob = () => say(A, 'mob', { f: [0, Math.round(fx * 10), Math.round(fz * 10), 0, 900, 1, 0], v: [Math.round((ax - 50) * 10), Math.round(az * 10), Math.round(1 * HDQ), 1500, 1, 2, 0, 0], g: null });
   mob();
-  check('the host\'s flayer, VECNA and gorgon, from its snapshot', RD.mf[0] && Math.abs(RD.mf[0].x - fx) < 0.1 && RD.vec && RD.vec.awake && RD.gors.length === 1 && RD.gors[0].lord === 'vec');
+  check('the host\'s flayer and VECNA, from its snapshot', RD.mf[0] && Math.abs(RD.mf[0].x - fx) < 0.1 && RD.vec && RD.vec.awake);
   const d = RD.dogs.find((q) => q.live && !q.dead && q.slot !== dog.slot);
   put(d, fx + 8, fz); d.st = 'wander'; d.lord = null;
   //  (nothing it knows of the players: with nothing to hunt, an escort keeps station)
@@ -211,12 +212,17 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   say(A, 'dhit', { i: d.slot });
   const sh = out.find(([to, m]) => to === A && m.s === 'dshare');
   check('a dog within the flayer\'s link, shot: the host\'s game is told, so the flayer bleeds too', sh && sh[1].p.d === RULES.DMG, JSON.stringify(sh && sh[1].p));
-  //  a gorgon moves them on; VECNA's carry
+  //  a gorgon (the room's own) moves them on; VECNA's carry
+  const G0 = RD.gorgons.find((g) => g.live && !g.dead) || GOR.spawnGorgon(RD.G, { x: ax + 5, z: az + 60 });
   const g0 = RD.dogs.find((q) => q.live && !q.dead && !q.lord);
-  put(g0, ax + 5 + 6, az + 60); g0.st = 'wander';
-  const gx0 = g0.x;
-  for (let i = 0; i < 10; i++) { now += 50; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
-  check('a gorgon moves them on (the host\'s, from its snapshot)', g0.x > gx0 + 0.05 || g0.st === 'alert', (g0.x - gx0).toFixed(2) + ' m, ' + g0.st);
+  let pushed = 0, gx0 = 0;
+  for (let i = 0; i < 10; i++) {
+    G0.x = G0.rx = ax + 5; G0.z = G0.rz = az + 60; G0.st = 'wander'; G0.lord = null;
+    if (!i) { put(g0, ax + 5 + 6, az + 60); g0.st = 'wander'; gx0 = g0.x; }
+    now += 50; mob(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  }
+  pushed = g0.x - gx0;
+  check('a gorgon moves them on', pushed > 0.05 || g0.st === 'alert', pushed.toFixed(2) + ' m, ' + g0.st);
   say(A, 'dord', { o: [['p', g0.slot, Math.round(ax * 10), Math.round((az + 1000) * 10)]] });
   check('carried into a wall or off the map: not moved', Math.abs(g0.z - (az + 1000)) > 100);
 }

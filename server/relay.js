@@ -120,13 +120,13 @@ const KINDS = {
   //  judges the shot and says (creatures.js, troop.js)
   mdeath: [8, 16, (p, from, room) => (room.host() === from && !room.creatures.own.m ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
   mobhit: [8, 12, (p, from, room, now) => (room.creatures.monkeyShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, by: from })],
-  //  the dogs: the room's to judge when it runs them (dogs.js), else the host's
+  //  the dogs (and, below, the gorgons): the room's to judge when it runs them (dogs.js), else the host's
   dhit: [8, 12, (p, from, room, now) => (room.creatures.dogShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   //  the host's game's dogs, when the room asks for them to carry on from ('dq');
   //  what the host's flayers and VECNA did to the room's dogs (dogs.js orders)
   dfull: [1, 2, (p, from, room) => { room.creatures.dogsFrom(from, p); return null; }],
   dord: [10, 20, (p, from, room) => { room.creatures.dogOrders(from, p); return null; }],
-  ghit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
+  ghit: [8, 12, (p, from, room, now) => (room.creatures.gorShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   mfhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
   //  at Beelzebub: the room's to judge when it runs him, else the host's

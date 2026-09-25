@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test:server": "node server/test/brain.test.js && node server/test/mind.test.js && node server/test/learn.test.js && node server/test/boss.test.js && node server/test/troop.test.js && node server/test/traffic.test.js && node server/test/dogs.test.js && node server/test/relay.test.js && node server/test/room.test.js"
+    "test:server": "node server/test/brain.test.js && node server/test/mind.test.js && node server/test/learn.test.js && node server/test/boss.test.js && node server/test/troop.test.js && node server/test/traffic.test.js && node server/test/dogs.test.js && node server/test/gorgons.test.js && node server/test/relay.test.js && node server/test/room.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.137.0"

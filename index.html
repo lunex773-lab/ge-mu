@@ -2540,6 +2540,7 @@
         const G_ENRAGE = 0.30;
         const G_RISE_T = 2.4;                 // s climbing out of the ground
         const G_KEEP = 58, G_APART = 150;     // never spawned this near anyone, nor this near another
+        const RETINUE = { mf: 2, vec: 2 };    // how many a flayer, and VECNA, keep about them
         const WORLD = RULES.WORLD;
         const G_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack', 'reposition', 'search', 'enrage', 'escort', 'flank'];
 
@@ -2681,9 +2682,10 @@
           }
           return best;
         }
-        function spawnGorgon(G, at) {
+        function spawnGorgon(G, at, slot) {
           const E = G.env, rnd = E.random, gorgons = G.gorgons;
-          let g = gorgons.find((o) => !o.live);
+          if (slot !== undefined) while (gorgons.length <= slot) gorgons.push({ slot: gorgons.length, live: false });
+          let g = slot === undefined ? gorgons.find((o) => !o.live) : gorgons[slot];
           if (!g && gorgons.length >= NGOR) return null;
           const spot = at || spawnSpot(G); if (!spot) return null;
           if (!g) { g = { slot: gorgons.length, live: false }; gorgons.push(g); }
@@ -2960,7 +2962,7 @@
 
         if (typeof module !== 'undefined' && module.exports) {
           module.exports = {
-            NGOR, GOR_WILD, GOR_HP, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
+            NGOR, GOR_WILD, GOR_HP, RETINUE, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
             makeGorgons, startAtk, runAtk, step, see, spawnSpot, spawnGorgon, despawnGorgon, clearGorgons, think, hurt, kill, stock, fighting,
             marks, snapRows, fullState, fullOk, adoptFull,
           };
@@ -4761,7 +4763,7 @@
       const k = DG.snapRows(DOGS, full, (dg) => near.some((q) => Math.abs(q.x - dg.x) < DOG_NEAR && Math.abs(q.z - dg.z) < DOG_NEAR));
       if (k) { msg.k = k; msg.kf = full ? 1 : 0; }
     }
-    if (gorsOn) { const q = gorSnapshot(); if (q.length) msg.q = q; }
+    if (gorsOn && !MP.srvOwns.d) { const q = gorSnapshot(); if (q.length) msg.q = q; }
     if (mfOn) { const f = mfSnapshot(); if (f.length) msg.f = f; }
     if (vecOn) { const v = vecSnapshot(); if (v) msg.v = v; }
     if (!MP.srvOwns.b) { const b = bzbSnapshot(); if (b) msg.b = b; }   // the guardian, when he stands (and is mine to run)
@@ -4781,7 +4783,7 @@
       hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
     }
     if (!MP.srvOwns.d) applyDogSnapshot(msg.k, msg.kf !== 0);   // kf 0: only the dogs near us (publishMobs); the room's: onRoomDogs
-    applyGorSnapshot(msg.q);
+    if (!MP.srvOwns.d) applyGorSnapshot(msg.q);        // (the room's: onRoomDogs)
     applyMfSnapshot(msg.f);
     applyVecSnapshot(msg.v);
     if (!MP.srvOwns.b) applyBzbSnapshot(msg.b);        // (while the room runs him, it says where he is: onRoomCreatures)
@@ -5888,7 +5890,8 @@
     }
     if (hitGor) {
       showHit(hitGor.hp - DMG <= 0);
-      hurtGorgon(hitGor, DMG, p.x, p.z);               // and this one does not decide anything
+      if (MP.srvOwns.d) hitGor.hp -= DMG;              // the room decides (server/dogs.js); shown here at once
+      else hurtGorgon(hitGor, DMG, p.x, p.z);          // and this one does not decide anything
       sendGorHit(hitGor, DMG);
     }
     if (hitMf) {
@@ -5918,6 +5921,8 @@
     if (shot) { lastAttacker = msg.by; lastAttackerT = performance.now(); showHurt(); playHurt(); camShake = 0.28; }
     if (msg.src === 'monkey') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.22); }   // a swipe, as the room runs the troop
     if (msg.src === 'dog') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.26); }      // a bite, as the room runs the dogs
+    if (msg.src === 'gor') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.42); }      // a gorgon's swing
+    if (msg.src === 'gorpred') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.85); playGorPredation(0, 0); gorBind = 0.55; }   // … its face
     hp = Math.max(0, Math.min(HP_MAX, +msg.hp || 0));
     updateHpUI();
     if (hp <= 0) onDeath();
@@ -5948,8 +5953,8 @@
       const was = MP.srvOwns.d;
       MP.srvOwns.d = !!msg.d;
       if (MP.srvOwns.d && !was) {                  // the room's now: ease onto what it says, from where they are
-        for (const d of dogs) if (d.live) { d.netX = d.x; d.netZ = d.z; d.netH = d.hd || 0; d.rx = d.x; d.rz = d.z; }
-        dogSummons.length = 0; dogWreckSent = null;
+        for (const a of dogs.concat(gorgons)) if (a.live) { a.netX = a.x; a.netZ = a.z; a.netH = a.hd || 0; a.rx = a.x; a.rz = a.z; a.atk = null; }
+        dogSummons.length = 0; gorSummons.length = 0; dogWreckSent = null;
       }
       if (!MP.srvOwns.d && was) dogsBack(msg.df);
     }
@@ -6025,68 +6030,91 @@
   function troopBack() {
     for (const m of monkeyPeds) { m.feedC = null; m.eating = false; if (TR.inPlay(m)) { const h = m.hd; TR.reseat(m); m.hd = h; } }
   }
-  //  ---- the dogs, as the room runs them (server/dogs.js) ------------------------
-  //  the pack, as the room says it to everyone over there ('dv': the snapshot's own form)
-  function onRoomDogs(msg) { if (MP.srvOwns.d && wState === WS.BACK) applyDogSnapshot(msg.k, msg.kf !== 0); }
-  //  the room asks this game (the host) for its dogs, to carry on from
+  //  ---- the dogs and gorgons, as the room runs them (server/dogs.js) -----------------
+  //  the pack and the gorgons, as the room says them to everyone over there
+  //  ('dv': the snapshots' own forms)
+  function onRoomDogs(msg) {
+    if (!MP.srvOwns.d || wState !== WS.BACK) return;
+    applyDogSnapshot(msg.k, msg.kf !== 0);
+    if (Array.isArray(msg.q)) applyGorSnapshot(msg.q);
+  }
+  //  the room asks this game (the host) for them, to carry on from
   function onDogAsk() {
     if (!MP.connected || !MP.client || MP.srvOwns.d) return;
-    try { MP.client.publish(mtopic('dfull'), JSON.stringify(dogsOn ? DG.fullState(DOGS) : { k: [] })); } catch (e) {}
+    const f = Object.assign(DG.fullState(DOGS), { g: GR.fullState(GORS) });      // (whichever are up: none, over on this side)
+    try { MP.client.publish(mtopic('dfull'), JSON.stringify(f)); } catch (e) {}
   }
   //  they are this game's to run again: from the room's last word, or from what is drawn here
   function dogsBack(df) {
     if (wState !== WS.BACK) return;
     if (df && DG.fullOk(df)) DG.adoptFull(DOGS, df);
     else { for (const d of dogs) if (d.live) { d.x = d.rx; d.z = d.rz; d.stuck = 0; } DOGS.repack = 0; }
+    if (df && GR.fullOk(df.g)) GR.adoptFull(GORS, df.g);
+    else for (const g of gorgons) if (g.live) { g.x = g.rx; g.z = g.rz; }
   }
-  //  what the room's dogs know ('dk': per dog with a target [slot, x·10, z·10,
-  //  seen ago·10]): the flayers and VECNA running here learn through them
+  //  what the room's dogs and gorgons know ('dk': per one with a target [slot,
+  //  x·10, z·10, seen ago·10]): the flayers and VECNA running here learn through them
   function onDogKnow(msg) {
-    if (!MP.srvOwns.d || !Array.isArray(msg.k)) return;
-    const had = new Set();
-    for (let i = 0; i + 3 < msg.k.length; i += 4) {
-      const d = dogs[msg.k[i]]; if (!d || !d.live) continue;
-      d.hasT = true; d.tx = msg.k[i + 1] / 10; d.tz = msg.k[i + 2] / 10; d.seeT = cityT - msg.k[i + 3] / 10; had.add(d);
-    }
-    for (const d of dogs) if (d.live && !had.has(d)) d.hasT = false;
+    if (!MP.srvOwns.d) return;
+    const know = (list, rows) => {
+      if (!Array.isArray(rows)) return;
+      const had = new Set();
+      for (let i = 0; i + 3 < rows.length; i += 4) {
+        const a = list[rows[i]]; if (!a || !a.live) continue;
+        a.hasT = true; a.tx = rows[i + 1] / 10; a.tz = rows[i + 2] / 10; a.seeT = cityT - rows[i + 3] / 10; had.add(a);
+      }
+      for (const a of list) if (a.live && !had.has(a)) a.hasT = false;
+    };
+    know(dogs, msg.k); know(gorgons, msg.g);
   }
-  //  a dog within a flayer's link was hurt ('dshare'): the flayer running here bleeds a share
+  //  one within a flayer's link was hurt ('dshare'): the flayer running here bleeds a share
   function onDogShare(msg) {
     if (!MP.srvOwns.d || !mobSim() || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
     mfShareDamage(msg.x / 10, msg.z / 10, Math.max(0, Math.min(DMG, +msg.d || 0)));
   }
-  //  The host's flayers and VECNA still run here while the room runs the dogs,
-  //  and still order them about: claim one, hand it a target, set it going,
-  //  carry it along, summon more — and pick the wrecks up and throw them.
-  //  Whatever they change of the dogs here (the dogs as the room says them)
-  //  and of the wrecks is written down after they have run, each frame, and
-  //  sent ('dord'); the room makes it so (server/dogs.js orders).
-  const dogMark = [], dogSummons = [];
-  let dogWreckSent = null;
+  //  The host's flayers and VECNA still run here while the room runs the dogs
+  //  and gorgons, and still order them about: claim one, hand it a target, set
+  //  it going, carry it along, summon more — and pick the wrecks up and throw
+  //  them. Whatever they change of them here (as the room says them) and of the
+  //  wrecks is written down after they have run, each frame, and sent ('dord');
+  //  the room makes it so (server/dogs.js orders). A flayer or VECNA hurt between
+  //  frames (a shot, the room's word of one) orders them about too: withOrders.
+  const dogMark = [], gorMark = [], dogSummons = [], gorSummons = [];
+  let dogWreckSent = null, ordering = 0;
   const dogOrdering = () => MP.srvOwns.d && mobPub() && wState === WS.BACK;
   const lordCode = (o) => (o.lord === 'mf' ? 1 : o.lord === 'vec' ? 2 : 0);
   const r10 = (v) => Math.round(v * 10);
-  function dogOrdersMark() {
-    if (!dogOrdering()) return;
-    for (const d of dogs) if (d.live) {
-      const m = dogMark[d.slot] || (dogMark[d.slot] = []);
-      m[0] = d.lord || null; m[1] = d.lordSlot; m[2] = !!d.hasT; m[3] = d.tx; m[4] = d.tz; m[5] = d.seeT; m[6] = d.st; m[7] = d.x; m[8] = d.z;
+  function markAll(list, marks) {
+    for (const a of list) if (a.live) {
+      const m = marks[a.slot] || (marks[a.slot] = []);
+      m[0] = a.lord || null; m[1] = a.lordSlot; m[2] = !!a.hasT; m[3] = a.tx; m[4] = a.tz; m[5] = a.seeT; m[6] = a.st; m[7] = a.x; m[8] = a.z;
     }
   }
-  function dogOrdersSend() {
-    if (!dogOrdering()) { dogSummons.length = 0; return; }
-    const o = [];
-    for (const d of dogs) {
-      if (!d.live || d.dead) continue;
-      const m = dogMark[d.slot]; if (!m) continue;
-      if ((d.lord || null) !== m[0] || (d.lord === 'mf' && d.lordSlot !== m[1])) o.push(['l', d.slot, lordCode(d), d.lord === 'mf' ? d.lordSlot : -1]);
-      if (d.hasT && (!m[2] || d.tx !== m[3] || d.tz !== m[4] || d.seeT !== m[5])) o.push(['t', d.slot, r10(d.tx), r10(d.tz), r10(Math.max(0, cityT - d.seeT))]);
-      if (d.st !== m[6]) o.push(['s', d.slot, D_ST.indexOf(d.st)]);
-      if (Math.hypot(d.x - m[7], d.z - m[8]) > 1) o.push(['p', d.slot, r10(d.x), r10(d.z)]);
+  //  what changed, as orders ([what, …]; pre: '' a dog, 'g' a gorgon)
+  function diffAll(list, marks, pre, ST, summons, o) {
+    for (const a of list) {
+      if (!a.live || a.dead) continue;
+      const m = marks[a.slot]; if (!m) continue;
+      if ((a.lord || null) !== m[0] || (a.lord === 'mf' && a.lordSlot !== m[1])) o.push([pre + 'l', a.slot, lordCode(a), a.lord === 'mf' ? a.lordSlot : -1]);
+      if (a.hasT && (!m[2] || a.tx !== m[3] || a.tz !== m[4] || a.seeT !== m[5])) o.push([pre + 't', a.slot, r10(a.tx), r10(a.tz), r10(Math.max(0, cityT - a.seeT))]);
+      if (a.st !== m[6]) o.push([pre + 's', a.slot, ST.indexOf(a.st)]);
+      if (Math.hypot(a.x - m[7], a.z - m[8]) > 1) o.push([pre + 'p', a.slot, r10(a.x), r10(a.z)]);
     }
-    for (const n of dogSummons) o.push(['n', r10(n.x), r10(n.z), lordCode(n), n.lord === 'mf' ? n.lordSlot : -1,
-      n.hasT ? 1 : 0, r10(n.tx || 0), r10(n.tz || 0), r10(Math.max(0, cityT - (n.seeT === undefined ? cityT : n.seeT))), Math.max(0, D_ST.indexOf(n.st))]);
-    dogSummons.length = 0;
+    for (const n of summons) o.push([pre + 'n', r10(n.x), r10(n.z), lordCode(n), n.lord === 'mf' ? n.lordSlot : -1,
+      n.hasT ? 1 : 0, r10(n.tx || 0), r10(n.tz || 0), r10(Math.max(0, cityT - (n.seeT === undefined ? cityT : n.seeT))), Math.max(0, ST.indexOf(n.st))]);
+    summons.length = 0;
+  }
+  function dogOrdersMark() {
+    if (!dogOrdering()) return;
+    ordering++;
+    markAll(dogs, dogMark); markAll(gorgons, gorMark);
+  }
+  function dogOrdersSend() {
+    if (ordering) ordering--;
+    if (!dogOrdering()) { dogSummons.length = 0; gorSummons.length = 0; return; }
+    const o = [];
+    diffAll(dogs, dogMark, '', D_ST, dogSummons, o);
+    diffAll(gorgons, gorMark, 'g', G_ST, gorSummons, o);
     //  the wrecks: up in the air (held, thrown) or not, and where each came down
     if (!dogWreckSent) dogWreckSent = WR.makeWrecks(cars).map((w) => (w ? [w.x, w.z, w.rot, 0] : null));
     for (let k = 0; k < wrecks.length; k++) {
@@ -6098,6 +6126,12 @@
       }
     }
     if (o.length && MP.client) try { MP.client.publish(mtopic('dord'), JSON.stringify({ o })); } catch (e) {}
+  }
+  //  fn, with what it does to the room's dogs and gorgons sent (unless this frame's own sending will)
+  function withOrders(fn) {
+    if (ordering || !dogOrdering()) return fn();
+    dogOrdersMark();
+    try { return fn(); } finally { dogOrdersSend(); }
   }
   function onRoomPos(msg) {
     if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
@@ -6331,7 +6365,7 @@
       'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
-      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
+      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS+GOR ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
       'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
       '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
@@ -8062,7 +8096,16 @@
   });
   const gorgons = GORS.gorgons;
   let gorsOn = false, gorFrame = 0, gorHigh = 0;
-  function spawnGorgon(at) { return GR.spawnGorgon(GORS, at); }
+  //  (while the room runs them, one a flayer or VECNA summons here is the room's
+  //  to make: it is written down, and sent with the orders — dogOrdersSend)
+  function spawnGorgon(at) {
+    if (MP.srvOwns.d) {
+      if (!dogOrdering()) return null;
+      const n = { slot: -1, live: true, x: at ? at.x : p.x, z: at ? at.z : p.z, st: 'wander' };
+      gorSummons.push(n); return n;
+    }
+    return GR.spawnGorgon(GORS, at);
+  }
   function despawnGorgon(g) { GR.despawnGorgon(GORS, g); }
   function clearGorgons() { GR.clearGorgons(GORS); }
   function hurtGorgon(g, dmg, fromX, fromZ) { GR.hurt(GORS, g, dmg, fromX, fromZ); }
@@ -8246,7 +8289,7 @@
     if (gorHitCd > 0) gorHitCd -= dt;
     if (gorBind > 0) gorBind -= dt;                    // the brief hold after a predation hit
     gorHigh = 0;
-    const mine = mobSim();
+    const mine = dogSim();                             // (the room runs them with the dogs: server/dogs.js)
 
     //  a handful across the whole district, kept apart, only a body ever cleared
     if (mine) GR.stock(GORS, dt);
@@ -8349,8 +8392,10 @@
       let g = gorgons[k[i]];
       if (!g) { while (gorgons.length <= k[i]) gorgons.push({ slot: gorgons.length, live: false }); g = gorgons[k[i]]; }
       if (!g.live) {
-        spawnGorgon({ x: k[i + 1] / 10, z: k[i + 2] / 10 });
-        g = gorgons[k[i]] || g;
+        //  in its own slot (not spawnGorgon: this is only what someone else says —
+        //  and a new one used to land in the first free slot, not the one named)
+        GR.spawnGorgon(GORS, { x: k[i + 1] / 10, z: k[i + 2] / 10 }, k[i]);
+        g.rise = (k[i + 6] & 64) ? 0 : 1;              // one just summoned: it climbs out here too
       }
       g.netSeen = true;
       g.netX = k[i + 1] / 10; g.netZ = k[i + 2] / 10; g.netH = k[i + 3] / HDQ;
@@ -8359,6 +8404,8 @@
       const st = G_ST[k[i + 5] - 1];
       const fl = k[i + 6];
       g.lordNet = !!(fl & 8);            // owned: the follower tints it locally
+      //  (and whose, for a host whose flayer or VECNA counts its own: dogOrdersSend)
+      g.lord = (fl & 8) ? ((fl & 16) ? 'vec' : 'mf') : null; g.lordSlot = (fl & 16) ? -1 : (fl & 32) ? 1 : 0;
       if (st && st !== g.st) {
         if (st === 'enrage') playGorRoar(g.tdist, gorPan(g));
         if (st === 'attack') playGorWind(g.tdist, gorPan(g), true);
@@ -8370,7 +8417,7 @@
     for (const o of gorgons) if (o.live && !o.netSeen) despawnGorgon(o);
   }
   function sendGorHit(g, dmg) {
-    if (!MP.connected || !MP.client || mobPub()) return;
+    if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;
     g.hpHold = performance.now() + 1200;
     try { MP.client.publish(mtopic('ghit'), JSON.stringify({ i: g.slot, d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
   }
@@ -8411,7 +8458,7 @@
   const MF_SHARE = 0.28;                // of a minion's wound that reaches it
   const MF_SHARE_S = 55;                // …but never more than this per second
   const MF_SUMMON = 120, MF_PANIC_CD = 95;
-  const MF_ESC_GOR = 2, MF_ESC_DOG = DG.RETINUE.mf;
+  const MF_ESC_GOR = GR.RETINUE.mf, MF_ESC_DOG = DG.RETINUE.mf;
   const MF_SWIPE_R = 15.5, MF_SWIPE_DMG = 30;
   //  §21 wanted "distance decides", and two attacks is not a decision. Each of
   //  these punishes a different habit: the sweep punishes strafing round it,
@@ -8820,7 +8867,7 @@
   //  bodies around with him is a king you cannot fight, and a street with
   //  forty bodies on it is the crowding problem again by another name.
   const MF_RET = { dogs: MF_ESC_DOG, gors: MF_ESC_GOR };   // §6/§7/§29
-  const V_RET = { dogs: DG.RETINUE.vec, gors: 2 };         // §22/§65: a few, not everything
+  const V_RET = { dogs: DG.RETINUE.vec, gors: GR.RETINUE.vec };   // §22/§65: a few, not everything
   //  near enough to be claimed, and how far one may then get before it is
   //  loose again (shared/dogs.js — the room's dogs keep their bonds the same)
   const MF_TAKE = DG.MF_TAKE, V_TAKE = DG.V_TAKE;
@@ -9368,7 +9415,9 @@
   }
 
   // ---- damage ----------------------------------------------------------
-  function hurtFlayer(m, dmg, fromX, fromZ) {
+  //  (what it does to the room's dogs and gorgons, when the room runs them, is sent: withOrders)
+  function hurtFlayer(m, dmg, fromX, fromZ) { return withOrders(() => hurtFlayer0(m, dmg, fromX, fromZ)); }
+  function hurtFlayer0(m, dmg, fromX, fromZ) {
     if (!m.live || m.dead) return;
     m.hp -= dmg;
     m.hasT = true; m.tx = fromX; m.tz = fromZ; m.seeT = cityT;
@@ -10901,7 +10950,8 @@
   }
 
   // ---- damage --------------------------------------------------------
-  function hurtVecna(dmg, fromX, fromZ) {
+  function hurtVecna(dmg, fromX, fromZ) { return withOrders(() => hurtVecna0(dmg, fromX, fromZ)); }
+  function hurtVecna0(dmg, fromX, fromZ) {
     if (!vec.live || vec.dead) return;
     //  §58: the window is the weapon. Catch him in the recovery of something
     //  big and the same bullet is worth two and a half.
