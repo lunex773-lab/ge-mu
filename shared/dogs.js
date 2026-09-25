@@ -54,6 +54,8 @@ const D_ROAM = WORLD * 0.44;
 const MF_TAKE = 58, V_TAKE = 96;       // near enough to be claimed
 const LEASH = 1.55;                    // and how far it may then get before it is loose again
 const V_CLEAR = 26;                    // nothing of VECNA's stands inside this
+const MF_LINK = 74;                    // how far a flayer's command reaches (and a wound bleeds up to it)
+const RETINUE = { mf: 3, vec: 6 };     // how many dogs a flayer, and VECNA, keep about them
 //  a dog's state, as a snapshot numbers it (index 1…)
 const D_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack',
               'reposition', 'observe', 'retreat', 'hide', 'call', 'flee', 'escort'];
@@ -572,6 +574,9 @@ function tick(D, d, dt) {
       d.lunge = Math.min(1, d.lunge + dt * 7);
       step(D, d, d.tx, d.tz, 9.4, dt, false);
       wantMaw = 1; wantTail = 0.9;
+      //  (a lunge of its own: one broken off after its bite — shot mid-lunge —
+      //  left this set, and that dog never bit anyone again)
+      if (d.stT <= 0.18) d.bit = false;
       if (d.stT > 0.18 && !d.bit) {
         d.bit = true;
         E.bite(d);                        // whoever is in reach, on its floor, takes it (and it is heard)
@@ -906,7 +911,7 @@ function adoptFull(D, f) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     NDOG, DOG_HP, D_VIS, D_HEAR, D_CALL_R, D_CALL_MAX, D_BITE_R, D_BITE_DMG, D_LIKED, D_SEP, D_KEEP, D_RISE_T, D_ST,
-    MF_TAKE, V_TAKE, LEASH, V_CLEAR, FULL_N,
+    MF_TAKE, V_TAKE, LEASH, V_CLEAR, MF_LINK, RETINUE, FULL_N,
     makeDogs, noise, newPack, spawnSpot, spawnDog, despawnDog, clearDogs, nearestTo, see, hear, cover, step, wanderPoint,
     lordOf, escortSpot, decide, tick, packTick, call, hurt, kill, stock, shove, marks, snapRows, fullState, fullOk, adoptFull,
   };

@@ -1854,6 +1854,8 @@
         const MF_TAKE = 58, V_TAKE = 96;       // near enough to be claimed
         const LEASH = 1.55;                    // and how far it may then get before it is loose again
         const V_CLEAR = 26;                    // nothing of VECNA's stands inside this
+        const MF_LINK = 74;                    // how far a flayer's command reaches (and a wound bleeds up to it)
+        const RETINUE = { mf: 3, vec: 6 };     // how many dogs a flayer, and VECNA, keep about them
         const D_ST = ['idle', 'wander', 'investigate', 'alert', 'chase', 'attack',
                       'reposition', 'observe', 'retreat', 'hide', 'call', 'flee', 'escort'];
 
@@ -2239,6 +2241,7 @@
               d.lunge = Math.min(1, d.lunge + dt * 7);
               step(D, d, d.tx, d.tz, 9.4, dt, false);
               wantMaw = 1; wantTail = 0.9;
+              if (d.stT <= 0.18) d.bit = false;
               if (d.stT > 0.18 && !d.bit) {
                 d.bit = true;
                 E.bite(d);                        // whoever is in reach, on its floor, takes it (and it is heard)
@@ -2510,7 +2513,7 @@
         if (typeof module !== 'undefined' && module.exports) {
           module.exports = {
             NDOG, DOG_HP, D_VIS, D_HEAR, D_CALL_R, D_CALL_MAX, D_BITE_R, D_BITE_DMG, D_LIKED, D_SEP, D_KEEP, D_RISE_T, D_ST,
-            MF_TAKE, V_TAKE, LEASH, V_CLEAR, FULL_N,
+            MF_TAKE, V_TAKE, LEASH, V_CLEAR, MF_LINK, RETINUE, FULL_N,
             makeDogs, noise, newPack, spawnSpot, spawnDog, despawnDog, clearDogs, nearestTo, see, hear, cover, step, wanderPoint,
             lordOf, escortSpot, decide, tick, packTick, call, hurt, kill, stock, shove, marks, snapRows, fullState, fullOk, adoptFull,
           };
@@ -4236,7 +4239,7 @@
     rtt: 0, lastPing: 0, txBytes: 0, rxBytes: 0, txRate: 0, rxRate: 0, rateT: 0, keyT: 0,
     txMsgs: 0, rxMsgs: 0, txMsgRate: 0, rxMsgRate: 0, tickRate: 0,
     fixes: 0,                              // times the room put me back (onRoomPos)
-    srvOwns: { b: false, m: false, t: false },   // what the room runs itself (server/creatures.js): b, Beelzebub; m, the monkey troop; t, the traffic
+    srvOwns: { b: false, m: false, t: false, d: false },   // what the room runs itself (server/creatures.js): b, Beelzebub; m, the monkey troop; t, the traffic; d, the dogs
     mindCand: null,                        // Beelzebub's next candidate readout, from his memory on the server (onRoomMind)
   };
   const SRV = { ws: null, tries: 0, everUp: false, timer: 0, retry: 0 };   // the room server's connection (connectServer)
@@ -4277,6 +4280,8 @@
   function mobPub() { return !!(MP.connected && MP.client && MP.host === MP.id); }
   //  do I run the troop? As mobSim — unless the room runs it (server/troop.js)
   function troopSim() { return !MP.srvOwns.m && mobSim(); }
+  //  … and the dogs (server/dogs.js)
+  function dogSim() { return !MP.srvOwns.d && mobSim(); }
   const HDQ = 255 / 6.2832;              // heading packed into a byte
   const DOG_NEAR = 110;                  // m: a dog further than this from you is all but lost in the fog (gone by ~150)
   function publishMobs() {
@@ -4303,7 +4308,7 @@
     //  in between (kf: 0) only those someone else over there might see —
     //  within DOG_NEAR of them — and any whose health, state or marks have
     //  changed, so a bite or a death is still heard at once.
-    if (dogsOn) {
+    if (dogsOn && !MP.srvOwns.d) {                     // (while the room runs them, it tells them: server/dogs.js)
       const near = [];
       for (const pr of MP.peers.values()) if (pr.w === WS.BACK) near.push(pr.tgt);
       const k = DG.snapRows(DOGS, full, (dg) => near.some((q) => Math.abs(q.x - dg.x) < DOG_NEAR && Math.abs(q.z - dg.z) < DOG_NEAR));
@@ -4328,7 +4333,7 @@
       const g = msg.g;
       hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
     }
-    applyDogSnapshot(msg.k, msg.kf !== 0);             // kf 0: only the dogs near us (publishMobs)
+    if (!MP.srvOwns.d) applyDogSnapshot(msg.k, msg.kf !== 0);   // kf 0: only the dogs near us (publishMobs); the room's: onRoomDogs
     applyGorSnapshot(msg.q);
     applyMfSnapshot(msg.f);
     applyVecSnapshot(msg.v);
@@ -4420,6 +4425,10 @@
     if (t.slice(-5) === '/mind') { onRoomMind(msg); return; }
     if (t.slice(-3) === '/tv') { onTraffic(msg); return; }
     if (t.slice(-3) === '/tq') { onTrafficAsk(); return; }
+    if (t.slice(-3) === '/dv') { onRoomDogs(msg); return; }
+    if (t.slice(-3) === '/dq') { onDogAsk(); return; }
+    if (t.slice(-3) === '/dk') { onDogKnow(msg); return; }
+    if (t.slice(-7) === '/dshare') { onDogShare(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -4640,7 +4649,7 @@
         const was = SRV.everUp;
         MP.id = m.p.id; rekit(monkey, MP.id);            // the room decides who we are
         MP.serverT0 = m.p.t - performance.now();
-        onRoomOwns(m.p.own || { b: 0, m: 0, t: 0 });     // what the room runs, as I arrive
+        onRoomOwns(m.p.own || { b: 0, m: 0, t: 0, d: 0 });   // what the room runs, as I arrive
         MP.client = client; MP.connected = true; SRV.everUp = true; SRV.tries = 0;
         if (dead || hp < HP_MAX) client.publish(mtopic('hurt'), JSON.stringify({ d: dead ? HP_MAX : HP_MAX - hp }));
         (m.p.items || []).forEach((a, i) => onItem({ i, a }));        // which pickups are lying there now
@@ -5426,7 +5435,8 @@
     }
     if (hitDog) {
       showHit(hitDog.hp - DMG <= 0);
-      hurtDog(hitDog, DMG, p.x, p.z);                  // it decides for itself what to do about that
+      if (MP.srvOwns.d) hitDog.hp -= DMG;              // the room decides (server/dogs.js); shown here at once
+      else hurtDog(hitDog, DMG, p.x, p.z);             // it decides for itself what to do about that
       sendDogHit(hitDog, DMG);
     }
     if (hitGor) {
@@ -5460,6 +5470,7 @@
     if (dead) return;
     if (shot) { lastAttacker = msg.by; lastAttackerT = performance.now(); showHurt(); playHurt(); camShake = 0.28; }
     if (msg.src === 'monkey') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.22); }   // a swipe, as the room runs the troop
+    if (msg.src === 'dog') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.26); }      // a bite, as the room runs the dogs
     hp = Math.max(0, Math.min(HP_MAX, +msg.hp || 0));
     updateHpUI();
     if (hp <= 0) onDeath();
@@ -5485,6 +5496,15 @@
       MP.srvOwns.t = !!msg.t;
       if (MP.srvOwns.t && !was) { MP.tHeard = false; for (const a of trafficAll) a.nt = undefined; }
       if (!MP.srvOwns.t && was) trafficBack(msg.tf);
+    }
+    if ('d' in msg) {
+      const was = MP.srvOwns.d;
+      MP.srvOwns.d = !!msg.d;
+      if (MP.srvOwns.d && !was) {                  // the room's now: ease onto what it says, from where they are
+        for (const d of dogs) if (d.live) { d.netX = d.x; d.netZ = d.z; d.netH = d.hd || 0; d.rx = d.x; d.rz = d.z; }
+        dogSummons.length = 0; dogWreckSent = null;
+      }
+      if (!MP.srvOwns.d && was) dogsBack(msg.df);
     }
     if ('m' in msg) {
       const was = MP.srvOwns.m;
@@ -5557,6 +5577,80 @@
   //  graph from where it stands (a follower's graph place is stale)
   function troopBack() {
     for (const m of monkeyPeds) { m.feedC = null; m.eating = false; if (TR.inPlay(m)) { const h = m.hd; TR.reseat(m); m.hd = h; } }
+  }
+  //  ---- the dogs, as the room runs them (server/dogs.js) ------------------------
+  //  the pack, as the room says it to everyone over there ('dv': the snapshot's own form)
+  function onRoomDogs(msg) { if (MP.srvOwns.d && wState === WS.BACK) applyDogSnapshot(msg.k, msg.kf !== 0); }
+  //  the room asks this game (the host) for its dogs, to carry on from
+  function onDogAsk() {
+    if (!MP.connected || !MP.client || MP.srvOwns.d) return;
+    try { MP.client.publish(mtopic('dfull'), JSON.stringify(dogsOn ? DG.fullState(DOGS) : { k: [] })); } catch (e) {}
+  }
+  //  they are this game's to run again: from the room's last word, or from what is drawn here
+  function dogsBack(df) {
+    if (wState !== WS.BACK) return;
+    if (df && DG.fullOk(df)) DG.adoptFull(DOGS, df);
+    else { for (const d of dogs) if (d.live) { d.x = d.rx; d.z = d.rz; d.stuck = 0; } DOGS.repack = 0; }
+  }
+  //  what the room's dogs know ('dk': per dog with a target [slot, x·10, z·10,
+  //  seen ago·10]): the flayers and VECNA running here learn through them
+  function onDogKnow(msg) {
+    if (!MP.srvOwns.d || !Array.isArray(msg.k)) return;
+    const had = new Set();
+    for (let i = 0; i + 3 < msg.k.length; i += 4) {
+      const d = dogs[msg.k[i]]; if (!d || !d.live) continue;
+      d.hasT = true; d.tx = msg.k[i + 1] / 10; d.tz = msg.k[i + 2] / 10; d.seeT = cityT - msg.k[i + 3] / 10; had.add(d);
+    }
+    for (const d of dogs) if (d.live && !had.has(d)) d.hasT = false;
+  }
+  //  a dog within a flayer's link was hurt ('dshare'): the flayer running here bleeds a share
+  function onDogShare(msg) {
+    if (!MP.srvOwns.d || !mobSim() || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
+    mfShareDamage(msg.x / 10, msg.z / 10, Math.max(0, Math.min(DMG, +msg.d || 0)));
+  }
+  //  The host's flayers and VECNA still run here while the room runs the dogs,
+  //  and still order them about: claim one, hand it a target, set it going,
+  //  carry it along, summon more — and pick the wrecks up and throw them.
+  //  Whatever they change of the dogs here (the dogs as the room says them)
+  //  and of the wrecks is written down after they have run, each frame, and
+  //  sent ('dord'); the room makes it so (server/dogs.js orders).
+  const dogMark = [], dogSummons = [];
+  let dogWreckSent = null;
+  const dogOrdering = () => MP.srvOwns.d && mobPub() && wState === WS.BACK;
+  const lordCode = (o) => (o.lord === 'mf' ? 1 : o.lord === 'vec' ? 2 : 0);
+  const r10 = (v) => Math.round(v * 10);
+  function dogOrdersMark() {
+    if (!dogOrdering()) return;
+    for (const d of dogs) if (d.live) {
+      const m = dogMark[d.slot] || (dogMark[d.slot] = []);
+      m[0] = d.lord || null; m[1] = d.lordSlot; m[2] = !!d.hasT; m[3] = d.tx; m[4] = d.tz; m[5] = d.seeT; m[6] = d.st; m[7] = d.x; m[8] = d.z;
+    }
+  }
+  function dogOrdersSend() {
+    if (!dogOrdering()) { dogSummons.length = 0; return; }
+    const o = [];
+    for (const d of dogs) {
+      if (!d.live || d.dead) continue;
+      const m = dogMark[d.slot]; if (!m) continue;
+      if ((d.lord || null) !== m[0] || (d.lord === 'mf' && d.lordSlot !== m[1])) o.push(['l', d.slot, lordCode(d), d.lord === 'mf' ? d.lordSlot : -1]);
+      if (d.hasT && (!m[2] || d.tx !== m[3] || d.tz !== m[4] || d.seeT !== m[5])) o.push(['t', d.slot, r10(d.tx), r10(d.tz), r10(Math.max(0, cityT - d.seeT))]);
+      if (d.st !== m[6]) o.push(['s', d.slot, D_ST.indexOf(d.st)]);
+      if (Math.hypot(d.x - m[7], d.z - m[8]) > 1) o.push(['p', d.slot, r10(d.x), r10(d.z)]);
+    }
+    for (const n of dogSummons) o.push(['n', r10(n.x), r10(n.z), lordCode(n), n.lord === 'mf' ? n.lordSlot : -1,
+      n.hasT ? 1 : 0, r10(n.tx || 0), r10(n.tz || 0), r10(Math.max(0, cityT - (n.seeT === undefined ? cityT : n.seeT))), Math.max(0, D_ST.indexOf(n.st))]);
+    dogSummons.length = 0;
+    //  the wrecks: up in the air (held, thrown) or not, and where each came down
+    if (!dogWreckSent) dogWreckSent = WR.makeWrecks(cars).map((w) => (w ? [w.x, w.z, w.rot, 0] : null));
+    for (let k = 0; k < wrecks.length; k++) {
+      const w = wrecks[k], q = dogWreckSent[k]; if (!w || !q) continue;
+      const up = (w.held ? 1 : 0) | (w.thrown ? 2 : 0);
+      if (up !== q[3] || (!up && (Math.hypot(w.x - q[0], w.z - q[1]) > 0.3 || Math.abs(w.rot - q[2]) > 0.05))) {
+        q[0] = w.x; q[1] = w.z; q[2] = w.rot; q[3] = up;
+        o.push(['w', k, r10(w.x), r10(w.z), Math.round(w.rot * 1000), up]);
+      }
+    }
+    if (o.length && MP.client) try { MP.client.publish(mtopic('dord'), JSON.stringify({ o })); } catch (e) {}
   }
   function onRoomPos(msg) {
     if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
@@ -5790,7 +5884,7 @@
       'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
-      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '\n' +
+      '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  DOGS ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
       'WORLD ' + (wState === WS.BACK ? 'BACKSIDE' : 'normal') + '  MONKEYS ' + myKills + '/' + GATE_NEED +
       '  GATE ' + rift.state + (rift.present ? ' ' + rift.dist.toFixed(0) + 'm' : '') + '\n' +
       'QUAL  ' + qLevel + '/3  x' + QSCALE[qLevel] + (autoQ ? ' auto' : ' fixed') + '\n' +
@@ -6879,7 +6973,12 @@
   }
   //  noise only carries over here
   function dogNoise(x, z, intensity, type) { if (wState === WS.BACK) DG.noise(DOGS, x, z, intensity, type); }
-  function spawnDog() { return DG.spawnDog(DOGS); }
+  //  (while the room runs them, one a flayer or VECNA summons here is the room's
+  //  to make: it is written down, and sent with this frame's orders — dogOrdersSend)
+  function spawnDog() {
+    if (MP.srvOwns.d) { if (!dogOrdering()) return null; const n = { slot: -1, live: true, S: {} }; dogSummons.push(n); return n; }
+    return DG.spawnDog(DOGS);
+  }
   function despawnDog(d) { DG.despawnDog(DOGS, d); }
   function clearDogs() { DG.clearDogs(DOGS); }
   function hurtDog(d, dmg, fromX, fromZ) { DG.hurt(DOGS, d, dmg, fromX, fromZ); }
@@ -7016,7 +7115,7 @@
     if (!dogsOn) { dogsOn = true; for (const m of dogParts) m.visible = true; }
     if (dogHitCd > 0) dogHitCd -= dt;
     dogHigh = 0;
-    const mine = mobSim();
+    const mine = dogSim();
     dogFacing();
 
     // the player makes noise whether they mean to or not
@@ -7048,7 +7147,19 @@
         if ((dogAiFrame + d.slot) % every === 0) DG.tick(DOGS, d, dt * every);
         d.rx = d.x; d.rz = d.z;
       } else {
-        //  follower: ease onto the owner's dogs and animate locally
+        //  follower: ease onto the owner's dogs and animate locally. One too far
+        //  off to be drawn (90 m on, alive) is caught up only every fourth
+        //  frame, or twelfth beyond 200 m — as an owner thinks for them — and
+        //  nothing more is done for it: following all forty-eight every frame
+        //  cost this game more than running them had.
+        if (d.lod >= 2 && !d.dead) {
+          const every = d.lod === 2 ? 4 : 12;
+          if ((dogAiFrame + d.slot) % every !== 0) continue;
+          easePose(d, d.netX, d.netZ, d.netH, dt * every, 11, 26, 7, 5);
+          d.x = d.rx; d.z = d.rz; d.sp = d.rspd; d.tdist = Math.hypot(dx, dz);
+          if (d.rise < 1) d.rise = Math.min(1, d.rise + dt * every / D_RISE_T);
+          continue;
+        }
         easePose(d, d.netX, d.netZ, d.netH, dt, 11, 26, 7, 5);
         d.x = d.rx; d.z = d.rz;
         d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
@@ -7146,6 +7257,10 @@
           maw: 0, headYaw: 0, headPitch: 0, tailUp: 0, crouch: 0, lunge: 0, stagger: 0,
           atkCd: 0, callCd: 0, deadT: 0, dead: false, see: 0, seeT: -99, tdist: 999, hasT: false,
           stepPh: 0, breath: Math.random() * 6, hpHold: 0, lod: 0,
+          //  (and what its mind needs, should this game come to run it: the host
+          //  leaving, or the room giving them back without its word on them)
+          wx: k[i + 1] / 10, wz: k[i + 2] / 10, wanderT: 0, strafe: 1, hideX: 0, hideZ: 0, hasHide: false,
+          lordFar: 0, taint: 0, stuck: 0, hurtRecent: 0, bit: false, called: false, noise: null,
         });
         d.rx = d.x; d.rz = d.z; d.y = supportHeight(d.x, d.z, 1);
         d.rise = (k[i + 6] & 16) ? 0 : 1;              // one just summoned: it climbs out here too
@@ -7171,7 +7286,7 @@
     if (full) for (const o of dogs) if (o.live && !o.netSeen) despawnDog(o);   // only a full list says who is gone
   }
   function sendDogHit(d, dmg) {
-    if (!MP.connected || !MP.client || mobPub()) return;   // the owner applies its own hits directly
+    if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;   // the owner applies its own hits directly, unless the room runs them
     d.hpHold = performance.now() + 1200;
     try { MP.client.publish(mtopic('dhit'), JSON.stringify({ i: d.slot, d: dmg, x: Math.round(p.x), z: Math.round(p.z) })); } catch (e) {}
   }
@@ -8170,7 +8285,7 @@
       mt.uniforms.uTime.value = cityT;
     }
     //  §33: the dogs know what it is, and want to be somewhere else (shared/dogs.js shove)
-    for (const g of gorgons) if (g.live && !g.dead) DG.shove(DOGS, g, dt);
+    if (!MP.srvOwns.d) for (const g of gorgons) if (g.live && !g.dead) DG.shove(DOGS, g, dt);   // (the room's, when it runs them)
   }
 
   // ---- network ------------------------------------------------------
@@ -8251,11 +8366,11 @@
   const NMF = 2, MF_DRAW = 2;
   const MF_HP = GOR_HP * 10;            // 4200 — ten gorgons
   const MF_VIS = 90, MF_VIS_COS = Math.cos(1.5), MF_HEAR = 150;
-  const MF_LINK = 74;                   // how far its command reaches
+  const MF_LINK = DG.MF_LINK;           // how far its command reaches
   const MF_SHARE = 0.28;                // of a minion's wound that reaches it
   const MF_SHARE_S = 55;                // …but never more than this per second
   const MF_SUMMON = 120, MF_PANIC_CD = 95;
-  const MF_ESC_GOR = 2, MF_ESC_DOG = 3;
+  const MF_ESC_GOR = 2, MF_ESC_DOG = DG.RETINUE.mf;
   const MF_SWIPE_R = 15.5, MF_SWIPE_DMG = 30;
   //  §21 wanted "distance decides", and two attacks is not a decision. Each of
   //  these punishes a different habit: the sweep punishes strafing round it,
@@ -8664,7 +8779,7 @@
   //  bodies around with him is a king you cannot fight, and a street with
   //  forty bodies on it is the crowding problem again by another name.
   const MF_RET = { dogs: MF_ESC_DOG, gors: MF_ESC_GOR };   // §6/§7/§29
-  const V_RET = { dogs: 6, gors: 2 };                      // §22/§65: a few, not everything
+  const V_RET = { dogs: DG.RETINUE.vec, gors: 2 };         // §22/§65: a few, not everything
   //  near enough to be claimed, and how far one may then get before it is
   //  loose again (shared/dogs.js — the room's dogs keep their bonds the same)
   const MF_TAKE = DG.MF_TAKE, V_TAKE = DG.V_TAKE;
@@ -15514,9 +15629,11 @@
     }
     updateLightning(dt);
     updateDogs(dt);                          // and it clears them out when you leave
+    dogOrdersMark();                         // (what the masters below do to the room's dogs: dogOrdersSend)
     updateGorgons(dt);
     updateFlayers(dt);
     updateVecna(dt);                         // and the king outranks all of it
+    dogOrdersSend();
     updateRifts(dt);                         // and the ground it calls them up through
     updateBzb(dt);                           // and, in this world, the one who guards the tear
     if (wState === WS.BACK) {

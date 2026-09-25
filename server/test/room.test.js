@@ -251,6 +251,19 @@ async function main() {
     const told = tv ? (tv.p.c || []).length / 6 + (tv.p.f || []).length / 7 + (tv.p.w || []).length / 6 : 0;
     check('two in a room: it asks the host\'s game for its traffic, carries on from it, and tells each player the whole city',
       tq && tOwn && tv && Math.abs(tv.p.t - 42) < 3 && told === 361, (tq ? 'asked; ' : 'not asked; ') + (tv ? 'first word ' + JSON.stringify(tv.p).length + ' bytes, ' + told + ' told, clock ' + tv.p.t : kinds(G2)));
+
+    // ---- the other side's dogs (server/dogs.js), in the same room ----
+    //  G1's game had none (it was on the day side): the room starts with an
+    //  empty district, stocks it as they cross, and tells only those over there
+    const dq = G1.of('dq')[0];
+    G1.send('dfull', { k: [] });
+    const dOwn = await until(() => G2.of('own').find((m) => m.p.d === 1), 5000);
+    for (let i = 0; i < 30; i++) { G1.send('state', { x: 30, y: 0, z: 6, r: 0, w: 1 }); G2.send('state', { x: 32, y: 0, z: 6, r: 0, w: i < 15 ? 0 : 1 }); await sleep(60); }
+    const dvG1 = G1.of('dv'), dvG2 = G2.of('dv'), lastDv = dvG1.filter((m) => m.p.kf === 1).pop();
+    const up = lastDv ? lastDv.p.k.length / 7 : 0;
+    check('two in a room: it asks the host\'s game for its dogs, carries on (none: it stocks the district as they cross), and tells only those over there',
+      dq && dOwn && up >= 20 && dvG2.length < dvG1.length && dvG2.length > 0,
+      (dq ? 'asked; ' : 'not asked; ') + up + ' dogs up after 1.8 s; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);
     G1.ws.close(); G2.ws.close();
 
     // ---- leaving -------------------------------------------------------------

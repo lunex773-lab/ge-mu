@@ -27,9 +27,10 @@
 //      not used to judge shots or pickups, and the player is told where the
 //      room last had them ('pos'), and put back there
 //    - who runs the creatures: with two or more here the room runs Beelzebub,
-//      the monkey troop and the day side's traffic itself (creatures.js), and
-//      judges every shot at them; the rest are the host's, and only the host's
-//      snapshots and kill reports are passed on
+//      the monkey troop, the day side's traffic and the other side's dogs
+//      itself (creatures.js), and judges every shot at them; the rest are the
+//      host's, and only the host's snapshots, kill reports and orders to the
+//      dogs are passed on
 //    - what Beelzebub learns (mindstore.js, kept for every room): a player's
 //      game may report how a fight it ran went only with the candidate the
 //      memory handed that player, once; and may share what it has learned
@@ -109,9 +110,9 @@ const KINDS = {
   //  deaths and kills are decided here now; a player's own claim is ignored
   kill: [3, 6, () => null],
   chat: [1, 4, (p, from) => { const m = text(p.m, 120); return m ? { id: from, n: text(p.n, 20), m } : null; }],
-  mob: [10, 12, (p, from, room) => {
+  mob: [10, 12, (p, from, room, now) => {
     if (room.host() !== from) return null;
-    room.creatures.hostSaid(p);                                    // the tear, and Beelzebub while the room takes him over
+    room.creatures.hostSaid(p, now);                               // the tear, and Beelzebub while the room takes him over
     return Object.assign(p, { id: from });
   }],
   //  the troop: the host's to say who took a monkey down, and the host's to
@@ -119,7 +120,12 @@ const KINDS = {
   //  judges the shot and says (creatures.js, troop.js)
   mdeath: [8, 16, (p, from, room) => (room.host() === from && !room.creatures.own.m ? { i: int(p.i), by: typeof p.by === 'string' ? p.by : null, s: int(p.s) } : null)],
   mobhit: [8, 12, (p, from, room, now) => (room.creatures.monkeyShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, by: from })],
-  dhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
+  //  the dogs: the room's to judge when it runs them (dogs.js), else the host's
+  dhit: [8, 12, (p, from, room, now) => (room.creatures.dogShot(from, int(p.i), now) ? null : { i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
+  //  the host's game's dogs, when the room asks for them to carry on from ('dq');
+  //  what the host's flayers and VECNA did to the room's dogs (dogs.js orders)
+  dfull: [1, 2, (p, from, room) => { room.creatures.dogsFrom(from, p); return null; }],
+  dord: [10, 20, (p, from, room) => { room.creatures.dogOrders(from, p); return null; }],
   ghit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   mfhit: [8, 12, (p) => ({ i: int(p.i), d: DMG, x: int(p.x), z: int(p.z) })],
   vhit: [8, 12, (p) => ({ d: DMG, x: int(p.x), z: int(p.z) })],
@@ -253,10 +259,12 @@ export class Relay {
     //  it back from them as it did the first time (creatures.js recount)
     if (this.woke) {
       this.woke = false;
-      this.send('all', 'own', { b: 0, m: 0, t: 0 });
-      //  (and asks the host's game again for its traffic: the room's first
-      //  ask was made as it woke, before there was anyone to send it to)
+      this.send('all', 'own', { b: 0, m: 0, t: 0, d: 0 });
+      //  (and asks the host's game again for its traffic and its dogs: the
+      //  room's first asks were made as it woke, before there was anyone to
+      //  send them to)
       if (this.creatures.taking.t) this.send(this.host(), 'tq', {});
+      if (this.creatures.taking.d) this.send(this.host(), 'dq', {});
     }
     this.tickItems(now);
     const r = this.judge(me, from, raw, now);
