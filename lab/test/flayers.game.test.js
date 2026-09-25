@@ -165,11 +165,11 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
       Object.assign(v, { awake: true, st: 'observe', stT: 0, hasT: true, tx: to[0], tz: to[1], seeT: RD.t, cmdT: 0, atkCd: 99, mentalT: 99 });
       //  (what the room's flayer is the moment he tells it — a moment later it may see someone for itself)
       VC.command(RD.V, 0.05);
-      const then = [mf.st, mf.panicked, mf.tx, mf.tz, mf.lord];
+      const then = [mf.st, mf.panicked, mf.tx, mf.tz, mf.lord], told = [v.tx, v.tz];      // (where he knows: his own, or what his court sees)
       await sleep(900);
       const onA = JSON.parse(await ev(A, `JSON.stringify([flayers[${mf.slot}].lord, flayers[${mf.slot}].panicked, vec.live && !vec.dead])`));
       const onB = JSON.parse(await ev(B, `JSON.stringify([flayers[${mf.slot}].lord, vec.live && !vec.dead])`));
-      check('VECNA — the room\'s too, now — orders it about: it turns, and both screens show it his', then[0] === 'track' && !then[1] && Math.abs(then[2] - to[0]) < 0.1 && then[4] === 'vec' &&
+      check('VECNA — the room\'s too, now — orders it about: it turns, and both screens show it his', then[0] === 'track' && !then[1] && Math.abs(then[2] - told[0]) < 0.1 && Math.abs(then[3] - told[1]) < 0.1 && then[4] === 'vec' &&
         onA[0] === 'vec' && !onA[1] && onA[2] && onB[0] === 'vec' && onB[1],
         'the room\'s ' + JSON.stringify(then) + '; the host\'s screen ' + JSON.stringify(onA) + ', the second ' + JSON.stringify(onB));
       VC.clearVecna(RD.V);

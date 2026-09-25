@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import TF from '../../shared/traffic.js';
 import FL from '../../shared/flayers.js';
+import VC from '../../shared/vecna.js';
 import { fingerprint } from '../fingerprint.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -263,16 +264,22 @@ async function main() {
     const dq = G1.of('dq')[0];
     const flayer = [0, 9000, 600, 0, 0, 42000, FL.MF_ST.indexOf('wander'), 0, -1, 0, 0, 9000, 600, 0, 0, 40, 0, 9990, 9000, 600, 990, 0, 0, 0, 1, -1, -1, 0];
     G1.send('state', { x: 30, y: 0, z: 6, r: 0, w: 1 }); await sleep(60);     // (the host crosses first: nobody over there, nothing is kept there)
-    G1.send('dfull', { k: [], f: { r: flayer, cd: 60000, t: null } });
+    //  … and VECNA, dormant 120 m off (shared/vecna.js fullState)
+    const V0 = VC.makeVecna({ now: () => 0, random: () => 0.5, targets: () => [], supportHeight: () => 0, release: () => {}, on: { gone: () => {} } });
+    VC.spawnVecna(V0, { x: 150, z: 6 });
+    G1.send('dfull', { k: [], f: { r: flayer, cd: 60000, t: null }, v: VC.fullState(V0) });
     const dOwn = await until(() => G2.of('own').find((m) => m.p.d === 1), 5000);
     for (let i = 0; i < 30; i++) { G1.send('state', { x: 30, y: 0, z: 6, r: 0, w: 1 }); G2.send('state', { x: 32, y: 0, z: 6, r: 0, w: i < 15 ? 0 : 1 }); await sleep(60); }
     const dvG1 = G1.of('dv'), dvG2 = G2.of('dv'), lastDv = dvG1.filter((m) => m.p.kf === 1).pop();
     const dogsUp = lastDv ? lastDv.p.k.length / 7 : 0;
     const fr = lastDv && Array.isArray(lastDv.p.f) ? lastDv.p.f : [];
-    check('two in a room: it asks the host\'s game for its dogs, gorgons and flayer, carries on (the flayer where it stood; the district stocked as they cross), and tells only those over there',
-      dq && dOwn && dogsUp >= 20 && lastDv && Array.isArray(lastDv.p.q) && lastDv.p.q.length >= 7 && fr.length === FL.SNAP_N && Math.abs(fr[1] / 10 - 90) < 15 && dvG2.length < dvG1.length && dvG2.length > 0,
+    const vr = lastDv && Array.isArray(lastDv.p.v) ? lastDv.p.v : [];
+    check('two in a room: it asks the host\'s game for its dogs, gorgons, flayer and VECNA, carries on (the flayer and VECNA where they stood; the district stocked as they cross), and tells only those over there',
+      dq && dOwn && dogsUp >= 20 && lastDv && Array.isArray(lastDv.p.q) && lastDv.p.q.length >= 7 && fr.length === FL.SNAP_N && Math.abs(fr[1] / 10 - 90) < 15 &&
+      vr.length === VC.SNAP_N && Math.abs(vr[0] / 10 - 150) < 15 && dvG2.length < dvG1.length && dvG2.length > 0,
       (dq ? 'asked; ' : 'not asked; ') + dogsUp + ' dogs, ' + (lastDv && lastDv.p.q ? lastDv.p.q.length / 7 : 0) + ' gorgon(s) and ' + fr.length / FL.SNAP_N + ' flayer up after 1.8 s' +
-      (fr.length ? ' (at ' + (fr[1] / 10).toFixed(1) + ', ' + (fr[2] / 10).toFixed(1) + ', ' + FL.MF_ST[fr[5] - 1] + ')' : '') + '; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);
+      (fr.length ? ' (at ' + (fr[1] / 10).toFixed(1) + ', ' + (fr[2] / 10).toFixed(1) + ', ' + FL.MF_ST[fr[5] - 1] + ')' : '') +
+      (vr.length ? '; VECNA at ' + (vr[0] / 10).toFixed(1) + ', ' + (vr[1] / 10).toFixed(1) + ', ' + VC.V_ST[vr[4] - 1] : '; no VECNA') + '; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);
     G1.ws.close(); G2.ws.close();
 
     // ---- leaving -------------------------------------------------------------
