@@ -149,6 +149,10 @@ check('and the host can no longer say so', say('p000000', 'mdeath', { i: 5, by: 
 {
   const m5 = RT.T.monkeys[5];
   now += 500; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); say('p000001', 'state', { x: ax + 60, y: 0, z: az, r: 0, w: 0 });
+  //  (the rest of the troop, raging since the shots above, well away — one of
+  //  them may just have swiped the player, who is then not swiped again for a moment)
+  for (const q of RT.T.monkeys) if (q !== m5 && TROOP.inPlay(q)) { q.wx = q.rx = ax + 200; q.wz = q.rz = az; }
+  Object.assign(R.players.get('p000000'), { hp: 100, dead: false, swipedT: 0 });
   const hpA = R.players.get('p000000').hp;
   m5.hp = 60; m5.aggro = true; m5.meleeCd = 0; m5.pooled = false; RT.T.rageT = 30;
   out.length = 0;
