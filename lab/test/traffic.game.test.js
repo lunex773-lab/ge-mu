@@ -33,13 +33,16 @@ async function until(P, src, secs) {
 }
 const CARS = 'JSON.stringify(cars.map((c) => [+c.rx.toFixed(2), +c.rz.toFixed(2)]))';
 //  how long updateCity takes here, a frame (drawing off, as lab/tools/profile_game.js measures)
-const TIMING = `(() => { const S = window.__S = { on: false, s: 0, n: 0 };
-  const f = updateCity; updateCity = function (dt) { const t0 = performance.now(); const r = f(dt); if (S.on) { S.s += performance.now() - t0; S.n++; } return r; };
+const TIMING = `(() => { const S = window.__S = { on: false, t: [] };
+  const f = updateCity; updateCity = function (dt) { const t0 = performance.now(); const r = f(dt); if (S.on) S.t.push(performance.now() - t0); return r; };
   return 1; })()`;
 async function cityCost(P, secs) {
-  await ev(P, 'window.__S.s = 0; window.__S.n = 0; window.__S.on = true; 1'); await sleep(secs * 1000);
-  const r = JSON.parse(await ev(P, 'window.__S.on = false; JSON.stringify(window.__S)'));
-  return r.s / Math.max(1, r.n) * 1000;
+  await ev(P, 'window.__S.t = []; window.__S.on = true; 1'); await sleep(secs * 1000);
+  //  the mean of the middle eight tenths of the frames (a plain mean is pulled about by the odd
+  //  collection or a busy moment on this machine; the page's clock is too coarse for one frame's middle)
+  const t = JSON.parse(await ev(P, 'window.__S.on = false; JSON.stringify(window.__S.t)')).sort((a, b) => a - b);
+  const mid = t.slice(Math.floor(t.length * 0.1), Math.ceil(t.length * 0.9));
+  return mid.reduce((a, b) => a + b, 0) / Math.max(1, mid.length) * 1000;
 }
 
 (async () => {
@@ -54,23 +57,27 @@ async function cityCost(P, secs) {
     await ev(A, 'window.__t.noRender(); 1');
     await ev(A, TIMING);
     check('alone, the player\'s game runs the traffic, as it always has', await ev(A, 'trafficSim()'));
-    //  stand by a busy crossing in the open
-    await ev(A, `(() => { for (let x = 4; x < 60; x += 2) if (clearAt(x, 6, 1)) { p.set(x, EYE, 6); publishState(true); return 1; } return 0; })()`);
+    //  stand by a busy crossing in the open (and back there to measure it again, told it: the same street, the same cars about)
+    const CROSSING = `(() => { for (let x = 4; x < 60; x += 2) if (clearAt(x, 6, 1)) { p.set(x, EYE, 6); publishState(true); return 1; } return 0; })()`;
+    await ev(A, CROSSING);
     await sleep(1000);
     const ownUs = await cityCost(A, 6);
 
     // ---- a second player: the room carries on from the host's traffic ----------------
     await ev(A, `(() => { const f = onRoomOwns; onRoomOwns = function (m) {
-      if (m.t && !MP.srvOwns.t) window.__atTake = JSON.parse(${CARS}); return f(m); }; return 1; })()`);
+      if (m.t && !MP.srvOwns.t) { window.__atTake = JSON.parse(${CARS}); window.__atTakeT = performance.now(); } return f(m); }; return 1; })()`);
     await B.join();
     const taken = (await until(A, 'MP.srvOwns.t && !trafficSim()', 10)) && (await until(B, 'MP.srvOwns.t', 10));
     const RT = room.rooms.get('traffic').relay.creatures.traffic;
     const at = JSON.parse(await ev(A, 'JSON.stringify(window.__atTake || [])'));
     await sleep(600);
-    const after = JSON.parse(await ev(A, CARS));
-    const jump = after.map(([x, z], k) => Math.hypot(x - at[k][0], z - at[k][1]) - 0.6 * (RT.T.cars[k].speed + 4));
+    //  (how long it has really been: waiting on both screens to say so takes a while, more on a busy machine)
+    const [after, since] = JSON.parse(await ev(A, `JSON.stringify([${CARS.replace('JSON.stringify(', '(')}, (performance.now() - window.__atTakeT) / 1000])`));
+    const jump = after.map(([x, z], k) => Math.hypot(x - at[k][0], z - at[k][1]) - since * (RT.T.cars[k].speed + 4));
+    const worst = jump.indexOf(Math.max(...jump)), wc = RT.T.cars[worst];
     check('a second player arrives: the room carries on from the host\'s traffic, and the host sees nothing jump', taken && at.length === 140 && Math.max(...jump) < 1,
-      'the most any car moved in the 0.6 s after, beyond what its speed would take it: ' + Math.max(0, Math.max(...jump)).toFixed(2) + ' m');
+      'the most any car moved in the ' + since.toFixed(2) + ' s after, beyond what its speed would take it: ' + Math.max(0, Math.max(...jump)).toFixed(2) + ' m' +
+      (Math.max(...jump) >= 1 ? ' (car ' + worst + ': ' + JSON.stringify(at[worst]) + ' → ' + JSON.stringify(after[worst]) + ', the room has it at ' + [wc.rx.toFixed(1), wc.rz.toFixed(1)] + ' going ' + wc.speed.toFixed(1) + ' m/s; the room took it at ' + JSON.stringify(RT.tookAt && RT.tookAt[worst]) + ')' : ''));
     //  B beside A: the same cars, the same people, the same lights
     await ev(B, `(() => { p.set(${await ev(A, 'p.x')} + 3, EYE, ${await ev(A, 'p.z')}); publishState(true); return 1; })()`);
     await sleep(3000);
@@ -112,6 +119,7 @@ async function cityCost(P, secs) {
 
     // ---- what it costs ---------------------------------------------------------------
     await ev(B, `(() => { window.__tv = 0; const f = onNet; onNet = function (t, msg, bytes) { if (t.slice(-3) === '/tv') window.__tv += bytes; return f(t, msg, bytes); }; return 1; })()`);
+    await ev(A, CROSSING); await sleep(1000);
     const roomUs = await cityCost(A, 6);
     const tvBytes = await ev(B, 'window.__tv');
     check('each game\'s time on the traffic, told it rather than working it out: less', roomUs < ownUs * 0.85,

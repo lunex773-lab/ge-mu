@@ -53,6 +53,7 @@ export class RoomTraffic {
   adopt(s) {
     if (s && TF.fullOk(s)) { TF.adoptFull(this.T, s); this.t = s.t; }
     this.told.clear();
+    this.tookAt = this.T.cars.map((c) => [+c.rx.toFixed(1), +c.rz.toFixed(1)]);     // (where it took them: for a test)
   }
   full() { return TF.fullState(this.T); }
 

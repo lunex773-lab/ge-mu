@@ -37,13 +37,16 @@ async function until(P, src, secs) {
 }
 const DOGS = 'JSON.stringify(dogs.map((d) => d.live ? [d.slot, +d.x.toFixed(2), +d.z.toFixed(2), d.hp, d.dead ? 1 : 0, d.lord || 0] : null))';
 //  how long updateDogs takes here, a frame (drawing off)
-const TIMING = `(() => { const S = window.__S = { on: false, s: 0, n: 0 };
-  const f = updateDogs; updateDogs = function (dt) { const t0 = performance.now(); const r = f(dt); if (S.on) { S.s += performance.now() - t0; S.n++; } return r; };
+const TIMING = `(() => { const S = window.__S = { on: false, t: [] };
+  const f = updateDogs; updateDogs = function (dt) { const t0 = performance.now(); const r = f(dt); if (S.on) S.t.push(performance.now() - t0); return r; };
   return 1; })()`;
 async function dogCost(P, secs) {
-  await ev(P, 'window.__S.s = 0; window.__S.n = 0; window.__S.on = true; 1'); await sleep(secs * 1000);
-  const r = JSON.parse(await ev(P, 'window.__S.on = false; JSON.stringify(window.__S)'));
-  return r.s / Math.max(1, r.n) * 1000;
+  await ev(P, 'window.__S.t = []; window.__S.on = true; 1'); await sleep(secs * 1000);
+  //  the mean of the middle eight tenths of the frames (a plain mean is pulled about by the odd
+  //  collection or a busy moment on this machine; the page's clock is too coarse for one frame's middle)
+  const t = JSON.parse(await ev(P, 'window.__S.on = false; JSON.stringify(window.__S.t)')).sort((a, b) => a - b);
+  const mid = t.slice(Math.floor(t.length * 0.1), Math.ceil(t.length * 0.9));
+  return mid.reduce((a, b) => a + b, 0) / Math.max(1, mid.length) * 1000;
 }
 //  stand somewhere clear, out of the traffic of the other side's wrecks
 const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2) for (let k = 0; k < 12; k++) { const sx = ${x} + Math.sin(k * 0.52) * r, sz = ${z} + Math.cos(k * 0.52) * r;
