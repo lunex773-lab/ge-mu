@@ -2,7 +2,10 @@
 # the live site: the page is this commit's, and its rooms judge as they should.
 #
 # Runs on every push to the working branch (and by hand with "Run workflow",
-# once this file is on the default branch). It needs two repository secrets —
+# once this file is on the default branch) — but not for a push that only
+# changes the Markdown notes: nothing served changes, and a deploy moves every
+# room in play to a fresh copy of the code (a moment of RECONNECTING… for
+# whoever is playing). It needs two repository secrets —
 # see SETUP.md:
 #   CLOUDFLARE_API_TOKEN   an API token made from the "Edit Cloudflare Workers" template
 #   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account to deploy to
@@ -11,6 +14,7 @@ name: Deploy to Cloudflare
 on:
   push:
     branches: [claude/multiplayer-login-c9n7dk]
+    paths-ignore: ['**.md']
   workflow_dispatch:
 # one deploy at a time, each checked before the next goes out
 concurrency:
@@ -47,4 +51,8 @@ jobs:
           [ -n "$URL" ] || URL=$(printf '%s' "$OUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
           [ -n "$URL" ] || { echo "The deployed URL is not in wrangler's output."; exit 1; }
           echo "### 公開先: $URL" >> "$GITHUB_STEP_SUMMARY"
-          LIVE_URL="$URL" node server/test/room.test.js
+          # the version just deployed: the check waits for rooms running it
+          # (a push that changes nothing of the server keeps the build's
+          # fingerprint, and rooms still moving over would pass for new ones)
+          VER=$(printf '%s' "$OUT" | grep -o 'Current Version ID: [0-9a-f-]*' | head -n 1 | awk '{print $4}')
+          LIVE_URL="$URL" LIVE_VERSION="$VER" node server/test/room.test.js

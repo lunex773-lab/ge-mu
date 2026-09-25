@@ -24,6 +24,7 @@ import { fingerprint } from '../fingerprint.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BUILD = fingerprint(ROOT);                   // the room server's code, as it is in this checkout
+const VERSION = process.env.LIVE_VERSION || '';     // live: the Worker version just deployed (Cloudflare's id), when the workflow knows it
 const PORT = 8700 + Math.floor(Math.random() * 200);
 const LIVE = (process.env.LIVE_URL || '').replace(/\/+$/, '');
 const BASE = LIVE || 'http://127.0.0.1:' + PORT;
@@ -73,6 +74,8 @@ async function roundTrip() {
   const P = await join(ROOM + 'rtt', 'rtt');
   //  (a room still on the last version, the minute after a deploy, is not this one)
   if (P.welcome.bd !== BUILD) { P.ws.close(); throw new Error('a room still runs build ' + P.welcome.bd + ', not ' + BUILD); }
+  //  (nor, live, one on the last deploy of the same build: the workflow says which version it just deployed)
+  if (VERSION && P.welcome.ver !== VERSION) { P.ws.close(); throw new Error('a room still runs version ' + P.welcome.ver + ', not ' + VERSION); }
   const all = [];
   for (let i = 0; i < 5; i++) {
     const t0 = Date.now(), n = P.of('ping').length;

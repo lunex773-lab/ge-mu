@@ -56,7 +56,7 @@ export class GameRoom extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(a);
     const out = this.adopt(server, a);
-    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns(), bd: BUILD } }));
+    server.send(JSON.stringify({ s: '_welcome', p: { id: a.id, host: this.relay.host(), players: [...this.sockets.keys()], t: Date.now(), hp: this.relay.players.get(a.id).hp, items: this.relay.itemState(), own: this.relay.creatures.owns(), bd: BUILD, ver: (this.env && this.env.CF_VERSION_METADATA && this.env.CF_VERSION_METADATA.id) || null } }));
     this.route(out, a.id, server);
     this.relay.hello(a.id);
     const asked = this.askMind();                   // (answered once the player is in)
