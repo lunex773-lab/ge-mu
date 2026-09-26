@@ -265,6 +265,15 @@ rv.vuln = 0;
   out.length = 0;
   for (let i = 0; i < 50; i++) { put(s7.x, s7.z); rv.atk = null; rv.atkCd = 99; now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
   check('his wave breaks his own grip: the drag does no harm after it', g2 && !out.some(([, m]) => m.s === 'hp' && m.p.src === 'vecgrip'));
+  //  and one who dies in his hand is let go
+  heal(A); rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'grab');
+  out.length = 0;
+  let g3 = false;
+  for (let i = 0; i < 40 && !g3; i++) { put(s7.x, s7.z, true); now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); g3 = out.some(([to, m]) => to === A && m.s === 'grip' && !m.p.off); }
+  R.players.get(A).dead = true;
+  out.length = 0;
+  for (let i = 0; i < 10; i++) { put(s7.x, s7.z); rv.atkCd = 99; now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  check('one who dies in his hand is let go, and harmed no more', g3 && out.some(([to, m]) => to === A && m.s === 'grip' && m.p.off) && !RD.byId.get(A).pl.grip);
   heal(A);
 }
 

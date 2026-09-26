@@ -67,10 +67,11 @@ async function phase(A, label) {
   const { profile } = await cdp.send('Profiler.stop');
   await ev(A, 'window.__S.on = false; 1');
   const S = JSON.parse(await ev(A, 'JSON.stringify(window.__S)'));
-  const up1 = JSON.parse(await ev(A, '(() => { const v = []; scene.traverse((o) => { if (o.isInstancedMesh) v.push({ v: o.instanceMatrix.version, b: o.instanceMatrix.array.byteLength }); }); return JSON.stringify(v); })()'));
+  //  (what one upload sends: nothing if it is hidden, all of it, or — the drawing being off, the last range asked is still there — only that range)
+  const up1 = JSON.parse(await ev(A, '(() => { const v = []; scene.traverse((o) => { if (o.isInstancedMesh) { const a = o.instanceMatrix, r = a.updateRange; let vis = true; for (let q = o; q; q = q.parent) if (!q.visible) vis = false; v.push({ v: a.version, b: !vis ? 0 : r && r.count >= 0 ? r.count * a.array.BYTES_PER_ELEMENT : a.array.byteLength }); } }); return JSON.stringify(v); })()'));
   const fr = S.fr.slice().sort((a, b) => a - b), n = fr.length;
   let hot = 0, hotBytes = 0;
-  up1.forEach((o, k) => { if (o.v - (up0[k] || 0) > n * 0.8) { hot++; hotBytes += o.b; } });
+  up1.forEach((o, k) => { if (o.v - (up0[k] || 0) > n * 0.8 && o.b) { hot++; hotBytes += o.b; } });   // (a hidden one is never sent)
   const nodes = new Map(profile.nodes.map((x) => [x.id, x])), self = new Map();
   let total = 0;
   for (let k = 0; k < profile.samples.length; k++) {

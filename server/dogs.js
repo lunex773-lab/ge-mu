@@ -344,6 +344,7 @@ export class RoomDogs {
     for (const t of this.who) {
       const g = t.pl.grip; if (!g) continue;
       if (now - g.at >= GRIP_END) { t.pl.grip = null; continue; }
+      if (t.dead) { this.letGo(t); continue; }            // (dead: let go, and do no more harm)
       //  (as the game lets go: he is gone, or they are dragged too far from him)
       if (!v.live || v.dead || Math.hypot(v.x - t.x, v.z - t.z) > VC.V_GRAB_R * 1.6 + 8) { this.letGo(t); continue; }
       if (!g.hurt && now - g.at >= GRIP_HURT) { g.hurt = true; this.room.damage(t.id, VC.V_GRAB_DMG, null, now, 'vecgrip'); }

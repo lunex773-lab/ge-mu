@@ -7618,6 +7618,7 @@
   function onDeath() {
     dead = true; fireHeld = false;
     setScope(false);
+    if (psyHold) psyRelease(0);                         // (the dead are not held: else the grip went on, and dragged the respawned)
     playDeath();
     // credit whoever hit us last, but only if it was recent — a car or an angry
     // monkey finishing us off must not hand a stale attacker the point
@@ -8270,6 +8271,9 @@
     const want = inside ? NUM_SPORE : (NUM_SPORE * 0.42) | 0;
     sporeI.count = want;
     const half = SPORE_BOX * 0.5;
+    //  every spore faces the camera: its rotation is worked out once, and each
+    //  matrix is that times its size, at its place (what compose would give)
+    const R = _sporeR.makeRotationFromQuaternion(camera.quaternion).elements, A = sporeI.instanceMatrix.array;
     for (let i = 0; i < want; i++) {
       const s = spores[i];
       s.ph += dt * 0.7;
@@ -8280,13 +8284,15 @@
       if (wx > half) s.x -= SPORE_BOX; else if (wx < -half) s.x += SPORE_BOX;
       if (wz > half) s.z -= SPORE_BOX; else if (wz < -half) s.z += SPORE_BOX;
       if (wy > 9) s.y -= 11; else if (wy < -2.5) s.y += 11;
-      _d.position.set(s.x, s.y, s.z);
-      _d.quaternion.copy(camera.quaternion);
-      _d.scale.setScalar(s.sc);
-      _d.updateMatrix(); sporeI.setMatrixAt(i, _d.matrix);
+      const o = i * 16, c = s.sc;
+      A[o] = R[0] * c; A[o + 1] = R[1] * c; A[o + 2] = R[2] * c; A[o + 3] = 0;
+      A[o + 4] = R[4] * c; A[o + 5] = R[5] * c; A[o + 6] = R[6] * c; A[o + 7] = 0;
+      A[o + 8] = R[8] * c; A[o + 9] = R[9] * c; A[o + 10] = R[10] * c; A[o + 11] = 0;
+      A[o + 12] = s.x; A[o + 13] = s.y; A[o + 14] = s.z; A[o + 15] = 1;
     }
-    sporeI.instanceMatrix.needsUpdate = true;
+    sendDrawn(sporeI);
   }
+  const _sporeR = new THREE.Matrix4();
   // standing under a floor slab counts as inside
   function indoors(x, z, feetY) {
     const near = cityNear(x, z);
@@ -8825,6 +8831,13 @@
   //  against the entity slot paints whichever animal happens to be drawn there.
   const _tCol = new THREE.Color();
   function taintI(mesh, k, n, t) { _tCol.setRGB(t, 0, 0); for (let i = 0; i < n; i++) mesh.setColorAt(k + i, _tCol); }
+  //  Only the first m.count instances are drawn, and every one of them was
+  //  written this frame (packed from 0): only they are sent to the GPU, not the
+  //  whole pool behind them (three r128 updateRange; it resets after each upload)
+  function sendDrawn(m) {
+    const a = m.instanceMatrix; a.updateRange.offset = 0; a.updateRange.count = m.count * 16; a.needsUpdate = true;
+    const c = m.instanceColor; if (c) { c.updateRange.offset = 0; c.updateRange.count = m.count * 3; c.needsUpdate = true; }
+  }
   function writeDog(slot, taint) {
     let k = slot * D_OVOID; for (let i = 0; i < D_OVOID; i++) dogOvoidI.setMatrixAt(k + i, dOvoids[i].matrixWorld);
     taintI(dogOvoidI, k, D_OVOID, taint);
@@ -9141,8 +9154,7 @@
     dogOvoidI.count = dogHigh * D_OVOID; dogBoneI.count = dogHigh * D_BONE;
     dogKnucI.count = dogHigh * D_KNUC; dogPawI.count = dogHigh * D_PAW;
     dogPetalI.count = dogHigh * D_PETAL;
-    for (const q of dogParts) if (q.instanceColor) q.instanceColor.needsUpdate = true;
-    for (const m of dogParts) m.instanceMatrix.needsUpdate = true;
+    for (const m of dogParts) sendDrawn(m);
     // the flesh answers to the same light the rest of the other side does
     const bolt = boltFlash * boltFlash;
     for (const mt of [dogSkinMat, dogMawMat]) {
@@ -9790,8 +9802,7 @@
     gorOvoidI.count = gorHigh * G_OVOID; gorBoneI.count = gorHigh * G_BONE;
     gorKnucI.count = gorHigh * G_KNUC; gorClawI.count = gorHigh * G_CLAW;
     gorPetalI.count = gorHigh * G_PETAL;
-    for (const q of gorParts) if (q.instanceColor) q.instanceColor.needsUpdate = true;
-    for (const m of gorParts) m.instanceMatrix.needsUpdate = true;
+    for (const m of gorParts) sendDrawn(m);
     const bolt = boltFlash * boltFlash;
     for (const mt of [gorSkinMat, gorMawMat, gorClawMat]) {
       mt.uniforms.uBolt.value = bolt;
@@ -10548,8 +10559,7 @@
     mfOvoidI.count = mfHigh * M_OVOID; mfBoneI.count = mfHigh * M_BONE;
     mfKnucI.count = mfHigh * M_KNUC; mfSpikeI.count = mfHigh * M_SPIKE;
     mfFangI.count = mfHigh * M_FANG;
-    for (const q of mfParts) { q.instanceMatrix.needsUpdate = true;
-      if (q.instanceColor) q.instanceColor.needsUpdate = true; }
+    for (const q of mfParts) sendDrawn(q);
     const bolt = boltFlash * boltFlash;
     for (const mt of [mfSkinMat, mfShellMat, mfFangMat]) {
       mt.uniforms.uBolt.value = bolt;
