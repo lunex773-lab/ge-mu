@@ -15,8 +15,9 @@
 //      does it); and the host sees the swing it was
 //    - the second player shoots him: he is hurt on both screens, the room
 //      having judged it
-//    - he takes hold of the second player from across the street: their game
-//      lifts and drags them, the room does the harm, and lets go
+//    - his mind reaches the second player from across the street: they see it
+//      gather, then their view bends for ten seconds, and no harm is done
+//    - his wave is seen: the circle it will fill, then its front going out
 //    - he takes up a car and throws it: the second player sees it circle him,
 //      fly, and lie where the room says it came down
 //    - killed: both screens see him fall
@@ -161,33 +162,56 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
         'the room 12000 → ' + rv.hp + ', the host\'s screen ' + onA + (RM.lastRefusal ? '; last refused: ' + RM.lastRefusal : ''));
     }
 
-    // ---- his grip -----------------------------------------------------------------------
+    // ---- his mind --------------------------------------------------------------------
     {
       await heal();
       JSON.parse(await ev(B, STAND(atB[0], atB[1])));
       await sleep(400);
-      await ev(B, 'window.__held = []; 1');
       const s3 = inSight(22) || inSight(18);
       put(s3); hunt();
       rv.hp = VC.V_HP * 0.5; rv.phase = 2; rv.vuln = 0; rv.atkCd = 99;
+      delete tB().psyAt; delete tB().pl.psyAt; delete RD.V.mindT;
       await sleep(200);
       const hp0 = RM.players.get(idB).hp;
-      put(s3); hunt(); rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'grab');
-      let held = false, room = false, lifted = 0, let_go = false;
-      const y0 = await ev(B, 'p.y');
-      for (let i = 0; i < 60 && !let_go; i++) {
+      put(s3); hunt(); rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'mind');
+      let thread = 0, bent = 0, amt = 0;
+      for (let i = 0; i < 40 && !(bent && amt > 0.5); i++) {
         put(s3, true);
         await sleep(100);
-        const s = JSON.parse(await ev(B, 'JSON.stringify([!!psyHold, !!(psyHold && psyHold.room), p.y])'));
-        if (s[0]) { held = true; room = room || s[1]; lifted = Math.max(lifted, s[2] - y0); }
-        else if (held) let_go = true;
+        const s = JSON.parse(await ev(B, 'JSON.stringify([mindBeam.visible, psyWarpT, psyWarpAmt])'));
+        if (s[0]) thread++;
+        if (s[1] > 0) bent = Math.max(bent, s[1]);
+        amt = Math.max(amt, s[2]);
       }
-      await sleep(400);
       const hp1 = RM.players.get(idB).hp;
-      check('he takes hold of the second player from across the street: their game lifts them, the room does the harm (' + VC.V_GRAB_DMG + '), and he lets go',
-        held && room && lifted > 1 && hp0 - hp1 === VC.V_GRAB_DMG && let_go && !tB().pl.grip,
-        'held ' + held + ' (the room\'s ' + room + '), lifted ' + lifted.toFixed(1) + ' m, hp ' + hp0 + ' → ' + hp1 + ', let go ' + let_go);
+      check('his mind reaches the second player from across the street: they see it gather (a thread from his crown), then their view bends for ten seconds — and no harm is done',
+        thread >= 3 && bent > 8 && amt > 0.5 && hp1 === hp0 && await ev(B, 'hp === HP_MAX'),
+        'the thread seen ' + thread + ' times; bent for ' + bent.toFixed(1) + ' s (at most ' + amt.toFixed(2) + '); hp ' + hp0 + ' → ' + hp1);
+      await ev(B, 'psyWarpT = 0; psyWarpAmt = 0; 1');
       rv.hp = 12000; rv.phase = 0; rv.atk = null; rv.atkCd = 99;
+      await sleep(300);
+      await heal();
+    }
+
+    // ---- his wave, seen ------------------------------------------------------------
+    {
+      JSON.parse(await ev(B, STAND(atB[0], atB[1])));
+      await sleep(400);
+      const s4 = inSight(12) || inSight(10);
+      put(s4); hunt(); rv.atkCd = 99; rv.phase = 1;
+      await sleep(200);
+      rv.atk = null; VC.startAtk(RD.V, 'wave');
+      let circle = 0, front = 0, bigger = 0, lastR = 0;
+      for (let i = 0; i < 45 && rv.atk; i++) {
+        put(s4, true);
+        await sleep(100);
+        const s = JSON.parse(await ev(B, 'JSON.stringify([waveMark.visible, waveFront.visible, waveFront.scale.x])'));
+        if (s[0]) circle++;
+        if (s[1]) { front++; if (s[2] > lastR + 0.5) bigger++; lastR = s[2]; }
+      }
+      check('his wave is seen on the second screen: the circle it will fill while he gathers it, then its front going out along the ground',
+        circle >= 5 && front >= 4 && bigger >= 3, 'the circle seen ' + circle + ' times, the front ' + front + ' (growing ' + bigger + ' times)');
+      rv.phase = 0; rv.atk = null; rv.atkCd = 99;
       await sleep(300);
       await heal();
     }

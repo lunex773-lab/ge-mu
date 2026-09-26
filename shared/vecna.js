@@ -24,11 +24,10 @@
 //    hit(v, t, kind, dmg, ax, az, push, up, shake)   a blow lands on target t:
 //                          dmg, and thrown push m along (ax, az) and up at `up`
 //                          m/s (a thrown car: no push, no lift)
-//    grab(v, t)            he takes hold of t (true if he has them now)
-//    held(t)               is t in his grip already
-//    release(t)            he lets go of t (null: of whoever he holds)
+//    mind(v, t, ms)        his mind reaches t: t's view is bent for ms (no harm)
 //    on: { lift, hurl, charge, wave, limb, psy, phase, whisper, voice, command,
-//          grew, ordered, hurt, blink, death, fallen, rift, land, fly, drop, gone }
+//          grew, ordered, hurt, blink, death, fallen, rift, land, fly, drop, gone,
+//          dodge (t went over his wave), miss (what he reached for was not there) }
 
 const CITY = require('./city.js');
 const TR = require('./troop.js');
@@ -45,8 +44,18 @@ const V_CMD_DOG = 5, V_CMD_GOR = 2;      // §22/§65: he orders a few, not ever
 const V_HEIGHT = 5.1, V_HIP = 2.72;
 const V_EXT = 4.6;                       // §13: how far past rest the arm goes
 const V_WAVE_R = 26, V_WAVE_DMG = 26;    // §8
+//  The wave is a front, not a flash: it leaves him at a walking pace's four
+//  times over, low along the ground, and the circle it will fill is drawn on
+//  the ground while he gathers it. Outside the circle, or in the air as it
+//  passes (a jump clears it), it does nothing — it can be seen and beaten.
+const V_WAVE_SPEED = 16, V_WAVE_JUMP = 0.45;
 const V_LIMB_R = 11.5, V_LIMB_DMG = 22;  // §14
-const V_GRAB_R = 34, V_GRAB_DMG = 30;    // §15 — never lethal on its own
+//  His mind, not his hand: it does no harm at all. It bends what you see for
+//  ten seconds. It gathers for well over a second where you can see it and
+//  reaches only someone he can see as it goes — break his line of sight and
+//  it finds nothing — and he does not keep doing it: not to the same person
+//  within forty seconds, not to anyone within twenty-two.
+const V_MIND_R = 62, V_MIND_MS = 10000, V_MIND_GAP = 40, V_MIND_CD = 22;
 const V_THROW_DMG = 34;
 const V_ORBIT_MAX = 5;                   // §11/§12, and the ceiling is the point
 const V_MEM = 26;                        // how long he keeps what he knew
@@ -62,12 +71,12 @@ const V_ST = ['dormant', 'observe', 'manipulate', 'command', 'hunt', 'combat', '
 //  §58: every one of these ends in a window. The wind-up is long, the
 //  recovery is longer, and the recovery is when he can be hurt properly.
 const V_ATK = {
-  wave:  { wind: 1.15, act: 0.28, rec: 0.95, cd: 6.5, vuln: 1.5 },
+  wave:  { wind: 1.30, act: V_WAVE_R / V_WAVE_SPEED, rec: 0.90, cd: 7.5, vuln: 1.5 },   // (act: the front on its way out)
   limb:  { wind: 0.62, act: 0.34, rec: 0.70, cd: 4.2, vuln: 0.9 },
   hurl:  { wind: 0.55, act: 0.22, rec: 0.50, cd: 2.6, vuln: 0.5 },
-  grab:  { wind: 1.05, act: 0.30, rec: 1.10, cd: 12.0, vuln: 1.8 },
+  mind:  { wind: 1.60, act: 0.25, rec: 1.00, cd: 9.0, vuln: 1.6 },
 };
-const ATK_KINDS = ['wave', 'limb', 'hurl', 'grab'];            // (a snapshot numbers them 1…)
+const ATK_KINDS = ['wave', 'limb', 'hurl', 'mind'];            // (a snapshot numbers them 1…)
 const ext01 = (e) => 1 + e * V_EXT * 0.55;
 
 //  the one of him: the arrays exist before he does, so nothing that runs a
@@ -122,7 +131,6 @@ function spawnVecna(V, at) {
 function clearVecna(V) {
   const v = V.vec;
   dropOrbit(V);
-  V.env.release(null);
   v.live = false; v.dead = false; v.atk = null;
   V.env.on.gone(v);
 }
@@ -546,21 +554,29 @@ function think(V, dt) {
 //  §33: distance picks, and the combination emerges from it rather than
 //  from a scripted chain — close he strikes, mid he throws, far he pulls.
 function chooseAtk(V, dist) {
-  const E = V.env, v = V.vec, t = v.tgt || v.near;
+  const E = V.env, v = V.vec;
   const opts = [];
   if (dist < V_LIMB_R) opts.push('limb', 'limb');
   if (dist < V_WAVE_R && v.phase >= 1) opts.push('wave');
   if (v.orbit.length) opts.push('hurl', 'hurl');
-  if (dist > 12 && dist < V_GRAB_R && v.phase >= 2 && !(t && E.held(t))) opts.push('grab');
+  if (mindReady(V, v.tgt, dist)) opts.push('mind');
   if (!opts.length) { v.atkCd = 1.5; return; }
   startAtk(V, opts[(E.random() * opts.length) | 0]);
+}
+//  his mind can reach t: he sees them, not too far, from the first turn of the
+//  wheel on — and it is a long while since he last did it, to them or to anyone
+function mindReady(V, t, dist) {
+  const v = V.vec, now = V.env.now();
+  if (!t || t.dead || v.phase < 1 || !(v.see > 0) || !(dist > 8 && dist < V_MIND_R)) return false;
+  if (now - (V.mindT === undefined ? -1e9 : V.mindT) < V_MIND_CD) return false;
+  return now - (t.psyAt === undefined ? -1e9 : t.psyAt) >= V_MIND_GAP;
 }
 function startAtk(V, kind) {
   const v = V.vec;
   const side = V.env.random() < 0.5 ? 0 : 1;
-  v.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0, got: [] };
+  v.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0, got: [], r0: 0, tg: kind === 'mind' ? (v.tgt || v.near) : null };
   v.st = 'combat'; v.stT = 0;
-  if (kind === 'wave' || kind === 'grab') V.env.on.charge(v, kind);
+  if (kind === 'wave' || kind === 'mind') V.env.on.charge(v, kind);
 }
 function runAtk(V, dt) {
   const E = V.env, v = V.vec, a = v.atk, A = V_ATK[a.kind];
@@ -579,7 +595,8 @@ function runAtk(V, dt) {
 
   if (a.kind === 'wave') {
     //  §8: charge, pressure, release. The crown folds forward on the wind-up
-    //  and snaps back on the beat, which is the read the player has to learn.
+    //  and snaps back on the beat, which is the read the player has to learn —
+    //  and the circle it will fill is drawn on the ground all the while.
     if (a.t < wind) {
       const u = a.t / wind;
       v.hoverWant = 0.9; v.flareWant = 1 - u * 0.8;
@@ -593,15 +610,6 @@ function runAtk(V, dt) {
       if (!a.hit) {
         a.hit = 1;
         E.on.wave(v);
-        //  §8: damage falls off, knockback does not disappear, and it is a
-        //  physics impulse rather than a teleport — you land where the ground is
-        for (const t of who) {
-          if (t.dead) continue;
-          const d = Math.hypot(t.x - v.x, t.z - v.z);
-          if (!(d < V_WAVE_R) || !(Math.abs(t.y - v.y) < 4.2)) continue;
-          const f = 1 - d / V_WAVE_R;
-          E.hit(v, t, 'wave', Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
-        }
         //  §43: the arena moves too. Anything he is holding is flung outward.
         for (const o of v.orbit) o.r = Math.min(14, o.r + 4);
       }
@@ -609,6 +617,23 @@ function runAtk(V, dt) {
       const u = (a.t - act) / A.rec;
       v.armUpWant[0] = 0.75 * (1 - u); v.armUpWant[1] = 0.75 * (1 - u);
       v.flareWant = 1 - u * 0.5;
+    }
+    //  The front, on its way out (to the edge, whichever step it gets there on):
+    //  whoever it passes this step, once. On the ground (and on his floor) it
+    //  throws them — §8: less at the edge, the knockback does not disappear,
+    //  and you land where the ground is; in the air it goes under them.
+    if (a.t >= wind && a.r0 < V_WAVE_R) {
+      const r1 = Math.min(V_WAVE_R, (a.t - wind) * V_WAVE_SPEED), r0 = a.r0;
+      a.r0 = r1;
+      for (const t of who) {
+        if (t.dead || a.got.indexOf(t) >= 0) continue;
+        const d = Math.hypot(t.x - v.x, t.z - v.z);
+        if (!(d > r0 - 0.6 && d <= r1 + 0.6) || !(d < V_WAVE_R) || !(Math.abs(t.y - v.y) < 4.2)) continue;
+        a.got.push(t);
+        if (t.y - E.supportHeight(t.x, t.z, t.y + 0.3) > V_WAVE_JUMP) { if (E.on.dodge) E.on.dodge(v, t); continue; }
+        const f = 1 - d / V_WAVE_R;
+        E.hit(v, t, 'wave', Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
+      }
     }
   } else if (a.kind === 'limb') {
     //  §13/§14: Normal → Stretch → Extended → Strike → Retract, and the arm
@@ -649,19 +674,28 @@ function runAtk(V, dt) {
       const u = (a.t - act) / A.rec;
       v.armUpWant[i] = 0.4 * (1 - u); v.spreadWant = 1 - u;
     }
-  } else if (a.kind === 'grab') {
-    const i = a.side;
+  } else if (a.kind === 'mind') {
+    //  One hand up and open toward whoever it is for, the crown wide, and it
+    //  gathers where it can be seen. It lands only if he can still see them as
+    //  it goes: the counter is to break his line of sight while it gathers.
+    const i = a.side, t1 = a.tg || t0;
+    if (t1) { v.tx = t1.x; v.tz = t1.z; }
     if (a.t < wind) {
       const u = a.t / wind;
       v.armUpWant[i] = 0.9 + u * 0.1; v.spreadWant = 1;
-      v.armExtWant[i] = u * 0.30; v.hoverWant = 0.7; v.flareWant = 0.8;
-      if (!a.sfx && a.t > wind * 0.55) { a.sfx = 1; E.on.psy(v, 0.4, 1200); }
+      v.armExtWant[i] = u * 0.30; v.hoverWant = 0.7; v.flareWant = 0.8 + u * 0.2; v.mawWant = u * 0.4;
+      if (!a.sfx && a.t > wind * 0.35) { a.sfx = 1; E.on.psy(v, 0.28, 1400); }
     } else if (a.t < act) {
       if (!a.hit) {
         a.hit = 1;
         v.gripWant = 1; v.spreadWant = 0;
-        if (t0 && dist < V_GRAB_R && !t0.dead && sees(V, t0) && Math.abs(t0.y - v.y) < 4.2) E.grab(v, t0);
-        else E.on.limb(v);
+        const d1 = t1 ? Math.hypot(t1.x - v.x, t1.z - v.z) : 1e9;
+        //  (and never sooner than it may: whatever started it, it does not land twice in a gap)
+        const gap = t1 ? E.now() - (t1.psyAt === undefined ? -1e9 : t1.psyAt) : 0;
+        if (t1 && !t1.dead && d1 < V_MIND_R && gap >= V_MIND_GAP && sees(V, t1)) {
+          t1.psyAt = E.now(); V.mindT = E.now();
+          E.mind(v, t1, V_MIND_MS);
+        } else if (E.on.miss) E.on.miss(v);
       }
     } else {
       const u = (a.t - act) / A.rec;
@@ -792,7 +826,6 @@ function kill(V) {
   //  holding drops out of the air — then the world, then him.
   v.dead = true; v.deadT = 0; v.hp = 0; v.sp = 0; v.atk = null;
   v.hoverWant = 0; v.flareWant = 0; v.archWant = 0;
-  E.release(null);
   dropOrbit(V);
   E.on.death(v);
   for (const m of E.flayers()) if (m.live && !m.dead && Math.hypot(m.x - v.x, m.z - v.z) <= V_LINK) { m.panicked = true; m.st = 'flee'; m.stT = 0; m.fleeT = 30; }
@@ -914,10 +947,10 @@ function adoptFull(V, f) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    V_HP, V_SIGHT, V_LINK, V_CLEAR, V_CMD_DOG, V_CMD_GOR, V_HEIGHT, V_HIP, V_EXT, V_WAVE_R, V_WAVE_DMG, V_LIMB_R, V_LIMB_DMG, V_GRAB_R, V_GRAB_DMG,
+    V_HP, V_SIGHT, V_LINK, V_CLEAR, V_CMD_DOG, V_CMD_GOR, V_HEIGHT, V_HIP, V_EXT, V_WAVE_R, V_WAVE_DMG, V_WAVE_SPEED, V_WAVE_JUMP, V_LIMB_R, V_LIMB_DMG, V_MIND_R, V_MIND_MS, V_MIND_GAP, V_MIND_CD,
     V_THROW_DMG, V_ORBIT_MAX, V_MEM, V_PHASE, V_SUMMON_CD, V_BLINK_MIN, V_BLINK_CD, V_BLINK_STAND, V_TAKE, V_RET, V_ST, V_ATK, ATK_KINDS, EV, SNAP_N, FULL_N,
     makeVecna, tell, spawnSpot, spawnVecna, clearVecna, command, ring, summon, hiveCount, pickWrecks, lift, dropOrbit, hurl, flights, orbitStep,
-    sees, see, phaseOf, think, chooseAtk, startAtk, runAtk, step, ease, hurt, blinkTo, kill, stock, fighting, ext01,
+    sees, see, phaseOf, think, chooseAtk, mindReady, startAtk, runAtk, step, ease, hurt, blinkTo, kill, stock, fighting, ext01,
     snapRow, orbitRows, flightRows, fullState, fullOk, adoptFull,
   };
 }

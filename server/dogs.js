@@ -10,7 +10,7 @@
 //  is, which side of the tear, whether they are down or cloaked, which way
 //  they face, how fast they move (a sprint is heard) and when they fire (a
 //  shot is heard across the district). The room decides every bite, swing,
-//  blow, thrown car and grip, and judges every shot at any of them. The
+//  blow, thrown car and reach of his mind, and judges every shot at any of them. The
 //  chain of command is all in here: a flayer claims its escort, VECNA his
 //  court and the flayers; they learn through one another, hand targets down,
 //  summon, bleed and carry each other along.
@@ -40,9 +40,6 @@ const FULL_EVERY = 8;                      // every eighth word is the whole of 
 const NEAR = 110;                          // m: a dog this near someone over there goes out every time (index.html DOG_NEAR)
 const BITE_GAP = 420;                      // ms: a player bitten is not bitten again sooner (index.html dogHitCd)
 const CLAW_GAP = 500;                      // ms: nor struck by a gorgon (index.html gorHitCd)
-//  VECNA's grip (index.html updatePsyHold): lifted 0.85 s, dragged in, hurt
-//  0.9 s into the drag, thrown at 1.7 — the game plays it, the room keeps time
-const GRIP_HURT = 1750, GRIP_END = 2700;   // ms after he takes hold
 const CHEST = 1.0;                         // m above its feet: where a shot at a dog is aimed (the game's hit spheres)
 const G_CHEST = 1.55;                      // … and at a gorgon (the second of its column of spheres)
 //  … and at a flayer: the game's spheres on it (index.html fire) — the body,
@@ -109,9 +106,7 @@ export class RoomDogs {
     this.V = VC.makeVecna(Object.assign({}, world, {
       dogs: () => this.D.dogs, gorgons: () => this.G.gorgons, flayers: () => this.M.flayers, spawnDog, spawnGorgon,
       hit: (v, t, kind, dmg, ax, az, push, up, shake) => this.vblow(v, t, kind, dmg, push, up, shake),
-      grab: (v, t) => this.grip(t),
-      held: (t) => this.gripped(t),
-      release: (t) => this.letGo(t),
+      mind: (v, t, ms) => this.psy(t, ms),
       on: { lift: (v, ks) => { for (const k of ks) moved(k); }, hurl: (v, k) => moved(k), land: (T) => moved(T.k), drop: (ks) => { for (const k of ks) moved(k); },
         charge: noop, wave: noop, limb: noop, psy: noop, phase: noop, whisper: noop, voice: noop, command: noop, grew: noop, ordered: noop,
         hurt: noop, blink: noop, death: noop, fallen: noop, rift: noop, fly: noop, gone: noop },
@@ -173,7 +168,7 @@ export class RoomDogs {
       const h = p.hist;
       if (!p.w || h.length < 4) { this.byId.delete(id); continue; }
       let t = this.byId.get(id);
-      if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0 });
+      if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0, psyAt: p.psyAt });
       const n = h.length;
       t.x = h[n - 3]; t.y = h[n - 2]; t.z = h[n - 1]; t.ey = t.y + RULES.EYE;
       t.dead = !!p.dead; t.cloak = !!p.inv;
@@ -271,7 +266,6 @@ export class RoomDogs {
       //  and the dogs get out of the gorgons' way
       for (const g of G.gorgons) if (g.live && !g.dead) DOG.shove(D, g, STEP);
     }
-    this.grips(now);
   }
   //  cars in the air as they go come down where they are
   letFall() {
@@ -319,36 +313,19 @@ export class RoomDogs {
   }
   //  VECNA's (the wave, his arm, a car he threw): as a flayer's, and how hard
   //  it throws them up ('hp' { src: 'vec', k: what, kb: [his x·10, z·10, m·10],
-  //  up: m/s·10, sh }). The wave breaks his grip on whoever it catches.
+  //  up: m/s·10, sh })
   vblow(v, t, kind, dmg, push, up, shake) {
     const x = { k: kind, sh: Math.round(shake * 100) };
     if (push || up) { x.kb = [r10(v.x), r10(v.z), r10(push)]; x.up = r10(up); }
-    if (kind === 'wave' && t.pl.grip) t.pl.grip = null;
     this.room.damage(t.id, dmg, null, this.nowMs, 'vec', x);
   }
-  //  ---- VECNA's grip: the player's game lifts, drags and throws them ('grip'
-  //  { x·10, z·10 }: where he stands; { off: 1 }: let go), the room keeps time,
-  //  does the damage the drag does, and knows who he has hold of
-  grip(t) {
-    if (this.gripped(t) || t.dead) return false;
-    t.pl.grip = { at: this.nowMs, hurt: false };
-    this.room.send(t.id, 'grip', { x: r10(this.V.vec.x), z: r10(this.V.vec.z) });
-    return true;
-  }
-  gripped(t) { const g = t.pl.grip; return !!(g && this.nowMs - g.at < GRIP_END); }
-  letGo(t) {
-    for (const q of t ? [t] : this.who) if (q.pl.grip) { q.pl.grip = null; this.room.send(q.id, 'grip', { off: 1 }); }
-  }
-  grips(now) {
-    const v = this.V.vec;
-    for (const t of this.who) {
-      const g = t.pl.grip; if (!g) continue;
-      if (now - g.at >= GRIP_END) { t.pl.grip = null; continue; }
-      if (t.dead) { this.letGo(t); continue; }            // (dead: let go, and do no more harm)
-      //  (as the game lets go: he is gone, or they are dragged too far from him)
-      if (!v.live || v.dead || Math.hypot(v.x - t.x, v.z - t.z) > VC.V_GRAB_R * 1.6 + 8) { this.letGo(t); continue; }
-      if (!g.hurt && now - g.at >= GRIP_HURT) { g.hurt = true; this.room.damage(t.id, VC.V_GRAB_DMG, null, now, 'vecgrip'); }
-    }
+  //  ---- his mind reaches a player: no harm — their game bends what they see
+  //  for ms ('psy' { ms, x·10, z·10: where he stands }). When it last did is
+  //  kept with the player, so crossing back and forth does not reset it.
+  psy(t, ms) {
+    if (t.dead) return;
+    t.pl.psyAt = t.psyAt;
+    this.room.send(t.id, 'psy', { ms, x: r10(this.V.vec.x), z: r10(this.V.vec.z) });
   }
 
   //  ---- what everyone over there is told ---------------------------------------

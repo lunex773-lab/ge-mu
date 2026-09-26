@@ -3,11 +3,12 @@
 //  ============================================================
 //  shared/vecna.js — how he arrives, wakes, watches, lifts the street and
 //  circles it about him, commands and summons, walks in, strikes with the
-//  wave, the arm, the thrown car and the grip, turns over through his phases,
+//  wave (a front along the ground that can be outrun or jumped), the arm, the
+//  thrown car and his mind (no harm: the view bent), turns over through his phases,
 //  blinks behind whoever shoots him from afar, and dies, whoever runs him —
 //  and the room running him beside everything he commands (server/dogs.js)
 //  with its own rules: taken over from the host, told to those over there,
-//  every shot at him judged here, every blow and grip decided here (and the
+//  every shot at him judged here, every blow and reach of his mind decided here (and the
 //  player told how far he throws them, and that he has hold of them),
 //  what he holds and throws told as it happens, given back — and what a
 //  call costs.
@@ -58,20 +59,18 @@ let t = 0;
 const me = { x: ax, z: az, y: 0, ey: RULES.EYE, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0 };
 const wr = WR.makeWrecks(TF.makeTraffic({ now: () => 0 }).cars);
 const pack = [], gors = [], mfs = [];
-const hits = [], grabs = [], lifts = [], ev = { phase: 0, whisper: 0, command: 0, blink: 0, death: 0, land: 0, gone: 0 };
-let held = false;
+const hits = [], minds = [], lifts = [], ev = { phase: 0, whisper: 0, command: 0, blink: 0, death: 0, land: 0, gone: 0, dodge: 0, miss: 0 };
 const minion = (list, at) => { const o = { slot: list.length, live: true, dead: false, x: at ? at.x : 0, z: at ? at.z : 0, y: 0, st: 'wander', hasT: false, tx: 0, tz: 0, seeT: -99, tdist: 999, lord: null, lordSlot: -1 }; list.push(o); return o; };
 const env = {
   now: () => t, random: seeded(3), targets: () => [me],
   clearAt: F.clearAt, supportHeight: GD.supportHeight, collide: GD.collide, rayCity, wrecks: () => wr,
   dogs: () => pack, gorgons: () => gors, flayers: () => mfs, spawnDog: () => minion(pack), spawnGorgon: (at) => minion(gors, at),
-  hit: (v, tg, kind, dmg, ax2, az2, push, up, shake) => hits.push({ kind, dmg, push: +push.toFixed(2), up: +up.toFixed(2), shake }),
-  grab: (v, tg) => { if (held) return false; held = true; grabs.push(Math.hypot(tg.x - v.x, tg.z - v.z)); return true; },
-  held: () => held,
-  release: () => { held = false; },
+  hit: (v, tg, kind, dmg, ax2, az2, push, up, shake) => hits.push({ kind, dmg, push: +push.toFixed(2), up: +up.toFixed(2), shake, t }),
+  mind: (v, tg, ms) => minds.push({ d: +Math.hypot(tg.x - v.x, tg.z - v.z).toFixed(1), ms, t }),
   on: { lift: (v, ks) => lifts.push(...ks), hurl: () => {}, charge: () => {}, wave: () => {}, limb: () => {}, psy: () => {},
     phase: () => ev.phase++, whisper: () => ev.whisper++, voice: () => {}, command: () => ev.command++, grew: () => {}, ordered: () => {},
-    hurt: () => {}, blink: () => ev.blink++, death: () => ev.death++, fallen: () => {}, rift: () => {}, land: () => ev.land++, fly: () => {}, drop: () => {}, gone: () => ev.gone++ },
+    hurt: () => {}, blink: () => ev.blink++, death: () => ev.death++, fallen: () => {}, rift: () => {}, land: () => ev.land++, fly: () => {}, drop: () => {}, gone: () => ev.gone++,
+    dodge: () => ev.dodge++, miss: () => ev.miss++ },
 };
 const V = VC.makeVecna(env), v = V.vec;
 const run = (secs, each) => { for (let i = 0; i < secs * 20; i++) { t += 0.05; VC.flights(V, 0.05); VC.stock(V, 0.05); if (v.live) { VC.think(V, 0.05); VC.orbitStep(V, 0.05); VC.ease(V, 0.05); } if (each && each()) return; } };
@@ -103,20 +102,60 @@ let V0 = null;
   VC.hurt(V, 20, me.x, me.z);
   run(0.1);
   check('cut past the first mark, the phase turns over (he stops, and bends the world)', v.phase === 1 && v.st === 'channel' && ev.phase === 1, v.st + ', phase ' + v.phase);
-  const s2 = spotNear(v.x, v.z, 14, 1.2); me.x = s2.x; me.z = s2.z;
-  run(20, () => hits.some((h) => h.kind === 'wave'));
-  const wave = hits.find((h) => h.kind === 'wave');
-  check('the wave: it lands on whoever is in reach, less at the edge, and throws them', wave && wave.dmg > 0 && wave.dmg <= VC.V_WAVE_DMG && wave.push > 0, JSON.stringify(wave));
-  //  past the second: he takes hold of you
+  run(3.2);
+  //  the wave: nothing until its front, going out at its speed, reaches you
+  const s2 = spotNear(v.x, v.z, 14, 1.2); me.x = s2.x; me.z = s2.z; me.y = 0;
+  const waveAt = (d0) => { v.atk = null; v.atkCd = 99; const t0 = t; VC.startAtk(V, 'wave'); const n0 = hits.length;
+    run(VC.V_ATK.wave.wind + VC.V_ATK.wave.act + VC.V_ATK.wave.rec + 0.2, () => !v.atk);
+    return { hit: hits.slice(n0).find((h) => h.kind === 'wave'), t0, due: t0 + VC.V_ATK.wave.wind + d0 / VC.V_WAVE_SPEED }; };
+  const d2 = Math.hypot(me.x - v.x, me.z - v.z);
+  const w1 = waveAt(d2);
+  check('the wave: nothing until its front, going out along the ground at its speed, reaches the player — then it throws them, less at the edge',
+    w1.hit && w1.hit.dmg > 0 && w1.hit.dmg <= VC.V_WAVE_DMG && w1.hit.push > 0 && Math.abs(w1.hit.t - w1.due) < 0.12,
+    w1.hit ? JSON.stringify(w1.hit) + '; ' + d2.toFixed(1) + ' m off, struck ' + (w1.hit.t - w1.t0).toFixed(2) + ' s in (due ' + (w1.due - w1.t0).toFixed(2) + ')' : 'no hit');
+  me.y = 1.0;                                          // (in the air as it passes: a jump)
+  const wj = waveAt(d2), dodged = ev.dodge;
+  me.y = 0;
+  const s2b = spotNear(v.x, v.z, VC.V_WAVE_R + 4, 1.2); me.x = s2b.x; me.z = s2b.z;
+  const w3 = waveAt(VC.V_WAVE_R + 4);
+  check('and it can be beaten: jumped as it passes, it goes under the player; outside its circle, it never reaches them',
+    !wj.hit && dodged >= 1 && !w3.hit, (wj.hit ? 'struck in the air' : 'jumped: ' + dodged + ' dodged') + '; ' + (w3.hit ? 'struck outside' : 'untouched outside'));
+  //  past the second: his mind reaches for you — and does you no harm
   v.atk = null; while (v.hp > VC.V_HP * 0.58) v.hp -= 50;
   VC.hurt(V, 20, me.x, me.z);
   run(3.2);
-  const s3 = spotNear(v.x, v.z, 22, 1.2); me.x = s3.x; me.z = s3.z;
-  v.hd = Math.atan2(me.x - v.x, me.z - v.z); v.atk = null; v.atkCd = 0;
-  VC.startAtk(V, 'grab');
-  run(3, () => grabs.length > 0);
-  check('past the second mark, from across the street: he takes hold of the player', grabs.length === 1 && held, grabs.length ? grabs[0].toFixed(1) + ' m away' : 'no');
-  held = false;
+  //  (a place 22 m off from which he sees the player)
+  const s3 = (() => { for (let k = 0; k < 64; k++) { const a = k * 0.37, x = v.x + Math.sin(a) * 22, z = v.z + Math.cos(a) * 22; if (F.clearAt(x, z, 1.2)) { const save = [me.x, me.z]; me.x = x; me.z = z; v.hd = Math.atan2(x - v.x, z - v.z); if (VC.sees(V, me)) return { x, z }; me.x = save[0]; me.z = save[1]; } } return null; })();
+  me.x = s3.x; me.z = s3.z;
+  v.hd = Math.atan2(me.x - v.x, me.z - v.z); v.atk = null; v.atkCd = 0; delete me.psyAt; delete V.mindT;
+  const nh = hits.length;
+  VC.startAtk(V, 'mind');
+  run(3, () => minds.length > 0 && !v.atk);
+  check('past the first mark, from across the street, his mind reaches the player: their view bent ten seconds, and no harm done',
+    minds.length === 1 && minds[0].ms === 10000 && hits.length === nh, minds.length ? JSON.stringify(minds[0]) + '; ' + (hits.length - nh) + ' blows' : 'no');
+  //  and not again soon, to them or anyone
+  v.atk = null; v.atkCd = 0; v.see = 1;
+  const again = VC.mindReady(V, me, 22);
+  VC.startAtk(V, 'mind'); run(3, () => !v.atk);
+  check('and not again soon: not chosen, and not landing even if started', !again && minds.length === 1, 'ready ' + again + ', ' + minds.length + ' reached');
+  //  break his line of sight while it gathers, and it finds nothing
+  delete me.psyAt; delete V.mindT;
+  let hid = null;
+  for (let r = 16; r < 50 && !hid; r += 3) for (let k = 0; k < 48 && !hid; k++) {
+    const a = k * 0.13, x = v.x + Math.sin(a) * r, z = v.z + Math.cos(a) * r;
+    if (!F.clearAt(x, z, 1.0)) continue;
+    const save = [me.x, me.z]; me.x = x; me.z = z;
+    const vhd = v.hd; v.hd = Math.atan2(x - v.x, z - v.z);
+    if (!VC.sees(V, me)) hid = { x, z };
+    me.x = save[0]; me.z = save[1]; v.hd = vhd;
+  }
+  const miss0 = ev.miss;
+  v.atk = null; VC.startAtk(V, 'mind');
+  run(VC.V_ATK.mind.wind * 0.6);
+  if (hid) { me.x = hid.x; me.z = hid.z; }
+  run(3, () => !v.atk);
+  check('break his line of sight while it gathers, and it finds nothing', hid && minds.length === 1 && ev.miss === miss0 + 1, hid ? 'hid ' + Math.hypot(hid.x - v.x, hid.z - v.z).toFixed(1) + ' m off; ' + (ev.miss - miss0) + ' missed' : 'no place out of his sight');
+  me.x = s3.x; me.z = s3.z;
   //  in the window after a phase turns, a round is worth two and a half
   v.atk = null; v.vuln = 1;
   const hp0 = v.hp;
@@ -155,9 +194,8 @@ let V0 = null;
   V.thrown.length = 0; wr[w2].thrown = false;
   //  killed: what he held falls, and his own break
   mfs[0].panicked = false; mfs[0].st = 'track'; mfs[0].x = v.x + 30; mfs[0].z = v.z;
-  held = true;
   while (!v.dead) VC.hurt(V, 400, me.x, me.z);
-  check('killed: what he held drops out of the air, he lets go, and his own break and run', ev.death === 1 && v.orbit.length === 0 && !held && mfs[0].st === 'flee' && mfs[0].panicked,
+  check('killed: what he held drops out of the air, and his own break and run', ev.death === 1 && v.orbit.length === 0 && mfs[0].st === 'flee' && mfs[0].panicked,
     'the flayer ' + mfs[0].st);
   //  (for the room below: him standing somewhere, awake, a car or two about him)
   const V2 = VC.makeVecna(env);
@@ -237,43 +275,55 @@ rv.vuln = 0;
   check('nobody on this side of the tear is struck', R.players.get(B).hp === hpB);
 }
 
-//  his grip: the room says he has hold of the player, and does the harm the drag does
+//  his mind: the room says it reached the player (their view bent), and does no harm
 {
   heal(A);
   rv.phase = 2; rv.hp = VC.V_HP * 0.5;
   const s7 = inSight(ax, az, 22, 1.2);
   put(s7.x, s7.z); rv.hd = Math.atan2(ax - rv.x, az - rv.z); rv.st = 'hunt'; rv.awake = true; rv.hasT = true; rv.tx = ax; rv.tz = az; rv.seeT = RD.t;
   now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
-  rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'grab');
+  delete RD.byId.get(A).psyAt; delete RD.V.mindT;
+  rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'mind');
   out.length = 0;
-  let gripped = null, hurt = null, t0 = now;
-  for (let i = 0; i < 80 && !hurt; i++) {
+  const hp0 = R.players.get(A).hp;
+  let bent = null;
+  for (let i = 0; i < 80 && !bent; i++) {
     put(s7.x, s7.z, true);
     now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
-    if (!gripped) { const g = out.find(([to, m]) => to === A && m.s === 'grip' && !m.p.off); if (g) { gripped = g; t0 = now; } }
-    const hh = out.find(([to, m]) => to === A && m.s === 'hp' && m.p.src === 'vecgrip'); if (hh) hurt = hh;
+    const g = out.find(([to, m]) => to === A && m.s === 'psy'); if (g) bent = g;
   }
-  check('past the second mark, he takes hold of the player from across the street: the room tells them so', gripped && Number.isFinite(gripped[1].p.x), gripped ? JSON.stringify(gripped[1].p) : 'no');
-  check('and as he drags them in, the room does the harm (' + VC.V_GRAB_DMG + ')', hurt && hurt[1].p.hp === 100 - VC.V_GRAB_DMG && now - t0 >= 1700,
-    hurt ? JSON.stringify(hurt[1].p) + ' ' + (now - t0) + ' ms in' : 'none');
-  //  the wave breaks his grip: no harm after it
-  heal(A); rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'grab');
+  for (let i = 0; i < 30; i++) { put(s7.x, s7.z, true); rv.atkCd = 99; now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  check('past the first mark, his mind reaches the player from across the street: the room tells them their view bends ten seconds, and does no harm',
+    bent && bent[1].p.ms === 10000 && R.players.get(A).hp === hp0 && !out.some(([to, m]) => to === A && m.s === 'hp'), bent ? JSON.stringify(bent[1].p) : 'no');
+  //  and not again for a long while, even across a crossing (the room keeps it with the player)
+  //  (the other one over there meanwhile, far off: else the other side empties, and the room clears it)
+  for (let i = 0; i < 5; i++) { now += 60; say(B, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); }
+  say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 0 });
+  for (let i = 0; i < 5; i++) { now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  const keptAt = RD.byId.get(A).psyAt;
+  rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'mind');
   out.length = 0;
-  let g2 = false;
-  for (let i = 0; i < 40 && !g2; i++) { put(s7.x, s7.z, true); now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); g2 = out.some(([to, m]) => to === A && m.s === 'grip' && !m.p.off); }
-  RD.vblow(rv, RD.byId.get(A), 'wave', 10, 1, 3, 0);
-  out.length = 0;
-  for (let i = 0; i < 50; i++) { put(s7.x, s7.z); rv.atk = null; rv.atkCd = 99; now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
-  check('his wave breaks his own grip: the drag does no harm after it', g2 && !out.some(([, m]) => m.s === 'hp' && m.p.src === 'vecgrip'));
-  //  and one who dies in his hand is let go
-  heal(A); rv.atk = null; rv.atkCd = 99; VC.startAtk(RD.V, 'grab');
-  out.length = 0;
-  let g3 = false;
-  for (let i = 0; i < 40 && !g3; i++) { put(s7.x, s7.z, true); now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); g3 = out.some(([to, m]) => to === A && m.s === 'grip' && !m.p.off); }
-  R.players.get(A).dead = true;
-  out.length = 0;
-  for (let i = 0; i < 10; i++) { put(s7.x, s7.z); rv.atkCd = 99; now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
-  check('one who dies in his hand is let go, and harmed no more', g3 && out.some(([to, m]) => to === A && m.s === 'grip' && m.p.off) && !RD.byId.get(A).pl.grip);
+  for (let i = 0; i < 60; i++) { put(s7.x, s7.z, true); now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  check('and not again to them for a long while, even after they cross back and forth', rv.live && keptAt !== undefined && !out.some(([to, m]) => to === A && m.s === 'psy'),
+    'kept: ' + (keptAt === undefined ? 'no' : Math.round(RD.t - keptAt) + ' s ago'));
+  for (let i = 0; i < 3; i++) { now += 60; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 0 }); }
+}
+
+//  his wave in the room: one who is in the air as its front passes is not struck; one on the ground is
+{
+  heal(A);
+  const s8w = inSight(ax, az, 12, 1.2);
+  const wave = (y) => {
+    put(s8w.x, s8w.z); rv.st = 'hunt'; rv.atkCd = 99; rv.hasT = true; rv.tx = ax; rv.tz = az; rv.seeT = RD.t;
+    now += 60; say(A, 'state', { x: ax, y, z: az, r: 0, w: 1 });
+    rv.atk = null; VC.startAtk(RD.V, 'wave');
+    out.length = 0;
+    for (let i = 0; i < 70 && rv.atk; i++) { put(s8w.x, s8w.z, true); now += 50; say(A, 'state', { x: ax, y, z: az, r: 0, w: 1 }); }
+    return out.find(([to, m]) => to === A && m.s === 'hp' && m.p.src === 'vec' && m.p.k === 'wave');
+  };
+  const inAir = wave(1.1), onGround = (heal(A), wave(0));
+  check('his wave, as the room judges it: in the air as its front passes, the player is not struck; on the ground they are',
+    !inAir && onGround && onGround[1].p.up > 0, (inAir ? 'struck in the air' : 'jumped it') + '; ' + (onGround ? JSON.stringify(onGround[1].p) : 'not struck on the ground'));
   heal(A);
 }
 
@@ -317,12 +367,11 @@ rv.vuln = 0;
   heal(A);
   //  (the last round a player fires, as the room judges it)
   put(s5.x, s5.z); rv.hp = 5; rv.vuln = 0; rv.blinkCd = 99;
-  RD.byId.get(A).pl.grip = { at: now, hurt: false };
   out.length = 0;
   now += 300; say(A, 'vhit', {});
   now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
   const dvD = out.filter(([, m]) => m.s === 'dv').map(([, m]) => m.p.v).pop();
-  check('killed: everyone over there sees him fall, and whoever he held is let go', dvD && (dvD[5] & 1) && out.some(([to, m]) => to === A && m.s === 'grip' && m.p.off));
+  check('killed: everyone over there sees him fall', dvD && (dvD[5] & 1));
   for (let i = 0; i < 28 * 20; i++) { now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
   out.length = 0;
   now += 120; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
@@ -344,7 +393,7 @@ try {
     out.length = 0;
     say(k ? B : A, 'state', k ? { x: x - 4, y: 0, z, r: 0, w: 1 } : { x, y: 0, z, r: 0, w: 1 });
     for (const [to, m] of out) {
-      if (m.s === 'hp' && (m.p.src === 'vec' || m.p.src === 'vecgrip')) blows++;
+      if (m.s === 'hp' && m.p.src === 'vec') blows++;
       if (to === A && m.s === 'dv') for (const key in m.p) part[key] = (part[key] || 0) + JSON.stringify(m.p[key]).length / 60;
     }
     if (i % 40 === 0) say(A, 'shot', {});
@@ -353,7 +402,7 @@ try {
   }
 } catch (e) { thrown = e; }
 check('a minute of him, his court and the pack on two players: no error, and no call near the 10 ms a call has', !thrown && worst < 9.5,
-  (thrown ? thrown.message + ' ' : '') + 'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; ' + blows + ' blows and grips; phase ' + rv.phase + ', ' +
+  (thrown ? thrown.message + ' ' : '') + 'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; ' + blows + ' blows; phase ' + rv.phase + ', ' +
   RD.dogs.filter((d) => d.live && d.lord === 'vec').length + ' dogs and ' + RD.gorgons.filter((g) => g.live && g.lord === 'vec').length + ' gorgons his');
 check('and what he costs to send: well under a kilobyte a second', (part.v || 0) + (part.vo || 0) + (part.vf || 0) < 900,
   Object.entries(part).map(([key, b]) => key + ' ' + Math.round(b) + ' B/s').join(', '));

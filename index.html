@@ -3660,8 +3660,9 @@
         const V_HEIGHT = 5.1, V_HIP = 2.72;
         const V_EXT = 4.6;                       // §13: how far past rest the arm goes
         const V_WAVE_R = 26, V_WAVE_DMG = 26;    // §8
+        const V_WAVE_SPEED = 16, V_WAVE_JUMP = 0.45;
         const V_LIMB_R = 11.5, V_LIMB_DMG = 22;  // §14
-        const V_GRAB_R = 34, V_GRAB_DMG = 30;    // §15 — never lethal on its own
+        const V_MIND_R = 62, V_MIND_MS = 10000, V_MIND_GAP = 40, V_MIND_CD = 22;
         const V_THROW_DMG = 34;
         const V_ORBIT_MAX = 5;                   // §11/§12, and the ceiling is the point
         const V_MEM = 26;                        // how long he keeps what he knew
@@ -3673,12 +3674,12 @@
         const WORLD = RULES.WORLD;
         const V_ST = ['dormant', 'observe', 'manipulate', 'command', 'hunt', 'combat', 'channel', 'stagger', 'dead'];
         const V_ATK = {
-          wave:  { wind: 1.15, act: 0.28, rec: 0.95, cd: 6.5, vuln: 1.5 },
+          wave:  { wind: 1.30, act: V_WAVE_R / V_WAVE_SPEED, rec: 0.90, cd: 7.5, vuln: 1.5 },   // (act: the front on its way out)
           limb:  { wind: 0.62, act: 0.34, rec: 0.70, cd: 4.2, vuln: 0.9 },
           hurl:  { wind: 0.55, act: 0.22, rec: 0.50, cd: 2.6, vuln: 0.5 },
-          grab:  { wind: 1.05, act: 0.30, rec: 1.10, cd: 12.0, vuln: 1.8 },
+          mind:  { wind: 1.60, act: 0.25, rec: 1.00, cd: 9.0, vuln: 1.6 },
         };
-        const ATK_KINDS = ['wave', 'limb', 'hurl', 'grab'];            // (a snapshot numbers them 1…)
+        const ATK_KINDS = ['wave', 'limb', 'hurl', 'mind'];            // (a snapshot numbers them 1…)
         const ext01 = (e) => 1 + e * V_EXT * 0.55;
 
         function makeVecna(env) {
@@ -3727,7 +3728,6 @@
         function clearVecna(V) {
           const v = V.vec;
           dropOrbit(V);
-          V.env.release(null);
           v.live = false; v.dead = false; v.atk = null;
           V.env.on.gone(v);
         }
@@ -4100,21 +4100,27 @@
         }
 
         function chooseAtk(V, dist) {
-          const E = V.env, v = V.vec, t = v.tgt || v.near;
+          const E = V.env, v = V.vec;
           const opts = [];
           if (dist < V_LIMB_R) opts.push('limb', 'limb');
           if (dist < V_WAVE_R && v.phase >= 1) opts.push('wave');
           if (v.orbit.length) opts.push('hurl', 'hurl');
-          if (dist > 12 && dist < V_GRAB_R && v.phase >= 2 && !(t && E.held(t))) opts.push('grab');
+          if (mindReady(V, v.tgt, dist)) opts.push('mind');
           if (!opts.length) { v.atkCd = 1.5; return; }
           startAtk(V, opts[(E.random() * opts.length) | 0]);
+        }
+        function mindReady(V, t, dist) {
+          const v = V.vec, now = V.env.now();
+          if (!t || t.dead || v.phase < 1 || !(v.see > 0) || !(dist > 8 && dist < V_MIND_R)) return false;
+          if (now - (V.mindT === undefined ? -1e9 : V.mindT) < V_MIND_CD) return false;
+          return now - (t.psyAt === undefined ? -1e9 : t.psyAt) >= V_MIND_GAP;
         }
         function startAtk(V, kind) {
           const v = V.vec;
           const side = V.env.random() < 0.5 ? 0 : 1;
-          v.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0, got: [] };
+          v.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0, got: [], r0: 0, tg: kind === 'mind' ? (v.tgt || v.near) : null };
           v.st = 'combat'; v.stT = 0;
-          if (kind === 'wave' || kind === 'grab') V.env.on.charge(v, kind);
+          if (kind === 'wave' || kind === 'mind') V.env.on.charge(v, kind);
         }
         function runAtk(V, dt) {
           const E = V.env, v = V.vec, a = v.atk, A = V_ATK[a.kind];
@@ -4143,19 +4149,25 @@
               if (!a.hit) {
                 a.hit = 1;
                 E.on.wave(v);
-                for (const t of who) {
-                  if (t.dead) continue;
-                  const d = Math.hypot(t.x - v.x, t.z - v.z);
-                  if (!(d < V_WAVE_R) || !(Math.abs(t.y - v.y) < 4.2)) continue;
-                  const f = 1 - d / V_WAVE_R;
-                  E.hit(v, t, 'wave', Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
-                }
                 for (const o of v.orbit) o.r = Math.min(14, o.r + 4);
               }
             } else {
               const u = (a.t - act) / A.rec;
               v.armUpWant[0] = 0.75 * (1 - u); v.armUpWant[1] = 0.75 * (1 - u);
               v.flareWant = 1 - u * 0.5;
+            }
+            if (a.t >= wind && a.r0 < V_WAVE_R) {
+              const r1 = Math.min(V_WAVE_R, (a.t - wind) * V_WAVE_SPEED), r0 = a.r0;
+              a.r0 = r1;
+              for (const t of who) {
+                if (t.dead || a.got.indexOf(t) >= 0) continue;
+                const d = Math.hypot(t.x - v.x, t.z - v.z);
+                if (!(d > r0 - 0.6 && d <= r1 + 0.6) || !(d < V_WAVE_R) || !(Math.abs(t.y - v.y) < 4.2)) continue;
+                a.got.push(t);
+                if (t.y - E.supportHeight(t.x, t.z, t.y + 0.3) > V_WAVE_JUMP) { if (E.on.dodge) E.on.dodge(v, t); continue; }
+                const f = 1 - d / V_WAVE_R;
+                E.hit(v, t, 'wave', Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
+              }
             }
           } else if (a.kind === 'limb') {
             const i = a.side;
@@ -4194,19 +4206,23 @@
               const u = (a.t - act) / A.rec;
               v.armUpWant[i] = 0.4 * (1 - u); v.spreadWant = 1 - u;
             }
-          } else if (a.kind === 'grab') {
-            const i = a.side;
+          } else if (a.kind === 'mind') {
+            const i = a.side, t1 = a.tg || t0;
+            if (t1) { v.tx = t1.x; v.tz = t1.z; }
             if (a.t < wind) {
               const u = a.t / wind;
               v.armUpWant[i] = 0.9 + u * 0.1; v.spreadWant = 1;
-              v.armExtWant[i] = u * 0.30; v.hoverWant = 0.7; v.flareWant = 0.8;
-              if (!a.sfx && a.t > wind * 0.55) { a.sfx = 1; E.on.psy(v, 0.4, 1200); }
+              v.armExtWant[i] = u * 0.30; v.hoverWant = 0.7; v.flareWant = 0.8 + u * 0.2; v.mawWant = u * 0.4;
+              if (!a.sfx && a.t > wind * 0.35) { a.sfx = 1; E.on.psy(v, 0.28, 1400); }
             } else if (a.t < act) {
               if (!a.hit) {
                 a.hit = 1;
                 v.gripWant = 1; v.spreadWant = 0;
-                if (t0 && dist < V_GRAB_R && !t0.dead && sees(V, t0) && Math.abs(t0.y - v.y) < 4.2) E.grab(v, t0);
-                else E.on.limb(v);
+                const d1 = t1 ? Math.hypot(t1.x - v.x, t1.z - v.z) : 1e9;
+                if (t1 && !t1.dead && d1 < V_MIND_R && sees(V, t1)) {
+                  t1.psyAt = E.now(); V.mindT = E.now();
+                  E.mind(v, t1, V_MIND_MS);
+                } else if (E.on.miss) E.on.miss(v);
               }
             } else {
               const u = (a.t - act) / A.rec;
@@ -4319,7 +4335,6 @@
           const E = V.env, v = V.vec;
           v.dead = true; v.deadT = 0; v.hp = 0; v.sp = 0; v.atk = null;
           v.hoverWant = 0; v.flareWant = 0; v.archWant = 0;
-          E.release(null);
           dropOrbit(V);
           E.on.death(v);
           for (const m of E.flayers()) if (m.live && !m.dead && Math.hypot(m.x - v.x, m.z - v.z) <= V_LINK) { m.panicked = true; m.st = 'flee'; m.stT = 0; m.fleeT = 30; }
@@ -4420,10 +4435,10 @@
 
         if (typeof module !== 'undefined' && module.exports) {
           module.exports = {
-            V_HP, V_SIGHT, V_LINK, V_CLEAR, V_CMD_DOG, V_CMD_GOR, V_HEIGHT, V_HIP, V_EXT, V_WAVE_R, V_WAVE_DMG, V_LIMB_R, V_LIMB_DMG, V_GRAB_R, V_GRAB_DMG,
+            V_HP, V_SIGHT, V_LINK, V_CLEAR, V_CMD_DOG, V_CMD_GOR, V_HEIGHT, V_HIP, V_EXT, V_WAVE_R, V_WAVE_DMG, V_WAVE_SPEED, V_WAVE_JUMP, V_LIMB_R, V_LIMB_DMG, V_MIND_R, V_MIND_MS, V_MIND_GAP, V_MIND_CD,
             V_THROW_DMG, V_ORBIT_MAX, V_MEM, V_PHASE, V_SUMMON_CD, V_BLINK_MIN, V_BLINK_CD, V_BLINK_STAND, V_TAKE, V_RET, V_ST, V_ATK, ATK_KINDS, EV, SNAP_N, FULL_N,
             makeVecna, tell, spawnSpot, spawnVecna, clearVecna, command, ring, summon, hiveCount, pickWrecks, lift, dropOrbit, hurl, flights, orbitStep,
-            sees, see, phaseOf, think, chooseAtk, startAtk, runAtk, step, ease, hurt, blinkTo, kill, stock, fighting, ext01,
+            sees, see, phaseOf, think, chooseAtk, mindReady, startAtk, runAtk, step, ease, hurt, blinkTo, kill, stock, fighting, ext01,
             snapRow, orbitRows, flightRows, fullState, fullOk, adoptFull,
           };
         }
@@ -6333,7 +6348,7 @@
     if (t.slice(-3) === '/tq') { onTrafficAsk(); return; }
     if (t.slice(-3) === '/dv') { onRoomDogs(msg); return; }
     if (t.slice(-3) === '/dq') { onDogAsk(); return; }
-    if (t.slice(-5) === '/grip') { onRoomGrip(msg); return; }
+    if (t.slice(-4) === '/psy') { onRoomPsy(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -7392,14 +7407,12 @@
     if (msg.src === 'gorpred') { showHurt(); playHurt(); camShake = Math.max(camShake, 0.85); playGorPredation(0, 0); gorBind = 0.55; }   // … its face
     if (msg.src === 'vec') {                               // VECNA's wave, his arm, a car he threw: and where it throws you
       showHurt(); playHurt(); camShake = Math.max(camShake, 0.28, (+msg.sh || 0) / 100);
-      if (msg.k === 'wave' && psyHold) psyRelease(6);
       if (Array.isArray(msg.kb) && msg.kb.every(Number.isFinite)) {
         const ox = msg.kb[0] / 10, oz = msg.kb[1] / 10, d = Math.max(1, Math.hypot(p.x - ox, p.z - oz)), push = msg.kb[2] / 10;
         p.x += (p.x - ox) / d * push; p.z += (p.z - oz) / d * push;
         vy = Math.max(vy, (+msg.up || 0) / 10); grounded = false;
       }
     }
-    if (msg.src === 'vecgrip') { showHurt(); playHurt(); }   // his grip, as it drags you in
     if (msg.src === 'mf') {                                // a flayer's blow, or a car it threw: and how far it knocks you
       showHurt(); playHurt(); camShake = Math.max(camShake, 0.28, (+msg.sh || 0) / 100);
       if (Array.isArray(msg.kb) && msg.kb.every(Number.isFinite)) mfShove(msg.kb[2] / 10, msg.kb[0] / 10, msg.kb[1] / 10);
@@ -7577,7 +7590,6 @@
   }
   function onRoomPos(msg) {
     if (dead || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
-    if (psyHold) psyRelease(0);
     p.set(msg.x, (+msg.y || 0) + EYE, msg.z); vy = 0;
     MP.fixes++;
     publishState(true);
@@ -7618,7 +7630,7 @@
   function onDeath() {
     dead = true; fireHeld = false;
     setScope(false);
-    if (psyHold) psyRelease(0);                         // (the dead are not held: else the grip went on, and dragged the respawned)
+    psyWarpT = 0;                                       // (and what he did to your eyes ends with you)
     playDeath();
     // credit whoever hit us last, but only if it was recent — a car or an angry
     // monkey finishing us off must not hand a stale attacker the point
@@ -7823,7 +7835,7 @@
                  (f.panic ? '  PANIC' : '') + (f.thrown ? '  THROWN' : '') + '\n'; })() +
                (() => { const v = vecDebug(); return !v.live ? '' :
                  'VECNA ' + v.st + '  phase ' + v.phase + '  hp ' + v.hp + '  held ' + v.orbit + ' flying ' + v.flying +
-                 '  hive ' + v.hive + '  ' + v.d + 'm' + (v.vuln ? '  OPEN' : '') + (v.held ? '  HOLDING YOU' : '') + '\n'; })(); })() : '') +
+                 '  hive ' + v.hive + '  ' + v.d + 'm' + (v.vuln ? '  OPEN' : '') + (v.warp ? '  MIND ' + v.warp + 's' : '') + '\n'; })(); })() : '') +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2) + '\n' + (wState === WS.NORMAL ? bzbDebugText() : '');
   }
@@ -10769,7 +10781,6 @@
   const VL1 = 1.45, VL2 = 1.38;            // thigh / shin
   const VA1 = 1.15, VA2 = 1.10;            // upper arm / forearm at rest
   const V_EXT = VC.V_EXT;                  // §13: how far past rest the arm goes
-  const V_GRAB_R = VC.V_GRAB_R, V_GRAB_DMG = VC.V_GRAB_DMG;   // §15 — never lethal on its own
   const V_TEND = 9, V_TSEG = 5;            // the crown
   const vecEl = { name: null };
 
@@ -11137,6 +11148,76 @@
     const near = Math.hypot(T.x - p.x, T.z - p.z);
     if (near < 24) camShake = Math.max(camShake, 0.5 * (1 - near / 24));
   }
+  // ---- what he is about to do, where it can be seen ----------------------
+  //  The wave: the circle it will fill, drawn on the ground while he gathers
+  //  it, then the front itself going out along the ground at the speed it
+  //  really goes (shared/vecna.js V_WAVE_SPEED) — knee-high, so it can be
+  //  jumped, and gone at the circle's edge. His mind: a thread from his crown
+  //  to whoever it is for, brightening as it gathers — break his sight of you
+  //  before it goes and it finds nothing.
+  //  (the circle is filled, faintly, with rings drawn in toward him as he gathers
+  //  it and a bright rim: seen from inside it, you know you are inside it)
+  const waveMarkMat = new THREE.ShaderMaterial({
+    uniforms: { uA: { value: 0 }, uT: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform float uA, uT; varying vec2 vUv; void main() { float r = length(vUv - 0.5) * 2.0; if (r > 1.0) discard;' +
+      ' float rim = smoothstep(0.90, 0.975, r) * (1.0 - smoothstep(0.985, 1.0, r)); float rings = pow(0.5 + 0.5 * sin(r * 22.0 + uT * 7.0), 8.0) * 0.7 * smoothstep(0.05, 0.3, r);' +
+      ' gl_FragColor = vec4(vec3(1.0, 0.26, 0.46) * (rim * 1.4 + rings + 0.13) * uA, 1.0); }',
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, fog: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
+  const waveMark = new THREE.Mesh(new THREE.CircleGeometry(1, 96), waveMarkMat);
+  waveMark.rotation.x = -Math.PI / 2; waveMark.visible = false; waveMark.renderOrder = 3; waveMark.frustumCulled = false; scene.add(waveMark);
+  const waveFrontMat = new THREE.ShaderMaterial({
+    uniforms: { uA: { value: 0 }, uT: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform float uA, uT; varying vec2 vUv; void main() { float band = pow(1.0 - vUv.y, 1.6); float fl = 0.72 + 0.28 * sin(vUv.x * 190.0 + uT * 14.0); gl_FragColor = vec4(vec3(1.0, 0.30, 0.48) * band * fl * uA, 1.0); }',
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, fog: false,
+  });
+  const waveFront = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 96, 1, true), waveFrontMat);
+  waveFront.visible = false; waveFront.renderOrder = 3; waveFront.frustumCulled = false; scene.add(waveFront);
+  const mindBeamMat = new THREE.MeshBasicMaterial({ color: 0x9d62ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+  const mindBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 6, 1, true), mindBeamMat);
+  mindBeam.visible = false; mindBeam.frustumCulled = false; scene.add(mindBeam);
+  const _tlA = new THREE.Vector3(), _tlB = new THREE.Vector3(), _tlY = new THREE.Vector3(0, 1, 0);
+  function vecTelegraphs() {
+    const a = vec.live && !vec.dead ? vec.atk : null;
+    let mark = 0, front = 0, beam = 0;
+    if (a && a.kind === 'wave') {
+      const A = VC.V_ATK.wave, R = VC.V_WAVE_R, gy = vec.y + 0.06;
+      if (a.t < A.wind) {
+        const u = a.t / A.wind;
+        mark = (0.25 + 0.6 * u) * (0.8 + 0.2 * Math.sin(cityT * 14));
+      } else {
+        const r = (a.t - A.wind) * VC.V_WAVE_SPEED;
+        if (r < R) {
+          front = Math.min(1, (1 - r / R) * 1.8);
+          mark = 0.35 * (1 - r / R);
+          waveFront.position.set(vec.x, gy + 0.55, vec.z); waveFront.scale.set(Math.max(0.5, r), 1.1, Math.max(0.5, r));
+          waveFrontMat.uniforms.uA.value = front; waveFrontMat.uniforms.uT.value = cityT;
+        }
+      }
+      if (mark > 0.01) { waveMark.position.set(vec.x, gy, vec.z); waveMark.scale.set(R, R, 1); waveMarkMat.uniforms.uA.value = Math.min(1, mark); waveMarkMat.uniforms.uT.value = cityT; }
+    } else if (a && a.kind === 'mind' && a.t < VC.V_ATK.mind.wind + VC.V_ATK.mind.act) {
+      const u = Math.min(1, a.t / VC.V_ATK.mind.wind), t = a.tg;
+      const bx = t ? t.x : vec.tx, bz = t ? t.z : vec.tz;
+      _tlA.set(vec.x, vec.y + VC.V_HEIGHT + vec.hover * 1.45, vec.z);
+      _tlB.set(bx, t && t.ey !== undefined ? t.ey - 0.35 : supportHeight(bx, bz, vec.y + 2) + 1.35, bz);
+      //  (short of them by three metres: to whoever it is for it comes at them, it does not fill their eyes)
+      const full = _tlA.distanceTo(_tlB);
+      if (full > 4) _tlB.lerp(_tlA, 3 / full);
+      const len = _tlA.distanceTo(_tlB);
+      if (len > 1) {
+        beam = (0.12 + 0.75 * u * u) * (0.75 + 0.25 * Math.sin(cityT * 23));
+        mindBeam.position.copy(_tlA).add(_tlB).multiplyScalar(0.5);
+        mindBeam.quaternion.setFromUnitVectors(_tlY, _tlB.sub(_tlA).normalize());
+        mindBeam.scale.set(1 + u * 1.5, len, 1 + u * 1.5);
+        mindBeamMat.opacity = Math.min(1, beam);
+      }
+    }
+    waveMark.visible = mark > 0.01; waveFront.visible = front > 0.01; mindBeam.visible = beam > 0.01;
+  }
+  function vecTelegraphsOff() { waveMark.visible = waveFront.visible = mindBeam.visible = false; }
   const VS = VC.makeVecna({
     now: () => cityT, random: () => Math.random(), targets: dogTargets,
     clearAt, supportHeight, collide: cityCollide, rayCity, wrecks: () => wrecks,
@@ -11145,13 +11226,11 @@
     //  a blow lands: it hurts, it shakes, and it throws you (the wave lets go of you first)
     hit(v, t, kind, dmg, ax, az, push, up, shake) {
       applyDamage(dmg, null);
-      if (kind === 'wave' && psyHold) psyRelease(6);
       if (shake) camShake = Math.max(camShake, shake);
       if (push || up) { p.x += ax * push; p.z += az * push; vy = Math.max(vy, up); grounded = false; }
     },
-    grab: () => psyGrab(),
-    held: () => !!psyHold,
-    release: () => psyRelease(0),
+    //  his mind reaches this player: no harm, the view bends
+    mind: (v, t, ms) => { if (t === dogTarget) psyWarpStart(ms); },
     on: {
       lift: () => playVecLift(),
       hurl: () => playVecHurl(),
@@ -11174,6 +11253,8 @@
       fly: (T, w) => vecWreckAt(T.k, T.x, T.y, T.z, T.roll, w.rot, T.roll * 0.6),
       drop: () => poseWrecks(),
       gone: () => vecHide(),
+      dodge: () => notify('波動を跳び越えた', 1200),
+      miss: () => playVecLimb(),
     },
   });
   const vec = VS.vec, vecThrown = VS.thrown;
@@ -11209,52 +11290,83 @@
   }
   function hurtVecna(dmg, fromX, fromZ) { VC.hurt(VS, dmg, fromX, fromZ); }
 
-  // ---- the grab ------------------------------------------------------
-  //  §15. Off your feet, dragged in, thrown. It hurts and it is frightening
-  //  and it is explicitly not a kill: the damage is fixed, it cannot take the
-  //  last of your health, and it always ends by letting go.
-  let psyHold = null;
-  function psyGrab() {
-    if (dead || psyHold) return false;
-    psyHold = { t: 0, ph: 'lift', y0: p.y, sx: p.x, sz: p.z, hurt: 0 };
-    playVecGrab();
-    notify('動けない', 1600);
-    return true;
+  // ---- his mind in yours ----------------------------------------------
+  //  No harm at all: for ten seconds what you see bends — the street swims,
+  //  the frame breathes and turns, the colours come apart at the edges — and
+  //  then it lets go. He gathers it where you can see him do it, it reaches
+  //  you only if he can see you as it goes, and he does not do it often
+  //  (shared/vecna.js V_MIND_*). Drawn as one extra pass over the frame while
+  //  it lasts (psyDraw), so it costs nothing the rest of the time.
+  let psyWarpT = 0, psyWarpDur = 0, psyWarpAmt = 0;
+  function psyWarpStart(ms) {
+    if (dead) return;
+    psyWarpDur = ms / 1000; psyWarpT = psyWarpDur;
+    playVecMind();
+    psyOnset(0.40, Math.min(ms, 3000));
+    notify('視界が歪んでいく', 2600);
   }
-  function psyRelease(vyOut) {
-    if (!psyHold) return;
-    psyHold = null;
-    vy = vyOut || 0;
-    grounded = false;
+  function psyWarpUpdate(dt) {
+    if (psyWarpT > 0) psyWarpT = Math.max(0, psyWarpT - dt);
+    //  in over most of a second, out over the last two
+    const inF = psyWarpDur > 0 ? Math.min(1, (psyWarpDur - psyWarpT) / 0.8) : 0, outF = Math.min(1, psyWarpT / 2.0);
+    const want = psyWarpT > 0 ? Math.min(inF, outF) : 0;
+    psyWarpAmt += (want - psyWarpAmt) * Math.min(1, dt * 6);
+    if (psyWarpT <= 0 && psyWarpAmt < 0.003) psyWarpAmt = 0;
   }
-  function updatePsyHold(dt) {
-    const H = psyHold;
-    grounded = false;
-    H.t += dt;
-    const gy = supportHeight(p.x, p.z, p.y - EYE) + EYE;
-    if (H.ph === 'lift') {
-      //  up, and nothing you press about it
-      p.y += (H.y0 + 3.4 - p.y) * Math.min(1, dt * 3.4);
-      if (H.t > 0.85) { H.ph = 'drag'; H.t = 0; }
-    } else if (H.ph === 'drag') {
-      //  in, slowly, so there is time to understand what is happening
-      const tx = vec.x + Math.sin(vec.hd) * 6.5, tz = vec.z + Math.cos(vec.hd) * 6.5;
-      const k = Math.min(1, dt * 1.5);
-      p.x += (tx - p.x) * k; p.z += (tz - p.z) * k;
-      p.y += ((vec.y + 4.2) - p.y) * Math.min(1, dt * 2.0);
-      if (!H.hurt && H.t > 0.9) { H.hurt = 1; if (!H.room) applyDamage(V_GRAB_DMG, null); }   // (the room's grip: the room does it)
-      if (H.t > 1.7) { H.ph = 'throw'; H.t = 0; }
-    } else {
-      //  and away. The throw is a real velocity — you land where physics puts you
-      const a = vec.hd + Math.PI + (Math.random() - 0.5) * 0.8;
-      psyRelease(9.5);
-      p.x += Math.sin(a) * 1.2; p.z += Math.cos(a) * 1.2;
-      camShake = Math.max(camShake, 1.1);
-      playVecHurl();
+  //  the frame, drawn into a target and then bent onto the screen
+  const psyPass = { rt: null, scene: null, cam: null, mat: null, idle: 0 };
+  const _psySz = new THREE.Vector2();
+  function psyDraw(dt) {
+    if (psyWarpAmt <= 0) {
+      renderer.render(scene, camera);
+      //  (and what it drew into is let go a few seconds after it ends)
+      if (psyPass.rt && (psyPass.idle += dt) > 4) { psyPass.rt.dispose(); psyPass.rt = null; }
       return;
     }
-    if (p.y < gy) p.y = gy;
-    if (vec.dead || !vec.live || Math.hypot(vec.x - p.x, vec.z - p.z) > V_GRAB_R * 1.6) psyRelease(0);
+    psyPass.idle = 0;
+    if (!psyPass.mat) {
+      psyPass.mat = new THREE.ShaderMaterial({
+        uniforms: { tMap: { value: null }, uAmt: { value: 0 }, uTime: { value: 0 }, uAsp: { value: 1 } },
+        vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: `
+          uniform sampler2D tMap; uniform float uAmt, uTime, uAsp; varying vec2 vUv;
+          void main() {
+            float a = uAmt;
+            vec2 c = vUv - 0.5; c.x *= uAsp;
+            float r = length(c);
+            //  the frame turns and breathes about its middle, more at the edge
+            float ang = a * (0.10 * sin(uTime * 0.55) + 0.05 * sin(uTime * 1.3 + r * 6.0)) * (0.4 + r * 1.6);
+            float zm = 1.0 + a * 0.06 * sin(uTime * 0.8);
+            float s = sin(ang), co = cos(ang);
+            c = mat2(co, -s, s, co) * c / zm;
+            //  and swims: slow waves across it, a faster ripple on top
+            c.x += a * (0.020 * sin(c.y * 9.0 + uTime * 1.7) + 0.006 * sin(c.y * 27.0 - uTime * 3.4));
+            c.y += a * (0.020 * sin(c.x * 7.0 - uTime * 1.3) + 0.006 * cos(c.x * 23.0 + uTime * 2.9));
+            c.x /= uAsp;
+            vec2 uv = c + 0.5;
+            //  the colours come apart toward the edge
+            vec2 sp = (vUv - 0.5) * a * 0.018;
+            vec3 col = vec3(texture2D(tMap, uv + sp).r, texture2D(tMap, uv).g, texture2D(tMap, uv - sp).b);
+            col = mix(col, col * vec3(0.86, 0.74, 1.06), a * 0.35);
+            col *= 1.0 - a * 0.45 * smoothstep(0.35, 0.85, r);
+            gl_FragColor = vec4(col, 1.0);
+          }`,
+        depthTest: false, depthWrite: false,
+      });
+      psyPass.scene = new THREE.Scene();
+      const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), psyPass.mat); q.frustumCulled = false;
+      psyPass.scene.add(q);
+      psyPass.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    }
+    renderer.getDrawingBufferSize(_psySz);
+    if (!psyPass.rt) psyPass.rt = new THREE.WebGLRenderTarget(_psySz.x, _psySz.y, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    else if (psyPass.rt.width !== _psySz.x || psyPass.rt.height !== _psySz.y) psyPass.rt.setSize(_psySz.x, _psySz.y);
+    renderer.setRenderTarget(psyPass.rt);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    const u = psyPass.mat.uniforms;
+    u.tMap.value = psyPass.rt.texture; u.uAmt.value = psyWarpAmt; u.uTime.value = cityT; u.uAsp.value = _psySz.x / Math.max(1, _psySz.y);
+    renderer.render(psyPass.scene, psyPass.cam);
   }
 
   // ---- the mental attack ---------------------------------------------
@@ -11269,6 +11381,7 @@
     psyEchoT = Math.max(psyEchoT, ms / 1000);
   }
   function updatePsyFx(dt) {
+    psyWarpUpdate(dt);
     if (psyEchoT > 0) { psyEchoT -= dt; if (psyEchoT <= 0) psyLevelWant = 0; }
     psyLevel += (psyLevelWant - psyLevel) * Math.min(1, dt * 1.6);
     if (psyLevel < 0.002 && psyLevelWant === 0) psyLevel = 0;
@@ -11367,11 +11480,14 @@
     const t = actx.currentTime;
     vecTone(g, 300, 70, t, 0.30, 'sawtooth', 0.12, 0.006);
   }
-  function playVecGrab() {
-    const g = vecBus(200, 0.75); if (!g) return;
+  //  his mind in yours: heard wherever you are, it is inside your head
+  function playVecMind() {
+    if (!audioReady()) return;
+    const g = actx.createGain(); g.gain.value = 0.7; g.connect(master);
     const t = actx.currentTime;
     vecTone(g, 150, 400, t, 0.55, 'sine', 0.16, 0.02);
     vecTone(g, 212, 566, t, 0.55, 'sine', 0.07, 0.03);      // the tritone again
+    vecTone(g, 96, 71, t + 0.3, 3.2, 'sine', 0.10, 0.6);    // and it sinks, and stays a while
   }
   function playVecCommand() {
     const g = vecBus(280, 0.6); if (!g) return;
@@ -11474,6 +11590,7 @@
       }
       updatePsyFx(dt);
       vecReleaseBar();
+      vecTelegraphsOff();
       return;
     }
     if (!vecOn) { vecOn = true; for (const q of vecParts) q.visible = true; }
@@ -11482,8 +11599,8 @@
     updatePsyFx(dt);
 
     if (mine) VC.stock(VS, dt);                        // §61: one, and he takes his time about turning up
-    if (!vec.live) { if (vecDrawn) vecHide(); vecBedOff(); vecReleaseBar(); return; }
-    if (vec.dead && vec.deadT > 26) { clearVecna(); vecBedOff(); vecReleaseBar(); return; }
+    if (!vec.live) { if (vecDrawn) vecHide(); vecBedOff(); vecReleaseBar(); vecTelegraphsOff(); return; }
+    if (vec.dead && vec.deadT > 26) { clearVecna(); vecBedOff(); vecReleaseBar(); vecTelegraphsOff(); return; }
 
     vecFrame++;
     const dx = vec.x - p.x, dz = vec.z - p.z, d2 = dx * dx + dz * dz;
@@ -11523,6 +11640,7 @@
 
     //  everything the animator reads is eased, never snapped (shared/vecna.js ease)
     VC.ease(VS, dt);
+    vecTelegraphs();                                     // the wave's circle and front, his mind's thread
 
     if (!vec.dead) {
       vec.gaitPh = (vec.gaitPh + dt * Math.max(vec.sp < 0.2 ? 0 : 0.16, vec.sp / 2.6) * 0.62) % 1;
@@ -11652,9 +11770,9 @@
     }
     const a = vec.atk, A = VC.V_ATK[kind];
     if (a && a.kind === kind && Math.abs(a.t - t) < 0.35) return;            // playing it already
-    const past = kind === 'wave' ? A.wind * 0.5 : kind === 'grab' ? A.wind * 0.55 : A.wind;
+    const past = kind === 'wave' ? A.wind * 0.5 : kind === 'mind' ? A.wind * 0.35 : A.wind;
     vec.atk = { kind, t, side, phase: 0, hit: t > A.wind ? 1 : 0, sfx: t > past ? 1 : 0, got: [] };
-    if (t < 0.3 && (kind === 'wave' || kind === 'grab')) playVecCharge();
+    if (t < 0.3 && (kind === 'wave' || kind === 'mind')) playVecCharge();
   }
   //  his swing, this frame, as shared/vecna.js runAtk has it felt — the
   //  charge's pressure, the wave's beat, the arm — but nobody is struck here:
@@ -11669,8 +11787,8 @@
       else if (a.t < act && !a.hit) { a.hit = 1; VS.env.on.wave(vec); }
     } else if (a.kind === 'limb') {
       if (a.t >= wind && a.t < act && !a.sfx) { a.sfx = 1; playVecLimb(); }
-    } else if (a.kind === 'grab') {
-      if (a.t < wind && !a.sfx && a.t > wind * 0.55) { a.sfx = 1; psyOnset(0.4, 1200); }
+    } else if (a.kind === 'mind') {
+      if (a.t < wind && !a.sfx && a.t > wind * 0.35) { a.sfx = 1; psyOnset(0.28, 1400); }
     }
     if (a.t >= act + A.rec) vec.atk = null;
   }
@@ -11722,14 +11840,10 @@
       playVecHurl();
     }
   }
-  //  his grip, as the room says it ('grip' { x·10, z·10 }: he has hold of you
-  //  now; { off: 1 }: he let go) — played out here (updatePsyHold), the harm
-  //  it does the room's to do
-  function onRoomGrip(msg) {
-    if (!MP.srvOwns.d) return;
-    if (msg.off) { psyRelease(0); return; }
-    if (wState !== WS.BACK || dead) return;
-    if (psyGrab()) psyHold.room = true;
+  //  his mind reached you, as the room says it ('psy' { ms, x·10, z·10 })
+  function onRoomPsy(msg) {
+    if (!MP.srvOwns.d || wState !== WS.BACK || dead || !(msg.ms > 0)) return;
+    psyWarpStart(Math.min(15000, msg.ms));
   }
   function sendVecHit(dmg) {
     if (!MP.connected || !MP.client || (mobPub() && !MP.srvOwns.d)) return;
@@ -11745,7 +11859,7 @@
              hp: Math.round(vec.hp || 0), awake: !!vec.awake, hover: +(vec.hover || 0).toFixed(2),
              orbit: vec.orbit ? vec.orbit.length : 0, flying: vecThrown.length,
              hive: vec.live ? vecHiveCount() : 0, vuln: +(vec.vuln || 0).toFixed(2),
-             held: !!psyHold, psy: +psyLevel.toFixed(2), d: Math.round(vec.tdist || 0) };
+             warp: +psyWarpT.toFixed(1), psy: +psyLevel.toFixed(2), d: Math.round(vec.tdist || 0) };
   }
 
   // ── red lightning ─────────────────────────────────────────────────
@@ -16341,8 +16455,7 @@
     if (fdot < -0.12) strideDir = -1; else if (fdot > 0.12) strideDir = 1;
 
     const mag = Math.min(mv.length(), 1);
-    const held = !!psyHold;                      // §15: off your feet, and the stick does nothing
-    const moving = mag > 0.06 && !dead && !held;
+    const moving = mag > 0.06 && !dead;
     const running = kbRun || mag > 0.85;
     if (moving) {
       const speed = running ? RUN : WALK;
@@ -16361,11 +16474,7 @@
     if (wState === WS.BACK) wreckCollide(p, PRAD);   // and the dead traffic is solid
 
     // --- gravity + ground (street, floor slabs, or stairs) ---
-    //  While he has hold of you there is no gravity to speak of: the grab drives
-    //  the position outright and hands you back with the velocity it let go at,
-    //  so the fall afterwards is a real fall and not a teleport.
-    if (held) { updatePsyHold(dt); }
-    else {
+    {
       vy -= GRAV * dt;
       p.y += vy * dt;
       const floor = supportHeight(p.x, p.z, p.y - EYE) + EYE;
@@ -16458,7 +16567,7 @@
     publishMobs();
 
     const tDraw = dbgOn ? performance.now() : 0;
-    renderer.render(scene, camera);
+    psyDraw(dt);                                    // (his mind in yours bends it: otherwise the plain draw)
     if (dbgOn) perfSample(now, tFrame, tDraw, performance.now());
 
     // --- FPS readout ---
