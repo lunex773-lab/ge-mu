@@ -147,6 +147,12 @@ async function roomServer({ moves = false, creatures = false } = {}) {
     async delete(k) { for (const kk of [].concat(k)) kept.delete(kk); } });
   connect.mind = mind;
   const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
+  //  one way of a slow link: after ms, give or take jitter, never overtaking what went before
+  const later = (who, way, fn) => {
+    const L = who.lag, at = Math.max(who[way] || 0, Date.now() + L.ms + Math.random() * (L.jitter || 0));
+    who[way] = at;
+    setTimeout(fn, at - Date.now());
+  };
   function connect(ws, who) {
     const u = new URL(ws.url());
     const raw = String(u.searchParams.get('room') || '').trim();
@@ -156,8 +162,15 @@ async function roomServer({ moves = false, creatures = false } = {}) {
     const id = idFor(R.next++);
     R.sockets.set(id, { ws, who });
     const joined = R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
-    //  who.drop: kinds this player does not hear (setDrop — packets lost)
-    const deliver = (to, text) => { const t = R.sockets.get(to); if (t && !(t.who.drop && t.who.drop.test(kindOf(text)))) t.ws.send(text); };
+    //  who.drop: kinds this player does not hear (setDrop — packets lost);
+    //  who.lag: this player's link is slow ({ ms, jitter }: setLag) — each
+    //  way, in order, as a phone's WebSocket over a mobile network
+    const deliver = (to, text) => {
+      const t = R.sockets.get(to);
+      if (!t || (t.who.drop && t.who.drop.test(kindOf(text)))) return;
+      if (!t.who.lag) { t.ws.send(text); return; }
+      later(t.who, 'down', () => { if (R.sockets.has(to)) t.ws.send(text); });
+    };
     ws.send(JSON.stringify({ s: '_welcome', p: { id, host: R.relay.host(), players: [...R.sockets.keys()], t: Date.now(), hp: R.relay.players.get(id).hp, items: R.relay.itemState(), own: R.relay.creatures.owns() } }));
     const route = (out, from) => {
       for (const [to, text] of out) {
@@ -173,12 +186,15 @@ async function roomServer({ moves = false, creatures = false } = {}) {
     };
     R.relay.hello(id); askMind();
     ws.onMessage((m) => {
+      if (who.lag) later(who, 'up', () => take(m)); else take(m);
+    });
+    const take = (m) => {
       if (!R.sockets.has(id)) return;
       const r = R.relay.handle(id, String(m), Date.now());
       R.relay.dirty.clear();
       route(r.out, id);
       askMind();
-    });
+    };
     const gone = () => {
       if (!R.sockets.delete(id)) return;
       const out = R.relay.leave(id);
@@ -215,7 +231,7 @@ async function openRoom({ moves = false, creatures = false } = {}) {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    const who = { drop: null, down: false, closes: new Set() };
+    const who = { drop: null, down: false, lag: null, closes: new Set() };
     //  who.down: the room server is not answering (refused at once), as when
     //  a day's free requests are used up
     await page.routeWebSocket(/^ws:\/\/lab\.test\/ws\?/, (ws) => { if (who.down) ws.close({ code: 1011 }); else connect(ws, who); });
@@ -235,6 +251,7 @@ async function openRoom({ moves = false, creatures = false } = {}) {
         window.__t.start();
       }, { room, nick }),
       setDrop: (on) => { who.drop = on ? /^(gate|gateask|mob)$/ : null; },
+      setLag: (ms, jitter) => { who.lag = ms > 0 || jitter > 0 ? { ms: ms || 0, jitter: jitter || 0 } : null; },
       serverDown: (on) => { who.down = !!on; },
       close: async () => { for (const f of who.closes) f(); who.closes.clear(); await ctx.close(); },
     };

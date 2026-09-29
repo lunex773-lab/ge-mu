@@ -507,15 +507,65 @@ const HDQ = TR.HDQ;
 function marks(g) {
   return (g.dead ? 1 : 0) | (g.enraged ? 2 : 0) | (g.atk ? 4 : 0) | (g.lord ? 8 : 0) | (g.lord === 'vec' ? 16 : 0) | (g.lord === 'mf' && g.lordSlot === 1 ? 32 : 0) | (g.rise < 1 ? 64 : 0);
 }
-//  per gorgon [slot, x·10, z·10, heading byte, hp, state (G_ST index + 1), marks]
+//  … and the swing it is in, above those: which (bits 7–9: G_ATK_KINDS index
+//  + 1), with which arm (bits 10–11: arm + 1) and how far in (bits 12–17, in
+//  twentieths of a second). Without it, every screen but the one running the
+//  gorgon saw it walk up, stand, and hurt them — the room runs them all
+//  with two or more here, so that was every screen.
+const G_ATK_KINDS = ['claw', 'dclaw', 'lunge', 'pred'];
+function atkMarks(g) {
+  const a = g.atk; if (!a) return 0;
+  return ((G_ATK_KINDS.indexOf(a.kind) + 1) << 7) | ((Math.max(-1, Math.min(2, a.arm)) + 1) << 10) | (Math.min(63, Math.round(a.t * 20)) << 12);
+}
+//  per gorgon [slot, x·10, z·10, heading byte, hp, state (G_ST index + 1), marks | atkMarks]
 function snapRows(G) {
   const k = [];
   for (const g of G.gorgons) {
     if (!g.live) continue;
     const h = (((g.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-    k.push(g.slot, Math.round(g.x * 10), Math.round(g.z * 10), Math.round(h * HDQ), Math.max(0, g.hp), G_ST.indexOf(g.st) + 1, marks(g));
+    k.push(g.slot, Math.round(g.x * 10), Math.round(g.z * 10), Math.round(h * HDQ), Math.max(0, g.hp), G_ST.indexOf(g.st) + 1, marks(g) | atkMarks(g));
   }
   return k;
+}
+//  A screen that is told of a gorgon rather than running it plays its swing
+//  from what it is told (fl: the row's marks): the same wind-up, the same
+//  arm, the same timing, from as far in as the word says — and judges
+//  nothing (whoever runs it does). A new swing, or one this screen has
+//  drifted from, is taken up; one the word no longer has is let finish its
+//  follow-through, or dropped if it had not yet swung (broken by a wound).
+function hearAtk(G, g, fl) {
+  const kind = G_ATK_KINDS[((fl >> 7) & 7) - 1];
+  const a = g.atk;
+  if (!kind) {
+    if (a && !(a.t >= G_ATK[a.kind].wind + G_ATK[a.kind].swing)) { g.atk = null; g.predLean = 0; }
+    return false;
+  }
+  const t = ((fl >> 12) & 63) / 20, arm = ((fl >> 10) & 3) - 1;
+  if (a && a.kind === kind && a.t >= t - 0.05 && a.t < t + 0.35) return false;    // (ahead of the word by up to its age: as it should be)
+  const fresh = !a || a.kind !== kind || t < a.t - 0.35;
+  g.atk = { kind, t, arm, arm01: 1, phase: -1, hit: 1, sfx: t > G_ATK[kind].wind + G_ATK[kind].swing * 0.35 ? 1 : 0, told: 1 };
+  if (fresh && t < G_ATK[kind].wind) G.env.on.wind(g, kind);
+  return true;
+}
+//  … and plays it on, a frame at a time: the pose runAtk gives it, nothing more
+function replayAtk(G, g, dt) {
+  const a = g.atk, A = G_ATK[a.kind];
+  a.t += dt;
+  if (a.t < A.wind) {
+    a.phase = -(1 - a.t / A.wind);
+    if (a.kind === 'lunge') g.crouch = Math.min(1, g.crouch + dt * 4);
+    if (a.kind === 'pred') g.mawWant = 1;
+  } else if (a.t < A.wind + A.swing) {
+    const k = (a.t - A.wind) / A.swing;
+    a.phase = k;
+    if (a.kind === 'lunge') g.crouch = Math.max(0, g.crouch - dt * 6);
+    else if (a.kind === 'pred') { g.mawWant = 1; g.predLean = Math.min(1, g.predLean + dt * 4); }
+    if (!a.sfx && k > 0.35) { a.sfx = 1; G.env.on.swing(g, a.kind); if (a.kind === 'dclaw') a.arm = a.arm === 2 ? 2 : 1 - a.arm; }
+  } else {
+    a.phase = 1; a.arm01 = Math.max(0, 1 - (a.t - A.wind - A.swing) / A.rec);
+    if (a.kind === 'pred') g.mawWant = 0.35;
+  }
+  if (a.t >= A.wind + A.swing + A.rec) { g.atk = null; g.predLean = 0; }
 }
 //  The whole of it, to carry on from: per live gorgon [slot, x·100, z·100,
 //  y·100, heading·1000, hp·10, state, time in it·10, dead time·10 (−1: alive),
@@ -569,6 +619,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     NGOR, GOR_WILD, GOR_HP, RETINUE, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
     makeGorgons, startAtk, runAtk, step, see, spawnSpot, spawnGorgon, despawnGorgon, clearGorgons, think, hurt, kill, stock, fighting,
-    marks, snapRows, fullState, fullOk, adoptFull,
+    marks, G_ATK_KINDS, atkMarks, snapRows, hearAtk, replayAtk, fullState, fullOk, adoptFull,
   };
 }

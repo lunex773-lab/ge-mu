@@ -2933,14 +2933,52 @@
         function marks(g) {
           return (g.dead ? 1 : 0) | (g.enraged ? 2 : 0) | (g.atk ? 4 : 0) | (g.lord ? 8 : 0) | (g.lord === 'vec' ? 16 : 0) | (g.lord === 'mf' && g.lordSlot === 1 ? 32 : 0) | (g.rise < 1 ? 64 : 0);
         }
+        const G_ATK_KINDS = ['claw', 'dclaw', 'lunge', 'pred'];
+        function atkMarks(g) {
+          const a = g.atk; if (!a) return 0;
+          return ((G_ATK_KINDS.indexOf(a.kind) + 1) << 7) | ((Math.max(-1, Math.min(2, a.arm)) + 1) << 10) | (Math.min(63, Math.round(a.t * 20)) << 12);
+        }
         function snapRows(G) {
           const k = [];
           for (const g of G.gorgons) {
             if (!g.live) continue;
             const h = (((g.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-            k.push(g.slot, Math.round(g.x * 10), Math.round(g.z * 10), Math.round(h * HDQ), Math.max(0, g.hp), G_ST.indexOf(g.st) + 1, marks(g));
+            k.push(g.slot, Math.round(g.x * 10), Math.round(g.z * 10), Math.round(h * HDQ), Math.max(0, g.hp), G_ST.indexOf(g.st) + 1, marks(g) | atkMarks(g));
           }
           return k;
+        }
+        function hearAtk(G, g, fl) {
+          const kind = G_ATK_KINDS[((fl >> 7) & 7) - 1];
+          const a = g.atk;
+          if (!kind) {
+            if (a && !(a.t >= G_ATK[a.kind].wind + G_ATK[a.kind].swing)) { g.atk = null; g.predLean = 0; }
+            return false;
+          }
+          const t = ((fl >> 12) & 63) / 20, arm = ((fl >> 10) & 3) - 1;
+          if (a && a.kind === kind && a.t >= t - 0.05 && a.t < t + 0.35) return false;    // (ahead of the word by up to its age: as it should be)
+          const fresh = !a || a.kind !== kind || t < a.t - 0.35;
+          g.atk = { kind, t, arm, arm01: 1, phase: -1, hit: 1, sfx: t > G_ATK[kind].wind + G_ATK[kind].swing * 0.35 ? 1 : 0, told: 1 };
+          if (fresh && t < G_ATK[kind].wind) G.env.on.wind(g, kind);
+          return true;
+        }
+        function replayAtk(G, g, dt) {
+          const a = g.atk, A = G_ATK[a.kind];
+          a.t += dt;
+          if (a.t < A.wind) {
+            a.phase = -(1 - a.t / A.wind);
+            if (a.kind === 'lunge') g.crouch = Math.min(1, g.crouch + dt * 4);
+            if (a.kind === 'pred') g.mawWant = 1;
+          } else if (a.t < A.wind + A.swing) {
+            const k = (a.t - A.wind) / A.swing;
+            a.phase = k;
+            if (a.kind === 'lunge') g.crouch = Math.max(0, g.crouch - dt * 6);
+            else if (a.kind === 'pred') { g.mawWant = 1; g.predLean = Math.min(1, g.predLean + dt * 4); }
+            if (!a.sfx && k > 0.35) { a.sfx = 1; G.env.on.swing(g, a.kind); if (a.kind === 'dclaw') a.arm = a.arm === 2 ? 2 : 1 - a.arm; }
+          } else {
+            a.phase = 1; a.arm01 = Math.max(0, 1 - (a.t - A.wind - A.swing) / A.rec);
+            if (a.kind === 'pred') g.mawWant = 0.35;
+          }
+          if (a.t >= A.wind + A.swing + A.rec) { g.atk = null; g.predLean = 0; }
         }
         const FULL_N = 22;
         function fullState(G) {
@@ -2988,7 +3026,7 @@
           module.exports = {
             NGOR, GOR_WILD, GOR_HP, RETINUE, G_VIS, G_HEAR, G_MEM, G_CLAW_R, G_CLAW_DMG, G_DCLAW_DMG, G_PRED_R, G_PRED_DMG, G_ENRAGE, G_RISE_T, G_KEEP, G_APART, G_ST, G_ATK, FULL_N,
             makeGorgons, startAtk, runAtk, step, see, spawnSpot, spawnGorgon, despawnGorgon, clearGorgons, think, hurt, kill, stock, fighting,
-            marks, snapRows, fullState, fullOk, adoptFull,
+            marks, G_ATK_KINDS, atkMarks, snapRows, hearAtk, replayAtk, fullState, fullOk, adoptFull,
           };
         }
 
@@ -7331,6 +7369,11 @@
       MP.srvOwns.b = false;                                // alone now: whatever the room ran, this game runs
       if (MP.srvOwns.m) { MP.srvOwns.m = false; troopBack(); }
       if (MP.srvOwns.t) { MP.srvOwns.t = false; trafficBack(null); }
+      //  … and the other side, from where it is drawn. (It was not handed back:
+      //  a phone whose connection dropped — a tunnel, a lift, the app put away —
+      //  saw every dog, gorgon, flayer and VECNA stand frozen until it got back
+      //  in, and for good if it never did, while on the other phone they went on.)
+      if (MP.srvOwns.d) { MP.srvOwns.d = false; dogAskT = -1e9; dogsBack(null); }
       //  keep playing, and keep knocking: 1, 2, 4, 8 s … then every 15 s
       //  (every 30 s if it has never answered: a copy with no server, or a
       //  day's free requests used up — alone until it does)
@@ -10515,8 +10558,9 @@
         g.sp = g.rspd; g.tdist = Math.hypot(dx, dz);
         g.stagger = Math.max(0, g.stagger - dt * 2.0);
         if (g.dead) g.deadT += dt;
-        g.mawWant = g.st === 'attack' && g.atkKind === 'pred' ? 1 : g.st === 'enrage' ? 1 : g.st === 'chase' ? 0.3 : 0.1;
+        g.mawWant = g.st === 'enrage' ? 1 : g.st === 'chase' ? 0.3 : 0.1;
         g.headYawWant = 0; g.headPitchWant = 0;
+        if (g.atk && !g.dead) GR.replayAtk(GORS, g, dt);   // (its wind-up, arm and face, from what it is told: applyGorSnapshot)
       }
 
       //  Being taken over is not instant and neither is being let go: the
@@ -10603,9 +10647,10 @@
       g.lord = (fl & 8) ? ((fl & 16) ? 'vec' : 'mf') : null; g.lordSlot = (fl & 16) ? -1 : (fl & 32) ? 1 : 0;
       if (st && st !== g.st) {
         if (st === 'enrage') playGorRoar(g.tdist, gorPan(g));
-        if (st === 'attack') playGorWind(g.tdist, gorPan(g), true);
+        if (st === 'attack' && !(fl >> 7)) playGorWind(g.tdist, gorPan(g), true);   // (a word without the swing in it: a game from before)
         g.st = st; g.stT = 0;
       }
+      GR.hearAtk(GORS, g, fl);                           // the swing, played here as it goes there
       if ((fl & 2) && !g.enraged) g.enraged = true;
       if ((fl & 1) && !g.dead) { g.dead = true; g.deadT = 0; playGorDeath(g.tdist, gorPan(g)); }
     }

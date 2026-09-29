@@ -144,6 +144,24 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
       FL.despawnFlayer(RD.M, m);
     }
 
+    // ---- the second player's connection drops ----------------------------------------------
+    //  (a tunnel, a lift, the app put away: the room can no longer tell them the
+    //  other side — their game must carry it on, not stand it all still)
+    {
+      B.serverDown(true);
+      await ev(B, 'SRV.ws.close(); 1');
+      const alone = await until(B, '!MP.connected && !MP.srvOwns.d && dogSim()', 5);
+      const d0 = JSON.parse(await ev(B, DOGS));
+      await sleep(1500);
+      const d1 = JSON.parse(await ev(B, DOGS));
+      let going = 0, kept = 0;
+      d0.forEach((d, k) => { const q = d1[k]; if (!d || !q) return; kept++; if (Math.hypot(q[1] - d[1], q[2] - d[2]) > 0.3) going++; });
+      B.serverDown(false);
+      const again = (await until(B, 'MP.connected && MP.srvOwns.d', 25)) && (await until(A, 'MP.srvOwns.d && !dogSim()', 10));
+      check('the second player\'s connection drops: on their screen the other side goes on (it stood frozen), and once back in the room runs it again',
+        alone && kept > 30 && going > 5 && again, kept + ' dogs kept, ' + going + ' moving while cut off; back in and the room\'s again: ' + again);
+    }
+
     // ---- what it costs ---------------------------------------------------------------
     await ev(B, `(() => { window.__dv = 0; const f = onNet; onNet = function (t, msg, bytes) { if (t.slice(-3) === '/dv') window.__dv += bytes; return f(t, msg, bytes); }; return 1; })()`);
     const roomUs = await dogCost(A, 6);

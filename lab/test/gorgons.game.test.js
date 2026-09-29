@@ -95,13 +95,24 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
       const pl = room.rooms.get('gors').relay.players.get(idB); pl.clawedT = 0;
       const g = RD.gorgons.find((q) => q.live && !q.dead && !q.lord);
       for (const q of RD.gorgons) if (q.live && q !== g && Math.hypot(q.x - bx, q.z - bz) < 80) { q.x += 300 * Math.sign(q.x || 1); q.rx = q.x; }
-      let struck = false;
-      for (let i = 0; i < 80 && !struck; i++) {
-        if (i % 25 === 0) { g.x = g.rx = bx + 2.4; g.z = g.rz = bz; g.y = 0; g.hd = Math.atan2(bx - g.x, bz - g.z); g.atk = null; g.st = 'chase'; g.stT = 0; g.atkCd = 0; g.hasT = true; g.tx = bx; g.tz = bz; g.seeT = RD.t; g.rise = 1; }
-        await sleep(100); struck = await ev(B, 'window.__gor > 0');
+      let struck = false, after = 0;
+      const seen = { A: new Set(), B: new Set(), room: new Set() };
+      const look = `(() => { const q = gorgons[${g.slot}]; return q && q.atk ? q.atk.kind + '/' + q.atk.arm : ''; })()`;
+      for (let i = 0; i < 80 && after < 8; i++) {
+        if (!struck && i % 25 === 0) { g.x = g.rx = bx + 2.4; g.z = g.rz = bz; g.y = 0; g.hd = Math.atan2(bx - g.x, bz - g.z); g.atk = null; g.st = 'chase'; g.stT = 0; g.atkCd = 0; g.hasT = true; g.tx = bx; g.tz = bz; g.seeT = RD.t; g.rise = 1; }
+        await sleep(100);
+        if (g.atk) seen.room.add(g.atk.kind + '/' + g.atk.arm);
+        const [sa, sb] = await Promise.all([ev(A, look), ev(B, look)]);
+        if (sa) seen.A.add(sa); if (sb) seen.B.add(sb);
+        if (struck) after++; else struck = await ev(B, 'window.__gor > 0');
       }
       check('they hunt the second player too: the room decides the swing, and the player feels it', struck && await ev(B, 'hp < HP_MAX'),
         'hp ' + await ev(B, 'hp') + ', struck ' + await ev(B, 'window.__gor'));
+      //  (the room runs them with two here, so every screen is told of them — and
+      //  no screen showed a swing: it walked up, stood still, and the player was hurt)
+      const same = [...seen.room].filter((s) => seen.A.has(s) && seen.B.has(s));
+      check('and both screens see the swing — the same one, the same arm — as it comes', seen.room.size >= 1 && same.length === seen.room.size,
+        'the room swung ' + [...seen.room].join(', ') + '; the host saw ' + [...seen.A].join(', ') + '; the second player ' + [...seen.B].join(', '));
       await ev(B, 'if (dead) { MP.client.publish(mtopic(\'spawn\'), \'{}\'); dead = false; gameoverEl.classList.remove(\'show\'); } hp = HP_MAX; 1');
       g.x += 200; g.rx = g.x;
     }

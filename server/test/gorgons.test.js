@@ -135,20 +135,65 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   const s0 = spotNear(ax, az, 3);
   put(gg, s0.x, s0.z); gg.hd = Math.atan2(ax - gg.x, az - gg.z); gg.hp = GOR.GOR_HP; gg.st = 'chase'; gg.stT = 0; gg.atkCd = 0; gg.hasT = true; gg.tx = ax; gg.tz = az; gg.seeT = RD.t;
   out.length = 0;
+  //  … and a screen told of it (index.html applyGorSnapshot: GOR.hearAtk, then replayAtk each frame)
+  const fg = { atk: null, crouch: 0, mawWant: 0, predLean: 0 }, told = { winds: 0, swings: 0 };
+  const FG = { env: { on: { wind: () => told.winds++, swing: () => told.swings++ } } };
+  let read = 0, inSwing = 0, shown = 0;
   let struck = null, kinds = [];
   for (let i = 0; i < 200 && !struck; i++) {
     now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
     if (gg.atk && !kinds.includes(gg.atk.kind)) kinds.push(gg.atk.kind);
+    for (; read < out.length; read++) {
+      const [to, m] = out[read]; if (to !== A || m.s !== 'dv' || !m.p.q) continue;
+      for (let j = 0; j < m.p.q.length; j += 7) if (m.p.q[j] === gg.slot) GOR.hearAtk(FG, fg, m.p.q[j + 6]);
+    }
+    if (fg.atk) GOR.replayAtk(FG, fg, 0.05);
+    if (gg.atk) { inSwing++; if (fg.atk && fg.atk.kind === gg.atk.kind && Math.abs(fg.atk.t - gg.atk.t) < 0.2) shown++; }
     const b = out.find(([to, m]) => to === A && m.s === 'hp' && (m.p.src === 'gor' || m.p.src === 'gorpred')); if (b) struck = b;
   }
   const va = R.players.get(A);
   check('a gorgon close by swings, and the room decides it lands: the player is told it was a gorgon', struck && va.hp < 100 && va.hp >= 100 - GOR.G_PRED_DMG * 1.25,
     'hp ' + va.hp + ', swings ' + kinds.join(',') + (struck ? ', told ' + JSON.stringify(struck[1].p) : ''));
+  //  (every screen is told of a gorgon now — the room runs them with two here — and
+  //  none of them showed a swing: it walked up, stood, and the player was hurt)
+  check('the swing rides in the word: a screen told of it plays the same wind-up and arm, at the same point in it, and hears it go',
+    inSwing >= 5 && shown >= inSwing - 3 && told.winds >= 1,
+    shown + ' of ' + inSwing + ' steps of the room\'s swing shown within 0.2 s of it; ' + told.winds + ' wind-up(s) heard, ' + told.swings + ' swing(s)');
+  {
+    //  a swing broken before it lands (a heavy wound) is dropped; one past its blow finishes its follow-through
+    const q = { atk: null, crouch: 0, mawWant: 0, predLean: 0 }, room = { atk: null };
+    GOR.startAtk({ env: { random: () => 0.2, on: { wind: () => {} } } }, room, 'claw');
+    room.atk.t = 0.2; GOR.hearAtk(FG, q, GOR.atkMarks(room));
+    const had = !!q.atk && q.atk.arm === room.atk.arm && Math.abs(q.atk.t - 0.2) < 0.03;
+    GOR.hearAtk(FG, q, 0);
+    const broken = q.atk === null;
+    room.atk.t = 0.9; GOR.hearAtk(FG, q, GOR.atkMarks(room)); GOR.hearAtk(FG, q, 0);
+    check('a swing broken before it lands is dropped on the screen; one past its blow finishes', had && broken && q.atk && q.atk.kind === 'claw');
+  }
   now += 300; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 0 });
   const hpB = R.players.get(B).hp;
   for (let i = 0; i < 60; i++) { put(gg, ax - 39, az); gg.st = 'chase'; gg.atkCd = 0; now += 50; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 0 }); }
   check('nobody on this side of the tear is struck', R.players.get(B).hp === hpB);
   heal(A);
+}
+
+//  a player gone quiet — the app put away, the connection gone and not yet
+//  closed — is not hunted where they last stood, nor sent the district; heard
+//  again, they are
+{
+  now += 300; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 1 });
+  const ids = () => RD.who.map((t) => t.id).sort().join(',');
+  const both = ids();
+  for (let i = 0; i < 100; i++) { now += 50; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 1 }); }   // five seconds of only B
+  out.length = 0;
+  for (let i = 0; i < 10; i++) { now += 50; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 1 }); }
+  const quiet = ids(), toA = out.filter(([to, m]) => to === A && m.s === 'dv').length;
+  now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 });
+  const back = ids();
+  check('a player not heard from for 4 s is not hunted where they last stood, nor sent the district; heard again, they are',
+    both === A + ',' + B && quiet === B && toA === 0 && back === A + ',' + B, both + ' → ' + quiet + ' (' + toA + ' words to the quiet one) → ' + back);
+  now += 50; say(B, 'state', { x: ax - 40, y: 0, z: az, r: 0, w: 0 });
 }
 
 //  the room's own flayer and VECNA, commanding them

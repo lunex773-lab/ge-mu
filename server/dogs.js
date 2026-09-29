@@ -40,6 +40,7 @@ const FULL_EVERY = 8;                      // every eighth word is the whole of 
 const NEAR = 110;                          // m: a dog this near someone over there goes out every time (index.html DOG_NEAR)
 const BITE_GAP = 420;                      // ms: a player bitten is not bitten again sooner (index.html dogHitCd)
 const CLAW_GAP = 500;                      // ms: nor struck by a gorgon (index.html gorHitCd)
+const QUIET_MS = 4000;                     // a player not heard from this long is not there, to them (a game says where it is ~18 times a second)
 const CHEST = 1.0;                         // m above its feet: where a shot at a dog is aimed (the game's hit spheres)
 const G_CHEST = 1.55;                      // … and at a gorgon (the second of its column of spheres)
 //  … and at a flayer: the game's spheres on it (index.html fire) — the body,
@@ -166,7 +167,10 @@ export class RoomDogs {
     const who = this.who; who.length = 0;
     for (const [id, p] of this.room.players) {
       const h = p.hist;
-      if (!p.w || h.length < 4) { this.byId.delete(id); continue; }
+      //  (not one who has gone quiet — the app put away, the connection gone
+      //  and not yet closed: hunted where they last stood, the pack stood
+      //  circling nobody on everyone else's screen)
+      if (!p.w || h.length < 4 || now - h[h.length - 4] > QUIET_MS) { this.byId.delete(id); continue; }
       let t = this.byId.get(id);
       if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0, psyAt: p.psyAt });
       const n = h.length;
