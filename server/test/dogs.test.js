@@ -111,6 +111,12 @@ for (let i = 0; i < 16; i++) { now += 60; say(A, 'state', { x: ax, y: 0, z: az, 
 const dv = out.filter(([, m]) => m.s === 'dv');
 check('those over there are told the pack, nobody else', dv.length >= 1 && dv.every(([to]) => to === A) && dv.some(([, m]) => m.p.kf === 1 && m.p.k.length === RD.dogs.filter((d) => d.live).length * 7),
   dv.length + ' words, to ' + [...new Set(dv.map(([to]) => to))].join(','));
+{
+  //  each word carries the room's clock (ms), rising with its steps — a game places the word on it (index.html netLead)
+  const ts = dv.map(([, m]) => m.p.t);
+  check('each word carries the room\'s clock, rising as it goes', ts.every(Number.isFinite) && ts.every((t, i) => i === 0 || t > ts[i - 1]) && Math.abs(ts[ts.length - 1] - Math.round(RD.t * 1000)) <= 50,
+    ts.slice(0, 4).join(', ') + ' … ms; the room at ' + Math.round(RD.t * 1000));
+}
 out.length = 0;
 say(A, 'mob', { k: [1, 2, 3, 4, 5, 6, 7], kf: 1, g: null });
 const passed = out.find(([, m]) => m.s === 'mob');

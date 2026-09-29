@@ -533,14 +533,16 @@ function snapRows(G) {
 //  nothing (whoever runs it does). A new swing, or one this screen has
 //  drifted from, is taken up; one the word no longer has is let finish its
 //  follow-through, or dropped if it had not yet swung (broken by a wound).
-function hearAtk(G, g, fl) {
+//  late: how long ago, where it runs, the word was true (s) — the swing is
+//  taken up from where it has got to by now.
+function hearAtk(G, g, fl, late) {
   const kind = G_ATK_KINDS[((fl >> 7) & 7) - 1];
   const a = g.atk;
   if (!kind) {
     if (a && !(a.t >= G_ATK[a.kind].wind + G_ATK[a.kind].swing)) { g.atk = null; g.predLean = 0; }
     return false;
   }
-  const t = ((fl >> 12) & 63) / 20, arm = ((fl >> 10) & 3) - 1;
+  const t = ((fl >> 12) & 63) / 20 + Math.max(0, Math.min(0.5, late || 0)), arm = ((fl >> 10) & 3) - 1;
   if (a && a.kind === kind && a.t >= t - 0.05 && a.t < t + 0.35) return false;    // (ahead of the word by up to its age: as it should be)
   const fresh = !a || a.kind !== kind || t < a.t - 0.35;
   g.atk = { kind, t, arm, arm01: 1, phase: -1, hit: 1, sfx: t > G_ATK[kind].wind + G_ATK[kind].swing * 0.35 ? 1 : 0, told: 1 };

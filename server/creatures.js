@@ -86,7 +86,7 @@ export class Creatures {
     if (this.taking.m) {
       const ok = RoomTroop.valid(p.m, p.c);
       if (ok || ++this.taking.m > TROOP_WAIT) {
-        this.taking.m = 0; this.own.m = true; took.m = 1;
+        this.taking.m = 0; this.own.m = true; took.m = 1; this.saidR = undefined;
         this.troop.adopt(ok ? p.m : null, p.c, p.r);
       }
     }
@@ -140,6 +140,7 @@ export class Creatures {
     if (this.own.b) this.boss.step(now);
     if (this.own.m) this.troop.step(now);
     if (now - this.sentT < SEND_MS) return;
+    this.sentT = now;                      // (a tenth of a second on, whether or not there is anything to say)
     const sv = {};
     if (this.own.b) {
       const b = this.boss.snapshot();
@@ -148,15 +149,17 @@ export class Creatures {
     }
     if (this.own.m) {
       const T = this.troop.snapshot();
-      sv.r = T.r;
+      //  the rage clock when it moves, and with every eighth (it was in every
+      //  word: ten a second to everyone, most of them saying "no rage" again)
+      const key = this.svSeq++ % 8 === 0;
+      if (key || T.r !== this.saidR) { sv.r = T.r; this.saidR = T.r; }
       //  the troop and its bodies belong to this side of the tear: while
       //  everyone is over on the other they ride only in every eighth
-      let dayside = this.svSeq++ % 8 === 0;
+      let dayside = key;
       for (const p of this.room.players.values()) if (!p.w) dayside = true;
       if (dayside) { sv.m = T.m; sv.c = T.c; }
     }
-    if (!('b' in sv) && !('r' in sv)) return;
-    this.sentT = now;
+    if (!('b' in sv) && !('r' in sv) && !('m' in sv)) return;
     this.room.send('all', 'sv', sv);
   }
   //  a round at him, when the room runs him (returns false when it does not)

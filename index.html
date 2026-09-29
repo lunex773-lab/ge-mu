@@ -2947,14 +2947,14 @@
           }
           return k;
         }
-        function hearAtk(G, g, fl) {
+        function hearAtk(G, g, fl, late) {
           const kind = G_ATK_KINDS[((fl >> 7) & 7) - 1];
           const a = g.atk;
           if (!kind) {
             if (a && !(a.t >= G_ATK[a.kind].wind + G_ATK[a.kind].swing)) { g.atk = null; g.predLean = 0; }
             return false;
           }
-          const t = ((fl >> 12) & 63) / 20, arm = ((fl >> 10) & 3) - 1;
+          const t = ((fl >> 12) & 63) / 20 + Math.max(0, Math.min(0.5, late || 0)), arm = ((fl >> 10) & 3) - 1;
           if (a && a.kind === kind && a.t >= t - 0.05 && a.t < t + 0.35) return false;    // (ahead of the word by up to its age: as it should be)
           const fresh = !a || a.kind !== kind || t < a.t - 0.35;
           g.atk = { kind, t, arm, arm01: 1, phase: -1, hit: 1, sfx: t > G_ATK[kind].wind + G_ATK[kind].swing * 0.35 ? 1 : 0, told: 1 };
@@ -7024,6 +7024,14 @@
     if (bzb.slain && bzb.seed === rift.seed) msg.bs = 1;   // he has fallen at this tear: the room must not stand him up again
     if (rift.present && !rift.restored) msg.g = [Math.round(rift.x * 10), Math.round(rift.y * 10), Math.round(rift.z * 10),
       Math.round(rift.ry * 1000), rift.seed, rift.owner, gateAge()];
+    //  With the room running every creature, all this says is where the tear
+    //  is: when that changes, and once a second (it went eight times a second,
+    //  up from here and down to everyone else, saying the same)
+    if (MP.srvOwns.b && MP.srvOwns.m && MP.srvOwns.t && MP.srvOwns.d) {
+      const said = msg.g ? msg.g.slice(0, 6).join(',') + (msg.bs ? '/s' : '') : '';
+      if (said === MP.mobSaid && now - MP.mobSaidT < 1000) return;
+      MP.mobSaid = said; MP.mobSaidT = now;
+    }
     const payload = JSON.stringify(msg);
     try { MP.client.publish(mtopic('mob'), payload); } catch (e) {}
   }
@@ -7036,6 +7044,7 @@
       const g = msg.g;
       hearGate(g[5] || msg.id, g[6] || 0, g[0] / 10, g[1] / 10, g[2] / 10, g[3] / 1000, g[4]);
     }
+    netWordT = performance.now() / 1000;                // (a game's word carries no clock: as it lands)
     if (!MP.srvOwns.d) applyDogSnapshot(msg.k, msg.kf !== 0);   // kf 0: only the dogs near us (publishMobs); the room's: onRoomDogs
     if (!MP.srvOwns.d) applyGorSnapshot(msg.q);        // (the room's: onRoomDogs)
     if (!MP.srvOwns.d) applyMfSnapshot(msg.f);         // (the room's: onRoomDogs)
@@ -7285,8 +7294,29 @@
     if (s.w !== undefined) peer.w = s.w;
     peer.recvT = performance.now();
     peer.lastSeen = peer.recvT;
-    peer.buf.push({ t: peer.recvT, x: s.x, y: s.y, z: s.z });   // snapshot history
-    if (peer.buf.length > 12) peer.buf.shift();
+    //  Each step at the moment it was taken, on this clock: the sender's own
+    //  time (s.t) less the offset of the quickest step yet — a step that was
+    //  held up on the way (a phone's network bunches them) goes where it
+    //  belongs, not where it landed. Played back just late enough to cover
+    //  how far behind the slowest recent ones came (updatePeers).
+    let st = peer.recvT;
+    if (Number.isFinite(s.t)) {
+      const o = s.t - peer.recvT, gap = peer.recvT - (peer.offT || 0);
+      if (peer.off === undefined || o > peer.off || gap > 5000) peer.off = o;
+      else peer.off -= Math.min(peer.off - o, gap * 0.02);      // (the two clocks drift a little)
+      peer.offT = peer.recvT;
+      st = Math.min(peer.recvT, s.t - peer.off);
+      //  how late the slow ones come: nine in ten of the last forty (the tenth,
+      //  when it is later still, is carried on at its speed until it lands)
+      const lags = peer.lags || (peer.lags = []);
+      lags.push(peer.recvT - st); if (lags.length > 40) lags.shift();
+      if (lags.length >= 6 && (peer.lagN = (peer.lagN || 0) + 1) % 6 === 0) { const q = lags.slice().sort((a, b) => a - b); peer.late = q[Math.floor(q.length * 0.9)]; }
+      if (peer.lastSt !== undefined) { const g = Math.min(250, s.t - peer.lastSt); if (g > 0) peer.gap = peer.gap === undefined ? g : peer.gap + (g - peer.gap) * 0.1; }
+      peer.lastSt = s.t;
+    }
+    if (peer.buf.length && st <= peer.buf[peer.buf.length - 1].t) st = peer.buf[peer.buf.length - 1].t + 1;
+    peer.buf.push({ t: st, x: s.x, y: s.y, z: s.z });   // snapshot history
+    if (peer.buf.length > 16) peer.buf.shift();
     if (s.hp != null) peer.hp = s.hp;
     peer.dead = !!s.d;
     if (s.d && s.kb === MP.id) creditKill(s.id, s.ds);   // backup path: state repeats, so this survives packet loss
@@ -7341,10 +7371,18 @@
       },
       end() { try { ws.close(); } catch (e) {} },
     };
-    //  a server that does not answer in 5 s is treated as not there this time
+    //  a server that does not answer in 5 s is treated as not there this time —
+    //  nor one that lets the socket open and then says nothing (it waited on
+    //  its welcome for ever)
     clearTimeout(SRV.timer);
-    SRV.timer = setTimeout(() => { if (ws.readyState !== 1) { try { ws.close(); } catch (e) {} } }, 5000);
+    SRV.timer = setTimeout(() => {
+      if (SRV.ws !== ws || (ws.readyState === 1 && MP.connected)) return;
+      ws.onclose = null; ws.onmessage = null;
+      try { ws.close(); } catch (e) {}
+      srvLost(ws, false);
+    }, 5000);
     ws.onmessage = (ev) => {
+      MP.lastRx = performance.now();
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.s === '_welcome') {
         clearTimeout(SRV.timer);
@@ -7352,7 +7390,7 @@
         MP.id = m.p.id; rekit(monkey, MP.id);            // the room decides who we are
         MP.serverT0 = m.p.t - performance.now();
         onRoomOwns(m.p.own || { b: 0, m: 0, t: 0, d: 0 });   // what the room runs, as I arrive
-        MP.client = client; MP.connected = true; SRV.everUp = true; SRV.tries = 0;
+        MP.client = client; MP.connected = true; SRV.everUp = true; SRV.tries = 0; MP.pingWait = 0;
         if (dead || hp < HP_MAX) client.publish(mtopic('hurt'), JSON.stringify({ d: dead ? HP_MAX : HP_MAX - hp }));
         (m.p.items || []).forEach((a, i) => onItem({ i, a }));        // which pickups are lying there now
         recomputeHost();
@@ -7362,10 +7400,15 @@
       }
       onNet(m.s === 'state' ? prefix + 'state/' + m.f : prefix + m.s, m.p, ev.data.length);
     };
-    ws.onclose = () => {
+    ws.onclose = () => srvLost(ws, false);
+    ws.onerror = () => {};
+  }
+  //  the connection is gone (soon: knock again at once, not after the wait)
+  function srvLost(ws, soon) {
+    {
       clearTimeout(SRV.timer);
       if (SRV.ws !== ws) return;                           // an old socket, already replaced
-      MP.connected = false;
+      MP.connected = false; MP.probeT = 0; MP.pingWait = 0;
       MP.srvOwns.b = false;                                // alone now: whatever the room ran, this game runs
       if (MP.srvOwns.m) { MP.srvOwns.m = false; troopBack(); }
       if (MP.srvOwns.t) { MP.srvOwns.t = false; trafficBack(null); }
@@ -7377,14 +7420,47 @@
       //  keep playing, and keep knocking: 1, 2, 4, 8 s … then every 15 s
       //  (every 30 s if it has never answered: a copy with no server, or a
       //  day's free requests used up — alone until it does)
-      const wait = Math.min(SRV.everUp ? 15000 : 30000, 1000 * Math.pow(2, Math.min(5, SRV.tries)));
+      const wait = soon ? 0 : Math.min(SRV.everUp ? 15000 : 30000, 1000 * Math.pow(2, Math.min(5, SRV.tries)));
       renderRosterSoon();
       clearTimeout(SRV.retry);
       SRV.retry = setTimeout(connectServer, wait);
-    };
-    ws.onerror = () => {};
-    addEventListener('beforeunload', () => { try { ws.onclose = null; ws.close(); } catch (e) {} });
+    }
   }
+  //  A phone does not always say its connection has gone: put away, or
+  //  through a tunnel, the socket can sit open with nothing coming down it
+  //  (the room answers a ping every 3 s — publishState). So: back in view, or
+  //  back online, it asks at once and gives it two seconds (netWatch); a ping
+  //  unanswered for four and a half is taken as the line gone; and one that is
+  //  gone is knocked on again now, not after the wait it had got up to.
+  function netWake() {
+    if (!MP.started || !/^https?:$/.test(location.protocol) || document.hidden) return;
+    const ws = SRV.ws;
+    if (ws && ws.readyState === 0) return;                 // (already knocking)
+    if (MP.connected && ws && ws.readyState === 1) {
+      if (!MP.probeT) { MP.probeT = performance.now(); MP.lastPing = 0; publishState(true); }
+      return;
+    }
+    if (!MP.connected) { clearTimeout(SRV.retry); SRV.tries = Math.min(SRV.tries, 1); connectServer(); }
+  }
+  function netWatch(now) {
+    if (!MP.connected || !SRV.ws) return;
+    if (MP.probeT && MP.lastRx > MP.probeT) MP.probeT = 0;                     // it answered
+    //  (only against a ping it has not answered: a page put away sends none, and
+    //  one alone in a room hears nothing else — neither means the line is dead)
+    //  (since the first ping still unanswered: the pings go on every 3 s meanwhile)
+    if (MP.lastPing > (MP.lastRx || 0)) { if (!MP.pingWait) MP.pingWait = MP.lastPing; } else MP.pingWait = 0;
+    const waited = MP.pingWait ? now - MP.pingWait : 0;
+    if (waited > (MP.probeT ? 2000 : 4500)) {
+      const ws = SRV.ws;
+      ws.onclose = null; ws.onmessage = null;
+      try { ws.close(); } catch (e) {}
+      srvLost(ws, true);
+    }
+  }
+  addEventListener('visibilitychange', netWake);
+  addEventListener('online', netWake);
+  addEventListener('pageshow', netWake);
+  addEventListener('beforeunload', () => { const ws = SRV.ws; if (ws) try { ws.onclose = null; ws.close(); } catch (e) {} });
   let rosterT = 0;
   function renderRosterSoon() { clearTimeout(rosterT); rosterT = setTimeout(renderRoster, 50); }
   function publishState(force) {
@@ -7408,8 +7484,11 @@
     // keyframe once a second so a peer that joined mid-stream catches up.
     const keyframe = now - MP.keyT > 1000;
     if (keyframe) MP.keyT = now;
+    //  (no id: the room stamps who it is from. t: this game's clock, in ms —
+    //  the others place each step on it, not on when it happened to arrive:
+    //  updatePeers)
     const msg = {
-      id: MP.id,
+      t: Math.round(now),
       x: +p.x.toFixed(2), y: +(p.y - EYE).toFixed(2), z: +p.z.toFixed(2), r: +yaw.toFixed(3),
       vx: +vx.toFixed(2), vz: +vz.toFixed(2),
       w: wState,                                 // which side of the tear I am on
@@ -7432,6 +7511,7 @@
   // advance remote monkeys: smooth position/heading, drive the walk cycle
   // from how fast they are actually moving (no extra network fields needed)
   function updatePeers(dt, now) {
+    netWatch(now);
     if (now - MP.rateT > 1000) {             // bandwidth sampling for the overlay
       MP.txRate = MP.txBytes; MP.rxRate = MP.rxBytes; MP.txMsgRate = MP.txMsgs; MP.rxMsgRate = MP.rxMsgs;
       MP.txBytes = 0; MP.rxBytes = 0; MP.txMsgs = 0; MP.rxMsgs = 0; MP.rateT = now;
@@ -7441,12 +7521,20 @@
       if (now - peer.lastSeen > MP.TIMEOUT) { dropPeer(id); continue; }
       const px = peer.cur.x, pz = peer.cur.z;
       // Snapshot interpolation (reference NetworkSystem.interpolatePlayers):
-      // play peers back INTERP_MS in the past and lerp between two samples we
+      // play peers back a little in the past and lerp between two samples we
       // actually received. That is jitter-free, unlike extrapolating from one
       // sample. If the buffer starves — a stalled sender or a dropped run of
       // packets — fall back to dead-reckoning off the newest sample so the
       // avatar keeps moving instead of freezing.
-      const rt = now - MP.INTERP_MS;
+      // How far back: one step's gap and how late the slow ones come (upsertPeer),
+      // eased — 120 ms for everyone it was, on a steady line or a bad one alike.
+      const want = peer.late === undefined ? MP.INTERP_MS : Math.max(45, Math.min(320, (peer.gap || MP.PUB_MS) + peer.late + 12));
+      if (peer.delay === undefined) peer.delay = want;
+      //  (at most 3% faster or slower than time, and not for a few ms either
+      //  way: each change of pace shows as a change in their walking speed)
+      const dd = want - peer.delay;
+      if (Math.abs(dd) > 8) peer.delay += Math.max(-dt * 30, Math.min(dt * 30, dd));
+      const rt = now - peer.delay;
       const buf = peer.buf;
       let a = null, b = null;
       for (let i = buf.length - 1; i > 0; i--) {
@@ -7463,9 +7551,12 @@
         tx = peer.tgt.x + peer.vx * ex; ty = peer.tgt.y; tz = peer.tgt.z + peer.vz * ex;
         peer.interp = false;
       }
-      peer.cur.x += (tx - peer.cur.x) * k;
-      peer.cur.y += (ty - peer.cur.y) * k;
-      peer.cur.z += (tz - peer.cur.z) * k;
+      //  (on the line the samples draw, only a light hand: the old 13/s here
+      //  trailed another 77 ms behind them)
+      const kp = peer.interp ? 1 - Math.exp(-dt * 30) : k;
+      peer.cur.x += (tx - peer.cur.x) * kp;
+      peer.cur.y += (ty - peer.cur.y) * kp;
+      peer.cur.z += (tz - peer.cur.z) * kp;
       peer.group.position.copy(peer.cur);
       let d = (peer.tgtYaw - peer.yaw) % (Math.PI * 2);
       if (d > Math.PI) d -= Math.PI * 2;
@@ -8321,6 +8412,7 @@
   //  what he holds, and where the cars came to rest
   function onRoomDogs(msg) {
     if (!MP.srvOwns.d || wState !== WS.BACK) return;
+    netWordT = roomWordT(msg.t);
     applyDogSnapshot(msg.k, msg.kf !== 0);
     if (Array.isArray(msg.q)) applyGorSnapshot(msg.q);
     if (Array.isArray(msg.f)) applyMfSnapshot(msg.f);
@@ -8329,6 +8421,58 @@
     if (msg.fly) onMfFlight(msg.fly);
     if (msg.vf) onVecFlights(msg.vf);
     if (msg.vo) onVecOrbit(msg.vo);
+  }
+  //  ---- where a told creature is now, not when the word about it left ----------
+  //  A follower used to ease onto the last position it was told, so it drew
+  //  every creature where the room had it a while ago — 150 ms back on a good
+  //  line, 300 on a slow one (lab/tools/sync_probe.js), and the two players'
+  //  screens that far apart — and in fits and starts as words bunched up.
+  //  Now each room word carries the room's clock (t, ms: server/dogs.js tell).
+  //  The quickest word yet says how that clock sits against this one (NETL.off),
+  //  so every word is placed at the moment its positions stood (netWordT), not
+  //  when it happened to arrive; each creature's speed is read off its last
+  //  words (netSample), and it is eased toward where that speed has taken it
+  //  since — plus the way down to here (half the round trip) and the easing's
+  //  own trail (1 / its rate) — at most 0.45 s and 3.5 m on (netLead). Not in
+  //  a swing or a lunge (its reach is the room's to judge, and turns sharp),
+  //  nor dead — the lead is let go of (and taken up again) over a fifth of a
+  //  second, or the creature would slide back the way it came as it struck;
+  //  one not told of for most of a second is left where it was.
+  const NETL = { off: undefined, offT: 0 };
+  let netWordT = 0;                                // s, this clock: the moment the word being read stood for
+  function roomWordT(t) {
+    const here = performance.now() / 1000;
+    if (!Number.isFinite(t)) return here;          // (a game's own word, from before: taken as it lands)
+    const o = t / 1000 - here, gap = here - NETL.offT;
+    if (NETL.off === undefined || o > NETL.off || gap > 5) NETL.off = o;
+    else NETL.off -= Math.min(NETL.off - o, gap * 0.02);   // (the room's clock only moves when it is spoken to: let it slip back, slowly)
+    NETL.offT = here;
+    return Math.min(here, t / 1000 - NETL.off);
+  }
+  function netSample(a, x, z, fresh) {
+    const st = netWordT;
+    a.netX = x; a.netZ = z; a.netT = st;
+    if (fresh || a.nt0 === undefined || st - a.nt0 > 1.2 || Math.hypot(x - a.nx0, z - a.nz0) > 24) { a.nvx = 0; a.nvz = 0; a.nx0 = x; a.nz0 = z; a.nt0 = st; if (fresh) a.leadK = 1; return; }
+    const span = st - a.nt0;
+    //  (over a fifth of a second or more: the room moves a creature far off in steps of 0.15–0.4 s)
+    if (span >= 0.19) { a.nvx = (a.nvx + (x - a.nx0) / span) * 0.5; a.nvz = (a.nvz + (z - a.nz0) / span) * 0.5; a.nx0 = x; a.nz0 = z; a.nt0 = st; }
+  }
+  //  how long ago, in the room, the word being read was true (s)
+  function netAge() { return Math.max(0, Math.min(0.5, performance.now() / 1000 - netWordT + Math.min(0.2, (MP.rtt || 0) / 2000))); }
+  const _lead = { x: 0, z: 0 };
+  function netLead(a, rate, hold, dt) {
+    const k = a.leadK === undefined ? 1 : a.leadK;
+    a.leadK = k + ((hold ? 0 : 1) - k) * Math.min(1, dt * 5);
+    _lead.x = a.netX; _lead.z = a.netZ;
+    if (a.leadK < 0.01 || a.netT === undefined || (!a.nvx && !a.nvz)) return _lead;
+    const ahead = performance.now() / 1000 - a.netT + Math.min(0.2, (MP.rtt || 0) / 2000) + 1 / rate;
+    if (ahead > 0.9) return _lead;
+    const s = Math.min(0.45, ahead) * a.leadK;
+    let dx = a.nvx * s, dz = a.nvz * s;
+    const m = Math.hypot(dx, dz);
+    if (m > 3.5) { dx *= 3.5 / m; dz *= 3.5 / m; }
+    _lead.x += dx; _lead.z += dz;
+    return _lead;
   }
   //  the wrecks that are not where every game has them (shared/wrecks.js), each
   //  as it is said [k, x·10, z·10, y·10, heading·1000, up]: what the room is
@@ -8604,7 +8748,8 @@
       (S ? 'JS    logic ' + ms(S.logic) + 'ms (worst ' + ms(S.logicMax) + ')  draw ' + ms(S.draw) + 'ms (worst ' + ms(S.drawMax) + ')\n' : '') +
       'DRAW  ' + r.calls + '  TRIS ' + (r.triangles / 1000).toFixed(0) + 'k  OBJ ' + objs + '\n' +
       'MEM   heap ' + heap + '  GEO ' + renderer.info.memory.geometries + '  TEX ' + renderer.info.memory.textures + '  PROG ' + (renderer.info.programs || []).length + '\n' +
-      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes + '\n' +
+      'NET   ' + MP.rtt + 'ms  up ' + (MP.txRate / 1024).toFixed(1) + 'k/s ' + MP.txMsgRate + '/s  dn ' + (MP.rxRate / 1024).toFixed(1) + 'k/s ' + MP.rxMsgRate + '/s  fix ' + MP.fixes +
+        '  peers ' + [...MP.peers.values()].map((q) => Math.round(q.delay || 0) + 'ms').join(',') + '  room word ' + (MP.srvOwns.d ? Math.round((performance.now() / 1000 - netWordT) * 1000) + 'ms old' : '-') + '\n' +
       'LERP  ' + [...MP.peers.values()].filter((q) => q.interp).length + '/' + MP.peers.size + ' interpolated\n' +
       'PEERS ' + MP.peers.size + '  MOBS ' + monkeyPeds.filter((m) => m.hp > 0 && (!m.pooled || m.active)).length +
       '  TROOP ' + (MP.srvOwns.m ? 'room' : mobSim() ? (mobPub() ? 'own(host)' : 'own(solo)') : 'net') + '  TRAFFIC ' + (MP.srvOwns.t ? 'room' : 'own') + '  OTHER SIDE ' + (MP.srvOwns.d ? 'room' : dogSim() ? 'own' : 'net') + '\n' +
@@ -9892,12 +10037,14 @@
         if (d.lod >= 2 && !d.dead) {
           const every = d.lod === 2 ? 4 : 12;
           if ((dogAiFrame + d.slot) % every !== 0) continue;
-          easePose(d, d.netX, d.netZ, d.netH, dt * every, 11, 26, 7, 5);
+          const L = netLead(d, 11, d.dead, dt * every);
+          easePose(d, L.x, L.z, d.netH, dt * every, 11, 26, 7, 5);
           d.x = d.rx; d.z = d.rz; d.sp = d.rspd; d.tdist = Math.hypot(dx, dz);
           if (d.rise < 1) d.rise = Math.min(1, d.rise + dt * every / D_RISE_T);
           continue;
         }
-        easePose(d, d.netX, d.netZ, d.netH, dt, 11, 26, 7, 5);
+        const L = netLead(d, 11, d.dead || d.st === 'attack', dt);   // (where the room has it now: netLead)
+        easePose(d, L.x, L.z, d.netH, dt, 11, 26, 7, 5);
         d.x = d.rx; d.z = d.rz;
         d.y += (supportHeight(d.x, d.z, d.y + 0.5) - d.y) * Math.min(1, dt * 9);
         d.sp = d.rspd;
@@ -9986,7 +10133,8 @@
     for (let i = 0; i + 6 < k.length; i += 7) {
       let d = dogs[k[i]];
       if (!d) { while (dogs.length <= k[i]) dogs.push({ slot: dogs.length, live: false, S: {} }); d = dogs[k[i]]; }
-      if (!d.live) {                              // one we have not been told about before
+      const fresh = !d.live;
+      if (fresh) {                                // one we have not been told about before
         Object.assign(d, {
           live: true, x: k[i + 1] / 10, z: k[i + 2] / 10, y: 0, hd: k[i + 3] / HDQ, sp: 0,
           pack: 0, role: 'watch', st: 'wander', stT: 0, gaitPh: Math.random(), gait: 'walk', lean: 0,
@@ -10003,7 +10151,7 @@
         if (!dogPacks.length) DG.newPack(DOGS);
       }
       d.netSeen = true;
-      d.netX = k[i + 1] / 10; d.netZ = k[i + 2] / 10; d.netH = k[i + 3] / HDQ;
+      netSample(d, k[i + 1] / 10, k[i + 2] / 10, fresh); d.netH = k[i + 3] / HDQ;
       const nh = k[i + 4];
       d.hp = (d.hpHold && performance.now() < d.hpHold) ? Math.min(d.hp, nh) : nh;
       const st = D_ST[k[i + 5] - 1];
@@ -10552,7 +10700,8 @@
         if ((gorFrame + g.slot) % every === 0) GR.think(GORS, g, dt * every);
         g.rx = g.x; g.rz = g.z;
       } else {
-        easePose(g, g.netX, g.netZ, g.netH, dt, 11, 26, 7, 5);
+        const L = netLead(g, 11, g.dead || !!g.atk, dt);   // (where the room has it now: netLead)
+        easePose(g, L.x, L.z, g.netH, dt, 11, 26, 7, 5);
         g.x = g.rx; g.z = g.rz;
         g.y += (supportHeight(g.x, g.z, g.y + 0.6) - g.y) * Math.min(1, dt * 8);
         g.sp = g.rspd; g.tdist = Math.hypot(dx, dz);
@@ -10631,14 +10780,15 @@
     for (let i = 0; i + 6 < k.length; i += 7) {
       let g = gorgons[k[i]];
       if (!g) { while (gorgons.length <= k[i]) gorgons.push({ slot: gorgons.length, live: false }); g = gorgons[k[i]]; }
-      if (!g.live) {
+      const fresh = !g.live;
+      if (fresh) {
         //  in its own slot (not spawnGorgon: this is only what someone else says —
         //  and a new one used to land in the first free slot, not the one named)
         GR.spawnGorgon(GORS, { x: k[i + 1] / 10, z: k[i + 2] / 10 }, k[i]);
         g.rise = (k[i + 6] & 64) ? 0 : 1;              // one just summoned: it climbs out here too
       }
       g.netSeen = true;
-      g.netX = k[i + 1] / 10; g.netZ = k[i + 2] / 10; g.netH = k[i + 3] / HDQ;
+      netSample(g, k[i + 1] / 10, k[i + 2] / 10, fresh); g.netH = k[i + 3] / HDQ;
       const nh = k[i + 4];
       g.hp = (g.hpHold && performance.now() < g.hpHold) ? Math.min(g.hp, nh) : nh;
       const st = G_ST[k[i + 5] - 1];
@@ -10650,7 +10800,7 @@
         if (st === 'attack' && !(fl >> 7)) playGorWind(g.tdist, gorPan(g), true);   // (a word without the swing in it: a game from before)
         g.st = st; g.stT = 0;
       }
-      GR.hearAtk(GORS, g, fl);                           // the swing, played here as it goes there
+      GR.hearAtk(GORS, g, fl, netAge());                 // the swing, played here as it goes there (from where it has got to by now)
       if ((fl & 2) && !g.enraged) g.enraged = true;
       if ((fl & 1) && !g.dead) { g.dead = true; g.deadT = 0; playGorDeath(g.tdist, gorPan(g)); }
     }
@@ -11318,7 +11468,8 @@
       } else {
         //  where it is told, turning as slowly as it turns; its swing, its
         //  rearing up and the car in its hand played out here (mfPuppet)
-        const turn = easePose(m, m.netX, m.netZ, m.netH, dt, 9, 22, 5, 3);
+        const L = netLead(m, 9, m.dead || !!m.atk, dt);   // (where the room has it now: netLead)
+        const turn = easePose(m, L.x, L.z, m.netH, dt, 9, 22, 5, 3);
         m.lean += (-turn * 0.10 - m.lean) * Math.min(1, dt * 5);
         m.x = m.rx; m.z = m.rz;
         m.y += (supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
@@ -11418,7 +11569,7 @@
         m.hd = k[i + 3] / HDQ; m.escorted = true;
       }
       m.netSeen = true;
-      m.netX = k[i + 1] / 10; m.netZ = k[i + 2] / 10; m.netH = k[i + 3] / HDQ;
+      netSample(m, k[i + 1] / 10, k[i + 2] / 10, fresh); m.netH = k[i + 3] / HDQ;
       const nh = k[i + 4];
       if (!fresh && m.netHp !== undefined && nh < m.netHp - 0.5 && nh > 0) {      // hurt: the body registers it
         m.swell = Math.min(1, m.swell + 0.5); m.stagger = Math.max(m.stagger, m.netHp - nh > 60 ? 1 : 0.2);
@@ -12418,7 +12569,8 @@
     } else {
       //  where he is told, turning as slowly as he turns, his body easing to
       //  what it is told; his swing, what he holds and what he throws played out here
-      easePose(vec, vec.netX, vec.netZ, vec.netH, dt, 7, 20, 5, 3);
+      const L = netLead(vec, 7, vec.dead || !!vec.atk, dt);   // (where the room has him now: netLead)
+      easePose(vec, L.x, L.z, vec.netH, dt, 7, 20, 5, 3);
       vec.x = vec.rx; vec.z = vec.rz;
       vec.y += (supportHeight(vec.x, vec.z, vec.y + 1) - vec.y) * Math.min(1, dt * 4);
       vec.sp = vec.rspd; vec.tdist = Math.hypot(dx, dz);
@@ -12516,7 +12668,7 @@
       vec.rx = vec.x = k[0] / 10; vec.rz = vec.z = k[1] / 10; vec.hd = k[2] / HDQ;
       vec.phase = k[6] || 0; vec.ev = k[25]; vec.netHp = k[3];
     }
-    vec.netX = k[0] / 10; vec.netZ = k[1] / 10; vec.netH = k[2] / HDQ;
+    netSample(vec, k[0] / 10, k[1] / 10, fresh); vec.netH = k[2] / HDQ;
     const nh = k[3];
     if (!fresh && vec.netHp !== undefined && nh < vec.netHp - 0.5 && nh > 0) {      // hurt: he registers it (hard, in a window)
       vec.stagger = vec.netHp - nh > 60 ? 1 : Math.max(vec.stagger, 0.12);

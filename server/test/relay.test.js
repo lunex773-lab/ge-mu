@@ -135,6 +135,20 @@ now += 600;
 for (let i = 0; i < 6; i++) if (putBack(go('p000001', 100, 100, 0, 60))) answers++;
 check('a run of refused steps gets one answer, not one each', answers === 1, answers + ' answers to 6 steps in 0.36 s');
 
+// ---- what the others are told of a player's health and score --------------------------
+{
+  const R2 = new Relay({ moves: false });
+  R2.join('p000000', 'Aki'); R2.join('p000001', 'Ben');
+  let t = 2_000_000;
+  const st = (p) => { t += 66; const o = R2.handle('p000000', JSON.stringify({ s: 'state', p: Object.assign({ x: 10, y: 0, z: 10, r: 0, w: 0 }, p) }), t).out.map(([, x]) => JSON.parse(x)); return o.find((m) => m.s === 'state').p; };
+  const first = st({}), plain = st({}), key = st({ hp: 100, k: 0 });
+  R2.damage('p000000', 20, null, t);
+  const hurt = st({}), after = st({});
+  check('the others are told a player\'s health and score when they change, and with the game\'s keyframe — not in every step',
+    first.hp === 100 && first.k === 0 && plain.hp === undefined && plain.k === undefined && key.hp === 100 && hurt.hp === 80 && after.hp === undefined && plain.id === 'p000000',
+    JSON.stringify([first, plain, key, hurt, after].map((q) => [q.hp, q.k])));
+}
+
 console.log('\nTHE ROOM\'S RULES — in node\n');
 console.log(results.join('\n'));
 console.log('\n  ' + pass + ' passed, ' + fail + ' failed\n');

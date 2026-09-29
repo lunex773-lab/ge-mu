@@ -66,8 +66,12 @@ const KINDS = {
     me.w = w; me.yaw = num(p.r) ? p.r : 0; me.inv = !!p.iv;          // (what the room's creatures see of them)
     p.id = from;
     if (p.n !== undefined) p.n = text(p.n, 20);
-    //  what the others are told about my health and my score is the room's
-    p.hp = Math.round(me.hp); p.k = me.kills;
+    //  what the others are told about my health and my score is the room's —
+    //  when the game says it (a change, or its keyframe once a second) or the
+    //  room's own has moved; not in every one of the eighteen a second
+    const hp = Math.round(me.hp);
+    if (p.hp !== undefined || hp !== me.saidHp) { p.hp = hp; me.saidHp = hp; }
+    if (p.k !== undefined || me.kills !== me.saidK) { p.k = me.kills; me.saidK = me.kills; }
     if (me.dead) { p.d = 1; p.ds = me.ds; if (me.killer) p.kb = me.killer; else delete p.kb; }
     else { delete p.d; delete p.ds; delete p.kb; }
     return p;

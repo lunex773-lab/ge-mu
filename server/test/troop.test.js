@@ -109,6 +109,17 @@ out.length = 0;
 now += 150; say('p000001', 'state', { x: ax - 3, y: 0, z: az + 2, r: 0, w: 0 });
 const sv = out.find(([, m]) => m.s === 'sv');
 check('everyone is told the troop by the room', sv && sv[0] === 'all' && Array.isArray(sv[1].p.m) && sv[1].p.m.length === TROOP.NUM * 6, sv && ('sv: ' + sv[1].p.m.length / 6 + ' monkeys'));
+{
+  //  with everyone over on the other side and the troop calm, the room's word about it
+  //  goes once in eight (the troop, the rage clock) — it went ten times a second
+  now += 300; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); say('p000001', 'state', { x: ax - 3, y: 0, z: az + 2, r: 0, w: 1 });
+  out.length = 0;
+  for (let i = 0; i < 100; i++) { now += 50; say(i % 2 ? 'p000001' : 'p000000', 'state', i % 2 ? { x: ax - 3, y: 0, z: az + 2, r: 0, w: 1 } : { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  const words = out.filter(([, m]) => m.s === 'sv');
+  check('everyone over on the other side and the troop calm: its word goes about once a second, not ten', words.length >= 4 && words.length <= 8 && words.every(([, m]) => Array.isArray(m.p.m) && m.p.r !== undefined),
+    words.length + ' words in 5 s');
+  now += 300; say('p000000', 'state', { x: ax, y: 0, z: az, r: 0, w: 0 }); say('p000001', 'state', { x: ax - 3, y: 0, z: az + 2, r: 0, w: 0 });
+}
 
 //  shots
 const m3 = RT.T.monkeys[3];

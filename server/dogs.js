@@ -338,7 +338,10 @@ export class RoomDogs {
     this.tellT = now;
     const full = this.seq++ % FULL_EVERY === 0, who = this.who;
     const k = DOG.snapRows(this.D, full, (d) => who.some((t) => Math.abs(t.x - d.x) < NEAR && Math.abs(t.z - d.z) < NEAR));
-    const p = { q: GOR.snapRows(this.G), f: FL.snapRows(this.M), v: VC.snapRow(this.V, full) };   // (his mind's five numbers in the whole words)
+    //  t: the room's clock for what this says (ms) — each game places the word
+    //  on it rather than on when it happened to arrive, and so knows how far
+    //  things have moved since (index.html netSample, netLead)
+    const p = { t: Math.round(this.t * 1000), q: GOR.snapRows(this.G), f: FL.snapRows(this.M), v: VC.snapRow(this.V, full) };   // (his mind's five numbers in the whole words)
     if (k) { p.k = k; p.kf = full ? 1 : 0; }
     const fly = FL.flightRow(this.M), vf = VC.flightRows(this.V), w = this.wreckRows(full);
     if (fly) p.fly = fly;

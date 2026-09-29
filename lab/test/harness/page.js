@@ -148,6 +148,7 @@ async function roomServer({ moves = false, creatures = false } = {}) {
   connect.mind = mind;
   const kindOf = (text) => { try { return JSON.parse(text).s; } catch (e) { return ''; } };
   //  one way of a slow link: after ms, give or take jitter, never overtaking what went before
+  //  (way: 'upAt' or 'downAt' — when the last one each way lands)
   const later = (who, way, fn) => {
     const L = who.lag, at = Math.max(who[way] || 0, Date.now() + L.ms + Math.random() * (L.jitter || 0));
     who[way] = at;
@@ -169,7 +170,7 @@ async function roomServer({ moves = false, creatures = false } = {}) {
       const t = R.sockets.get(to);
       if (!t || (t.who.drop && t.who.drop.test(kindOf(text)))) return;
       if (!t.who.lag) { t.ws.send(text); return; }
-      later(t.who, 'down', () => { if (R.sockets.has(to)) t.ws.send(text); });
+      later(t.who, 'downAt', () => { if (R.sockets.has(to)) t.ws.send(text); });
     };
     ws.send(JSON.stringify({ s: '_welcome', p: { id, host: R.relay.host(), players: [...R.sockets.keys()], t: Date.now(), hp: R.relay.players.get(id).hp, items: R.relay.itemState(), own: R.relay.creatures.owns() } }));
     const route = (out, from) => {
@@ -186,7 +187,7 @@ async function roomServer({ moves = false, creatures = false } = {}) {
     };
     R.relay.hello(id); askMind();
     ws.onMessage((m) => {
-      if (who.lag) later(who, 'up', () => take(m)); else take(m);
+      if (who.lag) later(who, 'upAt', () => take(m)); else take(m);
     });
     const take = (m) => {
       if (!R.sockets.has(id)) return;
@@ -234,7 +235,8 @@ async function openRoom({ moves = false, creatures = false } = {}) {
     const who = { drop: null, down: false, lag: null, closes: new Set() };
     //  who.down: the room server is not answering (refused at once), as when
     //  a day's free requests are used up
-    await page.routeWebSocket(/^ws:\/\/lab\.test\/ws\?/, (ws) => { if (who.down) ws.close({ code: 1011 }); else connect(ws, who); });
+    //  who.dead: the line is dead (setDead) — a new connection opens and hears nothing
+    await page.routeWebSocket(/^ws:\/\/lab\.test\/ws\?/, (ws) => { if (who.down) ws.close({ code: 1011 }); else if (!who.dead) connect(ws, who); });
     //  url: the same page served from somewhere else — the room server under
     //  wrangler dev, say — instead of the harness's own origin
     await page.goto(url || ORIGIN + '/game.html', { timeout: 120000 });
@@ -252,6 +254,8 @@ async function openRoom({ moves = false, creatures = false } = {}) {
       }, { room, nick }),
       setDrop: (on) => { who.drop = on ? /^(gate|gateask|mob)$/ : null; },
       setLag: (ms, jitter) => { who.lag = ms > 0 || jitter > 0 ? { ms: ms || 0, jitter: jitter || 0 } : null; },
+      //  the line goes dead without closing (a tunnel): nothing reaches this player
+      setDead: (on) => { who.drop = on ? /[\s\S]*/ : null; who.dead = !!on; },
       serverDown: (on) => { who.down = !!on; },
       close: async () => { for (const f of who.closes) f(); who.closes.clear(); await ctx.close(); },
     };

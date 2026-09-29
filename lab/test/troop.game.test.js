@@ -83,7 +83,8 @@ async function shoot(P, i) { const ok = await ev(P, PLACE(i)); await sleep(300);
     await ev(A, 'window.__mobs = 0; window.__withM = 0; 1');
     await sleep(1500);
     const mobs = await ev(A, 'window.__mobs'), withM = await ev(A, 'window.__withM');
-    check('and the host\'s game stops sending it', mobs > 5 && withM === 0, withM + ' of ' + mobs + ' snapshots carried the troop');
+    //  (its snapshots go on — once a second, with the room running every creature: publishMobs — without it)
+    check('and the host\'s game stops sending it', mobs >= 1 && withM === 0, withM + ' of ' + mobs + ' snapshots carried the troop');
     await sleep(500);
     const ta = JSON.parse(await ev(A, TROOP)), tb = JSON.parse(await ev(B, TROOP));
     const gap = ta.map(([mi, x, z]) => { const b = tb.find((q) => q[0] === mi); return b ? Math.hypot(b[1] - x, b[2] - z) : 99; });

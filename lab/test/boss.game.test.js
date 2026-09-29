@@ -86,7 +86,8 @@ const SHOOT = `new Promise((done) => { mode = 'mobile'; for (const e of peds) e.
       c.publish = function (t, pl) { if (t.slice(-4) === '/mob') { window.__mobs++; if (JSON.parse(pl).b) window.__mobB++; } return pub.apply(this, arguments); }; return 1; })()`);
     await sleep(1500);
     const mobs = await ev(A, 'window.__mobs'), withB = await ev(A, 'window.__mobB');
-    check('and the host\'s game stops running him, and stops sending him', mobs > 5 && withB === 0 && !(await him(A)).runs, withB + ' of ' + mobs + ' snapshots carried him');
+    //  (its snapshots go on — once a second, with the room running every creature: publishMobs — without him)
+    check('and the host\'s game stops running him, and stops sending him', mobs >= 1 && withB === 0 && !(await him(A)).runs, withB + ' of ' + mobs + ' snapshots carried him');
     await near(B, 12); await sleep(1500);
     const ha = await him(A), hb = await him(B);
     check('both see him in the same place', ha.live && hb.live && Math.hypot(ha.x - hb.x, ha.z - hb.z) < 2, JSON.stringify(ha) + ' | ' + JSON.stringify(hb));
