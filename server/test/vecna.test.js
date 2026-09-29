@@ -16,6 +16,7 @@
 //    node server/test/vecna.test.js
 
 import VC from '../../shared/vecna.js';
+import VM from '../../shared/vecna_mind.js';
 import FL from '../../shared/flayers.js';
 import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
@@ -89,7 +90,9 @@ let V0 = null;
   run(20, () => { if (seen[seen.length - 1] !== v.st) seen.push(v.st); return v.st === 'hunt' && ev.command > 0; });
   check('he wakes, watches, lifts the street, commands his court, and walks in', v.awake && seen.includes('observe') && seen.includes('manipulate') && ev.command > 0 && seen.includes('hunt'),
     seen.join(' → ') + '; lifted ' + lifts.length + '; ' + pack.filter((q) => q.lord === 'vec').length + ' dogs his; the flayer ' + (mfs[0].lord || '-'));
-  check('the flayer near him is his, told where, and steadied', mfs[0].lord === 'vec' && mfs[0].hasT && !mfs[0].panicked);
+  //  (the Fly-Brain design §20–§21: he gives it an objective through the hive — it chooses how)
+  check('the flayer near him wears his colours, and his objective reaches it through the hive: what, and where he believes',
+    mfs[0].lord === 'vec' && mfs[0].order && VM.ORDERS.includes(mfs[0].order.obj) && Number.isFinite(mfs[0].order.x), mfs[0].order ? JSON.stringify({ obj: mfs[0].order.obj, pri: mfs[0].order.pri }) : 'no order');
   //  close: his arm
   const s1 = spotNear(v.x, v.z, 7, 1.2);
   me.x = s1.x; me.z = s1.z;
@@ -179,7 +182,7 @@ let V0 = null;
   v.atk = null; v.blinkCd = 0;
   const far = spotNear(v.x + 130, v.z, 0, 4) || spotNear(v.x + 130, v.z, 8, 4);
   VC.hurt(V, RULES.DMG, far.x, far.z);
-  check('shot from far off, he stops being over there: he is beside the shooter', ev.blink === 1 && Math.hypot(v.x - far.x, v.z - far.z) < 30, Math.hypot(v.x - far.x, v.z - far.z).toFixed(1) + ' m from them');
+  check('shot from far off, he stops being over there: he comes through the ground to about where he thinks it came from', ev.blink === 1 && Math.hypot(v.x - far.x, v.z - far.z) < 60, Math.hypot(v.x - far.x, v.z - far.z).toFixed(1) + ' m from them');
   //  carried on from another's word, holding and throwing
   VC.lift(V, 2);
   const w2 = wr.findIndex((q) => q && !q.held && !q.thrown);
@@ -230,7 +233,7 @@ for (const g of RD.gorgons) if (g.live) GOR.despawnGorgon(RD.G, g);
 for (let i = 0; i < 4; i++) { now += 60; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
 const dv = out.filter(([, m]) => m.s === 'dv');
 check('those over there are told him, as he is (his swing, his body, what he hunts), and the car where it lies; nobody else',
-  dv.length >= 1 && dv.every(([to]) => to === A) && dv.every(([, m]) => Array.isArray(m.p.v) && m.p.v.length === VC.SNAP_N) && dv.some(([, m]) => Array.isArray(m.p.w) && m.p.w.includes(wk)),
+  dv.length >= 1 && dv.every(([to]) => to === A) && dv.every(([, m]) => Array.isArray(m.p.v) && (m.p.v.length === VC.SNAP_N || m.p.v.length === VC.SNAP_N + VC.SNAP_MIND)) && dv.some(([, m]) => Array.isArray(m.p.w) && m.p.w.includes(wk)),
   dv.length + ' words, to ' + [...new Set(dv.map(([to]) => to))].join(',') + '; v ' + dv.map(([, m]) => m.p.v ? m.p.v.length : m.p.v).join(',') + '; w ' + dv.map(([, m]) => m.p.w ? m.p.w.length : '-').join(','));
 out.length = 0;
 say(A, 'mob', { v: [1, 2, 3, 4, 5, 6, 7, 8], g: null });
@@ -404,7 +407,7 @@ try {
 check('a minute of him, his court and the pack on two players: no error, and no call near the 10 ms a call has', !thrown && worst < 9.5,
   (thrown ? thrown.message + ' ' : '') + 'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; ' + blows + ' blows; phase ' + rv.phase + ', ' +
   RD.dogs.filter((d) => d.live && d.lord === 'vec').length + ' dogs and ' + RD.gorgons.filter((g) => g.live && g.lord === 'vec').length + ' gorgons his');
-check('and what he costs to send: well under a kilobyte a second', (part.v || 0) + (part.vo || 0) + (part.vf || 0) < 900,
+check('and what he costs to send: under a kilobyte a second (his mind\'s five numbers once a second included)', (part.v || 0) + (part.vo || 0) + (part.vf || 0) < 1000,
   Object.entries(part).map(([key, b]) => key + ' ' + Math.round(b) + ' B/s').join(', '));
 
 //  one left: given back

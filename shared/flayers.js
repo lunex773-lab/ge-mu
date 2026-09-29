@@ -400,6 +400,27 @@ function think(F, m, dt) {
   const seen = see(F, m);
   if (seen > 0) { m.see = seen; m.seeT = now; m.hasT = true; m.tx = m.tgt.x; m.tz = m.tgt.z; }
   else m.see = 0;
+  //  VECNA's objective (the Fly-Brain design §20–§21, §25): he says what, it
+  //  chooses how — straight in, round the side, its escort round the side,
+  //  a car to keep them down, or the street itself — once per order, its own
+  //  choice. In his emergency (priority 3) it stops running when told.
+  const o = m.order;
+  if (o && now > o.until) m.order = null;
+  else if (o) {
+    if (!(seen > 0) && !(m.hasT && now - m.seeT < 3) && o.obj !== 'protect' && o.obj !== 'regroup') { m.hasT = true; m.tx = o.x; m.tz = o.z; m.seeT = Math.max(m.seeT, o.t - 1.5); }
+    if (m.orderAt !== o.t) {
+      m.orderAt = o.t;
+      const r = rnd();
+      m.method = o.obj === 'search' || o.obj === 'investigate' ? 'search' : o.obj === 'protect' || o.obj === 'regroup' || o.obj === 'retreat' ? 'hold'
+        : r < 0.34 ? 'direct' : r < 0.54 ? 'flank' : r < 0.74 ? 'minion_flank' : r < 0.9 ? 'suppress' : 'environment';
+      if (o.pri >= 3 && m.panicked) { m.panicked = false; if (m.st === 'flee') { m.st = 'track'; m.stT = 0; } }
+      if (m.method === 'minion_flank') {
+        //  (its own escort round the side: its own chain, no hive between)
+        for (const q of E.dogs().concat(E.gorgons())) if (q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot) q.order = { obj: 'flank', x: m.tx, z: m.tz, conf: o.conf, pri: o.pri, t: now, until: now + 8, by: 'mf' };
+      }
+      if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
+    }
+  }
   const known = m.hasT && now - m.seeT < MF_MEM;
   const dist = m.tdist;
   const fx = dist > 0.01 ? (m.tx - m.x) / dist : 0, fz = dist > 0.01 ? (m.tz - m.z) / dist : 1;
@@ -446,8 +467,10 @@ function think(F, m, dt) {
     case 'track': {
       if (!known) { m.st = 'wander'; m.stT = 0; break; }
       //  §21: distance decides. Close, it swings. Middle, it throws. Far, it
-      //  lets the escort do the work and simply keeps coming.
-      step(F, m, m.tx - fx * 9, m.tz - fz * 9, m.panicked ? 5.4 : 4.3, dt);
+      //  lets the escort do the work and simply keeps coming — round the side,
+      //  if that is how it chose to carry out his order.
+      const side = m.order && m.method === 'flank' && dist > 26 ? ((m.slot & 1) ? 20 : -20) : 0;
+      step(F, m, m.tx - fx * 9 - fz * side, m.tz - fz * 9 + fx * side, m.panicked ? 5.4 : 4.3, dt);
       m.mawWant = 0.2;
       if (m.atkCd <= 0 && m.see > 0) {
         //  Each band offers more than one answer and picks between them, and
@@ -467,7 +490,7 @@ function think(F, m, dt) {
           const k = pickWreck(F, m);
           //  and if there is nothing to pick up, it does not simply stand
           //  there waiting for one — it closes and lashes instead
-          if (k >= 0 && r < 0.8) { m.holdW = k; startAtk(F, m, 'throw'); }
+          if (k >= 0 && r < (m.order && (m.method === 'suppress' || m.method === 'environment') ? 0.97 : 0.8)) { m.holdW = k; startAtk(F, m, 'throw'); }   // (more, when it chose to keep them down with cars)
           else if (dist < MF_LASH_R + 6) startAtk(F, m, 'lash');
           else m.atkCd = 1.6;
         }

@@ -14,6 +14,7 @@
 
 import FL from '../../shared/flayers.js';
 import VC from '../../shared/vecna.js';
+import VM from '../../shared/vecna_mind.js';
 import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
 import CITY from '../../shared/city.js';
@@ -256,8 +257,22 @@ check('nor one from this side of the tear', mf.hp === FL.MF_HP - RULES.DMG && /o
   Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
   mf.lord = null; mf.panicked = true; mf.atk = null; mf.st = 'flee'; mf.fleeT = 20;
   for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;       // (what they know, he would know: nothing, here)
+  //  (what he believes: the player there — as if he had just seen them)
+  VM.believe(RD.V.mind, A, ax, az, 1, 'vision', RD.t);
+  RD.V.mind.focus = A; RD.V.mind.focusConf = 1; RD.V.mind.fx = ax; RD.V.mind.fz = az;
   VC.command(RD.V, 0);
-  check('VECNA takes it, hands it his target, steadies it and turns it round', mf.lord === 'vec' && mf.hasT && Math.abs(mf.tx - ax) < 0.1 && !mf.panicked && mf.st === 'track', mf.lord + ' ' + mf.st + (mf.panicked ? ' panicked' : ''));
+  const now0 = RD.t;
+  for (let i = 0; i < 30 && !mf.order; i++) { now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  //  the Fly-Brain design §20/§25: he gives it an objective, it chooses how — and he does not
+  //  make it stop running, unless he himself is in an emergency
+  check('VECNA takes it (it wears his colours) and gives it an objective through the hive — late — and it chooses how; it is not made to stop running',
+    mf.lord === 'vec' && mf.order && mf.order.pri < 3 && RD.t - now0 >= 0.3 && mf.panicked, mf.lord + ', ' + (mf.order ? mf.order.obj + ' (' + (mf.method || '-') + ')' : 'no order') + (mf.panicked ? ', still panicked' : ''));
+  v.hp = VC.V_HP * 0.2; v.phase = VC.phaseOf(v.hp); v.st = 'hunt';
+  RD.V.mind.focusConf = 1; RD.V.mind.energy = 100; mf.order = null; v.cmdT = 0;
+  VC.command(RD.V, 0);
+  for (let i = 0; i < 40 && mf.panicked; i++) { now += 50; say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }
+  check('in his own emergency his order comes first: it stops running and turns round', mf.lord === 'vec' && !mf.panicked && mf.st !== 'flee', mf.st + (mf.panicked ? ' panicked' : '') + (mf.order ? ', ' + mf.order.obj + ' pri ' + mf.order.pri : ''));
+  v.hp = VC.V_HP; v.phase = 0;
   const f0 = out.filter(([, m]) => m.s === 'dv').length;
   const hold = () => { v.x = v.rx = mf.x + 50; v.z = v.rz = mf.z; v.st = 'dormant'; v.atk = null; };
   for (let i = 0; i < 3; i++) { now += 60; hold(); say(A, 'state', { x: ax, y: 0, z: az, r: 0, w: 1 }); }

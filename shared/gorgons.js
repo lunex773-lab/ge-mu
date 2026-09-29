@@ -272,6 +272,17 @@ function think(G, g, dt) {
     if (sc > bestI) { bestI = sc; h = n; }
   }
   if (h) { g.noise = h; g.noiseS = bestI; }
+  //  An objective from VECNA, through the hive (the Fly-Brain design §19): a
+  //  gorgon takes the where and presses — it does not retreat on anyone's
+  //  word — and for 'flank' or 'contain' it goes round rather than in. With
+  //  nothing fresher of its own; told to look, it goes to look.
+  const o = g.order;
+  if (o && now > o.until) g.order = null;
+  else if (o && !(s > 0) && !(g.hasT && now - g.seeT < 2)) {
+    if (o.obj === 'search' || o.obj === 'investigate') { if (!g.noise || now - g.noise.t > 3) { g.noise = { x: o.x, z: o.z, i: 0.8, type: 'order', t: now }; g.noiseS = 1; } }
+    else if (o.obj !== 'protect' && o.obj !== 'regroup' && o.obj !== 'guard' && o.obj !== 'escort') { g.hasT = true; g.tx = o.x; g.tz = o.z; g.seeT = Math.max(g.seeT, o.t - 1.5); }
+  }
+  if (o && (o.obj === 'flank' || o.obj === 'contain') && g.st === 'chase' && g.orderRound !== o.t && g.tdist > 16) { g.orderRound = o.t; g.st = 'flank'; g.stT = 0; }
   const known = g.hasT && now - g.seeT < G_MEM;      // it remembers where you were
   const dist = g.tdist;
   const fx = dist > 0.01 ? (g.tx - g.x) / dist : 0, fz = dist > 0.01 ? (g.tz - g.z) / dist : 1;

@@ -14,6 +14,7 @@ import GOR from '../../shared/gorgons.js';
 import DOG from '../../shared/dogs.js';
 import FL from '../../shared/flayers.js';
 import VC from '../../shared/vecna.js';
+import VM from '../../shared/vecna_mind.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -171,18 +172,31 @@ check('nor one from this side of the tear', gg.hp === GOR.GOR_HP - RULES.DMG && 
   //  VECNA, the room's, awake 60 m off and knowing where the player is: his order goes out
   const v = VC.spawnVecna(RD.V, { x: ax - 60, z: az });
   Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
-  g1.hasT = false;
+  g1.hasT = false; g1.order = null;
+  //  (what he believes: the player there — as if he had just seen them)
+  VM.believe(RD.V.mind, A, ax, az, 1, 'vision', RD.t);
+  RD.V.mind.focus = A; RD.V.mind.focusConf = 1; RD.V.mind.fx = ax; RD.V.mind.fz = az;
   VC.command(RD.V, 0);
-  check('VECNA hands the nearest a target: it knows where', g1.hasT && Math.abs(g1.tx - ax) < 0.1);
+  const atOnce = !!g1.order;
+  for (let i = 0; i < 40 && !g1.order; i++) { now += 50; mob(); still(); say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); }
+  //  (far from every player, a gorgon thinks only every so often: until it does)
+  for (let i = 0; i < 60 && !g1.hasT; i++) { now += 50; mob(); still(); say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); }
+  check('VECNA gives the nearest an objective through the hive — it arrives late — and the gorgon takes it: it knows where',
+    !atOnce && g1.order && VM.ORDERS.includes(g1.order.obj) && g1.hasT && Math.hypot(g1.tx - ax, g1.tz - az) < 10,
+    g1.order ? g1.order.obj + ', ' + (g1.hasT ? Math.hypot(g1.tx - ax, g1.tz - az).toFixed(1) + ' m from where he believes' : 'nothing') : 'no order');
   FL.summon(RD.M, mf, 0, 4);
   const sworn = RD.gorgons.filter((g) => g.live && !g.dead && g.lord === 'mf' && g.lordSlot === mf.slot);
   check('the flayer summons: its gorgons are made up to ' + GOR.RETINUE.mf + ', no more, each climbing out', sworn.length === GOR.RETINUE.mf && sworn.some((g) => g.rise < 1), sworn.length + ' sworn to it');
-  //  and what they know, he knows
-  v.hasT = false; v.seeT = -99;
-  for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;
-  g1.hasT = true; g1.tx = ax + 9; g1.tz = az + 2; g1.seeT = RD.t;
-  VC.command(RD.V, 0.05);
-  check('VECNA learns through them: what one of his knows, he knows', v.hasT && Math.abs(v.tx - (ax + 9)) < 0.01, v.hasT ? v.tx.toFixed(1) : 'nothing');
+  //  and what they see reaches him — late, and a little wrong (the hive is not a wallhack)
+  RD.V.mind.hyp.length = 0;
+  const tA = RD.byId.get(A);
+  g1.see = 1; g1.tgt = tA; g1.seeT = RD.t; RD.V.mind.acc.hive = 1;
+  VM.hiveStep(RD.V, 0);
+  const atOnce2 = !!VM.bestOf(RD.V.mind, A);
+  for (let i = 0; i < 30; i++) { now += 50; mob(); still(); say(A, 'state', { x: ax - 250, y: 0, z: az, r: 0, w: 1 }); }
+  const heard = VM.bestOf(RD.V.mind, A);
+  check('VECNA learns through them — late, and a little wrong: what one of his sees reaches him after a moment', !atOnce2 && heard && heard.src !== 'vision' && Math.hypot(heard.x - tA.x, heard.z - tA.z) < 15,
+    heard ? heard.src + ', ' + Math.hypot(heard.x - tA.x, heard.z - tA.z).toFixed(1) + ' m out' : 'nothing');
   //  one linked to the flayer, shot: the flayer bleeds, here
   still();
   put(g1, fx + 8, fz); g1.hp = GOR.GOR_HP;

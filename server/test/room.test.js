@@ -276,7 +276,7 @@ async function main() {
     const vr = lastDv && Array.isArray(lastDv.p.v) ? lastDv.p.v : [];
     check('two in a room: it asks the host\'s game for its dogs, gorgons, flayer and VECNA, carries on (the flayer and VECNA where they stood; the district stocked as they cross), and tells only those over there',
       dq && dOwn && dogsUp >= 20 && lastDv && Array.isArray(lastDv.p.q) && lastDv.p.q.length >= 7 && fr.length === FL.SNAP_N && Math.abs(fr[1] / 10 - 90) < 15 &&
-      vr.length === VC.SNAP_N && Math.abs(vr[0] / 10 - 150) < 15 && dvG2.length < dvG1.length && dvG2.length > 0,
+      (vr.length === VC.SNAP_N || vr.length === VC.SNAP_N + VC.SNAP_MIND) && Math.abs(vr[0] / 10 - 150) < 15 && dvG2.length < dvG1.length && dvG2.length > 0,
       (dq ? 'asked; ' : 'not asked; ') + dogsUp + ' dogs, ' + (lastDv && lastDv.p.q ? lastDv.p.q.length / 7 : 0) + ' gorgon(s) and ' + fr.length / FL.SNAP_N + ' flayer up after 1.8 s' +
       (fr.length ? ' (at ' + (fr[1] / 10).toFixed(1) + ', ' + (fr[2] / 10).toFixed(1) + ', ' + FL.MF_ST[fr[5] - 1] + ')' : '') +
       (vr.length ? '; VECNA at ' + (vr[0] / 10).toFixed(1) + ', ' + (vr[1] / 10).toFixed(1) + ', ' + VC.V_ST[vr[4] - 1] : '; no VECNA') + '; words to the one over there all along ' + dvG1.length + ', to the one who crossed later ' + dvG2.length);

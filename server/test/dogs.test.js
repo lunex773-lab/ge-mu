@@ -14,6 +14,7 @@ import DOG from '../../shared/dogs.js';
 import GOR from '../../shared/gorgons.js';
 import FL from '../../shared/flayers.js';
 import VC from '../../shared/vecna.js';
+import VM from '../../shared/vecna_mind.js';
 import CITY from '../../shared/city.js';
 import WR from '../../shared/wrecks.js';
 import TF from '../../shared/traffic.js';
@@ -199,9 +200,17 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   const v = VC.spawnVecna(RD.V, { x: ax - 50, z: az });
   Object.assign(v, { awake: true, st: 'hunt', hasT: true, tx: ax, tz: az, seeT: RD.t, cmdT: 0, summonCd: 999, atkCd: 99 });
   for (const q of RD.dogs) if (q !== d) q.hasT = false;
-  put(d, ax - 50 + 25, az); d.lord = null; d.hasT = false; d.st = 'wander';
+  put(d, ax - 50 + 25, az); d.lord = null; d.hasT = false; d.st = 'wander'; d.order = null;
+  //  (what he believes: the player there — as if he had just seen them)
+  VM.believe(RD.V.mind, A, ax, az, 1, 'vision', RD.t);
+  RD.V.mind.focus = A; RD.V.mind.focusConf = 1; RD.V.mind.fx = ax; RD.V.mind.fz = az;
   VC.command(RD.V, 0);
-  check('VECNA hands the nearest a target: it knows where, and goes', d.hasT && Math.abs(d.tx - ax) < 0.1 && d.st === 'chase', d.st + (d.hasT ? ' → ' + d.tx.toFixed(1) : ''));
+  const atOnce = !!d.order;
+  for (let i = 0; i < 40 && !d.order; i++) { now += 50; say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); }
+  for (let i = 0; i < 6; i++) { now += 50; say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); }
+  check('VECNA gives the nearest an objective through the hive — not at once, it arrives late — and the dog goes on it',
+    !atOnce && d.order && VM.ORDERS.includes(d.order.obj) && d.hasT && Math.hypot(d.tx - ax, d.tz - az) < 10 && d.st !== 'wander',
+    (d.order ? d.order.obj + ', ' : 'no order, ') + d.st + (d.hasT ? ' → ' + Math.hypot(d.tx - ax, d.tz - az).toFixed(1) + ' m from where he believes' : ''));
   //  (a full district has no room for more — as in the game: a few far off are let go first)
   for (const q of RD.dogs.filter((q) => q.live && !q.lord && Math.hypot(q.x - fx, q.z - fz) > 100).slice(0, 8)) DOG.despawnDog(RD.D, q);
   const n0 = RD.dogs.filter((q) => q.live).length;
@@ -216,12 +225,16 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   for (let i = 0; i < 3; i++) VC.summon(RD.V, 9, 0);             // (however often he calls)
   const vs = RD.dogs.filter((q) => q.live && !q.dead && q.lord === 'vec');
   check('VECNA summons: his court is made up to ' + DOG.RETINUE.vec + ', no more', vs.length === DOG.RETINUE.vec && vs.length > v0, v0 + ' → ' + vs.length);
-  //  and what they know, he knows
-  v.hasT = false; v.seeT = -99;
-  for (const q of RD.dogs.concat(RD.gorgons, RD.flayers)) q.hasT = false;
-  const spy = vs[0]; spy.hasT = true; spy.tx = ax + 7; spy.tz = az - 3; spy.seeT = RD.t;
-  VC.command(RD.V, 0.05);
-  check('VECNA learns through them: what one of his knows, he knows', v.hasT && Math.abs(v.tx - (ax + 7)) < 0.01, v.hasT ? v.tx.toFixed(1) + ', ' + v.tz.toFixed(1) : 'nothing');
+  //  and what they see reaches him — late, and a little wrong (the hive is not a wallhack)
+  RD.V.mind.hyp.length = 0;
+  const spy = vs[0], tA = RD.byId.get(A);
+  spy.see = 1; spy.tgt = tA; spy.seeT = RD.t; RD.V.mind.acc.hive = 1;
+  VM.hiveStep(RD.V, 0);
+  const atOnce2 = !!VM.bestOf(RD.V.mind, A);
+  for (let i = 0; i < 30; i++) { now += 50; say(A, 'state', { x: ax - 200, y: 0, z: az, r: 0, w: 1 }); }
+  const heard = VM.bestOf(RD.V.mind, A);
+  check('VECNA learns through them — late, and a little wrong: what one of his sees reaches him after a moment', !atOnce2 && heard && heard.src !== 'vision' && Math.hypot(heard.x - tA.x, heard.z - tA.z) < 15,
+    heard ? heard.src + ', ' + Math.hypot(heard.x - tA.x, heard.z - tA.z).toFixed(1) + ' m out' : 'nothing');
   //  shot from far off, he is behind the shooter — his court with him
   v.blinkCd = 0; v.atk = null;
   const sx = ax + 120, sz = az;
@@ -229,7 +242,8 @@ check('nor one through a building', dog.hp === before && /line of sight/.test(R.
   VC.hurt(RD.V, RULES.DMG, sx, sz);
   const after = vs.map((q) => Math.hypot(q.x - sx, q.z - sz));
   const came = after.filter((dd, i) => dd < before[i] - 60).length;
-  check('shot from far off, he is behind the shooter, and his court comes with him', Math.hypot(v.x - sx, v.z - sz) < 30 && came >= vs.length - 1,
+  //  (to where he thinks it came from — the way it came, not the exact place: the Fly-Brain design §2.4)
+  check('shot from far off, he goes through the ground toward the shot — to about where he thinks it came from — and his court comes with him', Math.hypot(v.x - sx, v.z - sz) < Math.hypot(ax - 50 - sx, az - sz) * 0.5 && came >= vs.length - 1,
     Math.hypot(v.x - sx, v.z - sz).toFixed(1) + ' m from the shooter; ' + came + ' of ' + vs.length + ' came with him');
   VC.clearVecna(RD.V);
   //  a dog linked to the flayer, shot: the flayer bleeds, here

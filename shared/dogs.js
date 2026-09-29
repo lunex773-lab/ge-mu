@@ -440,10 +440,25 @@ function decide(D, d, dt) {
     if (d.role === 'watch') { S.observe += 0.60; S.chase -= 0.55; S.attack -= 0.4; }
     if (d.role === 'engage') { S.chase += 0.40; }
   }
-  //  §53: nothing of VECNA's runs away or goes to ground while he is watching.
-  //  His command forces this too, but only every 2.6 s, and a dog that breaks
-  //  off in between is a dog the player watches lose its nerve.
-  if (d.lord === 'vec') { S.flee = 0; S.hide = 0; S.retreat *= 0.3; }
+  //  §53: VECNA's are braver than the rest while he is near — but a dog is an
+  //  animal, not a soldier (the Fly-Brain design §18/§42: survival comes
+  //  first for a dog): badly hurt, it still gets out, if less readily.
+  if (d.lord === 'vec') { S.flee *= 0.35; S.hide *= 0.5; S.retreat *= 0.6; }
+  //  An objective from him, arrived through the hive (FB§14–§18): the dog
+  //  takes the what and the where, and its own nature decides the how — a
+  //  bold one presses, a careful one hangs back, and a hurt one is never
+  //  talked into dying for it (FB§18: no suicidal attack on command).
+  const o = d.order;
+  if (o) {
+    const aggr = 0.65 + ((d.slot * 0.618) % 1) * 0.3, caution = 0.25 + ((d.slot * 0.382) % 1) * 0.3;   // FB§40: small, stable differences
+    if (o.obj === 'attack' || o.obj === 'hunt') { S.chase += 0.32 * aggr; S.attack += 0.1 * aggr; }
+    else if (o.obj === 'flank') { S.reposition += 0.5; S.chase -= 0.25; }
+    else if (o.obj === 'contain') { S.observe += 0.6; S.chase -= 0.3; }
+    else if (o.obj === 'search' || o.obj === 'investigate') S.investigate += 0.45;
+    else if (o.obj === 'distract') { S.reposition += 0.35; S.alert += 0.25; }
+    else if (d.lord && (o.obj === 'protect' || o.obj === 'regroup' || o.obj === 'guard' || o.obj === 'escort')) S.escort += 0.7;
+    if (hpF < 0.5) { S.retreat += 0.6 * caution + (0.5 - hpF); S.hide += 0.3 * caution; }
+  }
 
   let bestK = 'wander', bestV = -1;
   for (const k in S) if (S[k] > bestV) { bestV = S[k]; bestK = k; }
@@ -495,6 +510,15 @@ function tick(D, d, dt) {
   }
   const h = hear(D, d);
   if (h) { d.noise = h.n; d.noiseS = h.s; } else if (d.noise && now - d.noise.t > 6) d.noise = null;
+  //  what VECNA has told it (FB§39: an objective, a place as he believes it,
+  //  until when): with nothing fresher of its own it goes on that — to look,
+  //  if it was told to look; else as if it knew, a little stale
+  const o = d.order;
+  if (o && now > o.until) d.order = null;
+  else if (o && s <= 0 && !(d.hasT && now - d.seeT < 2)) {
+    if (o.obj === 'search' || o.obj === 'investigate') { if (!d.noise || now - d.noise.t > 3) { d.noise = { x: o.x, z: o.z, i: 0.6, type: 'order', t: now }; d.noiseS = 0.5; } }
+    else if (o.obj !== 'protect' && o.obj !== 'regroup' && o.obj !== 'guard' && o.obj !== 'escort') { d.hasT = true; d.tx = o.x; d.tz = o.z; d.seeT = Math.max(d.seeT, o.t - 1.5); }
+  }
 
   decide(D, d, dt);
 

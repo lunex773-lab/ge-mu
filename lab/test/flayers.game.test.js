@@ -17,7 +17,8 @@
 //      having judged it
 //    - it throws a car: the second player sees it fly, and it lies where the
 //      room says it came down
-//    - VECNA (the room's too) orders it about: it turns, and both screens show it his
+//    - VECNA (the room's too) gives it an objective through the hive, and both
+//      screens show it his; in his emergency it stops running when he says so
 //    - its escort is its own, in the room: it summons them, and everyone sees them
 //    - the second player leaves: the flayer is given back, and carries on
 //
@@ -162,16 +163,32 @@ const STAND = (x, z) => `(() => { carHitCd = 1e9; for (let r = 0; r < 60; r += 2
       RD.V.holdSpawn = true;
       VC.spawnVecna(RD.V, spot);
       const v = RD.vec, to = [atB[0] + 5, atB[1] - 5];
-      Object.assign(v, { awake: true, st: 'observe', stT: 0, hasT: true, tx: to[0], tz: to[1], seeT: RD.t, cmdT: 0, atkCd: 99, mentalT: 99 });
-      //  (what the room's flayer is the moment he tells it — a moment later it may see someone for itself)
+      Object.assign(v, { awake: true, st: 'observe', stT: 0, cmdT: 0, atkCd: 99, mentalT: 99 });
+      //  (what he believes: someone there — as if he had just seen them)
+      const VM = require('../../shared/vecna_mind.js'), idB2 = await ev(B, 'MP.id');
+      VM.believe(RD.V.mind, idB2, to[0], to[1], 1, 'vision', RD.t);
+      Object.assign(RD.V.mind, { focus: idB2, focusConf: 1, fx: to[0], fz: to[1] });
+      //  the Fly-Brain design §20/§25: an objective, through the hive (late); it chooses how, and it is not made to stop running
+      mf.order = null;
       VC.command(RD.V, 0.05);
-      const then = [mf.st, mf.panicked, mf.tx, mf.tz, mf.lord], told = [v.tx, v.tz];      // (where he knows: his own, or what his court sees)
-      await sleep(900);
+      const atOnce = !!mf.order;
+      for (let i = 0; i < 20 && !mf.order; i++) await sleep(100);
+      await sleep(500);
       const onA = JSON.parse(await ev(A, `JSON.stringify([flayers[${mf.slot}].lord, flayers[${mf.slot}].panicked, vec.live && !vec.dead])`));
       const onB = JSON.parse(await ev(B, `JSON.stringify([flayers[${mf.slot}].lord, vec.live && !vec.dead])`));
-      check('VECNA — the room\'s too, now — orders it about: it turns, and both screens show it his', then[0] === 'track' && !then[1] && Math.abs(then[2] - told[0]) < 0.1 && Math.abs(then[3] - told[1]) < 0.1 && then[4] === 'vec' &&
-        onA[0] === 'vec' && !onA[1] && onA[2] && onB[0] === 'vec' && onB[1],
-        'the room\'s ' + JSON.stringify(then) + '; the host\'s screen ' + JSON.stringify(onA) + ', the second ' + JSON.stringify(onB));
+      check('VECNA — the room\'s too — gives it an objective through the hive (late, not at once), and both screens show it his',
+        !atOnce && mf.order && mf.lord === 'vec' && onA[0] === 'vec' && onA[2] && onB[0] === 'vec' && onB[1],
+        'the room\'s: ' + (mf.order ? mf.order.obj + ' (it chose ' + (mf.method || '-') + ')' : 'no order') + '; the host\'s screen ' + JSON.stringify(onA) + ', the second ' + JSON.stringify(onB));
+      //  in his own emergency, his order comes first: it stops running — on every screen
+      mf.panicked = true; mf.st = 'flee'; mf.fleeT = 20; mf.order = null;
+      v.hp = VC.V_HP * 0.2; v.phase = VC.phaseOf(v.hp); v.st = 'hunt'; v.cmdT = 0; RD.V.mind.focusConf = 1; RD.V.mind.energy = 100;
+      VC.command(RD.V, 0.05);
+      for (let i = 0; i < 30 && mf.panicked; i++) await sleep(100);
+      await sleep(600);
+      const calm = JSON.parse(await ev(A, `JSON.stringify([flayers[${mf.slot}].panicked, flayers[${mf.slot}].st])`));
+      check('in his own emergency his order comes first: it stops running, and the host\'s screen sees it turn', !mf.panicked && mf.st !== 'flee' && !calm[0],
+        'the room\'s ' + mf.st + (mf.panicked ? ' (panicked)' : '') + '; the host\'s screen ' + JSON.stringify(calm));
+      v.hp = VC.V_HP; v.phase = 0;
       VC.clearVecna(RD.V);
       await sleep(300);
     }

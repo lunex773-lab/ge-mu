@@ -17,8 +17,13 @@
 //  listening to him. §61: world-unique. §26: the state machine is the
 //  personality — DORMANT and OBSERVE come before anything violent.
 //
+//  What he believes, remembers, predicts and chooses — and what he tells his
+//  court to do — is his mind, shared/vecna_mind.js (V.mind): this is the body
+//  it drives.
+//
 //  The world he lives in comes through env, as the others' does:
-//    now(), random(), targets() — [{ x, z, y, ey, dead, cloak, fx, fz, yaw }]
+//    now(), random(), targets() — [{ id, x, z, y, ey, dead, cloak, fx, fz, yaw }]
+//    noises() (optional) — what can be heard: [{ x, z, i, type, t }]
 //    clearAt, supportHeight, collide, rayCity, wrecks()
 //    dogs(), gorgons(), flayers(), spawnDog(), spawnGorgon(at)
 //    hit(v, t, kind, dmg, ax, az, push, up, shake)   a blow lands on target t:
@@ -36,6 +41,7 @@ const RULES = require('./rules.js');
 const DG = require('./dogs.js');
 const GR = require('./gorgons.js');
 const FL = require('./flayers.js');
+const VM = require('./vecna_mind.js');
 
 const V_HP = FL.MF_HP * 3;               // 12600
 const V_SIGHT = 124, V_LINK = 190;       // he hears through the whole district
@@ -81,9 +87,10 @@ const ext01 = (e) => 1 + e * V_EXT * 0.55;
 
 //  the one of him: the arrays exist before he does, so nothing that runs a
 //  frame early can reach into an undefined pose
-function makeVecna(env) {
+function makeVecna(env, difficulty) {
   return { env, vec: { live: false, orbit: [], armUp: [0, 0], armUpWant: [0, 0], armExt: [0, 0], armExtWant: [0, 0] },
-           thrown: [], spawnCd: 210, holdSpawn: false, ev: 0, evKind: 0 };
+           thrown: [], spawnCd: 210, holdSpawn: false, ev: 0, evKind: 0,
+           mind: null, difficulty: difficulty || VM.CONFIG.difficulty, hpMax: V_HP, sees: (V, t) => sees(V, t), hiveCount: (V) => hiveCount(V) };
 }
 //  something those who only draw him should know happened (a snapshot says the last)
 function tell(V, kind) { V.ev = (V.ev + 1) % 1000; V.evKind = kind; }
@@ -110,7 +117,6 @@ function spawnSpot(V) {
 function spawnVecna(V, at) {
   const E = V.env, rnd = E.random;
   const spot = at || spawnSpot(V); if (!spot) return null;
-  const nt = DG.nearestTo(E.targets(), spot.x, spot.z).t;
   Object.assign(V.vec, {
     live: true, x: spot.x, z: spot.z, y: E.supportHeight(spot.x, spot.z, 1),
     hd: rnd() * 6.2832, sp: 0, hp: V_HP, phase: 0,
@@ -124,8 +130,9 @@ function spawnVecna(V, at) {
     wx: spot.x, wz: spot.z, wanderT: 0, cmdT: 0, mentalT: 22 + rnd() * 20,
     orbit: [], stepBeat: -1, voiceT: 6, lod: 0, awake: false,
     netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, rspd: 0, hpHold: 0,
-    dodgeX: 0, dodgeZ: 0, lastPX: nt ? nt.x : spot.x, lastPZ: nt ? nt.z : spot.z, summonCd: 18, blinkCd: 6,
+    summonCd: 18, blinkCd: 6,
   });
+  V.mind = VM.makeMind(V.difficulty);
   return V.vec;
 }
 function clearVecna(V) {
@@ -143,23 +150,8 @@ function command(V, dt) {
   const E = V.env, v = V.vec, now = E.now();
   const flayers = E.flayers(), gorgons = E.gorgons(), dogs = E.dogs();
   v.cmdT -= dt;
-  const known = v.hasT && now - v.seeT < V_MEM;
-  //  §23 HIVE SENSE — what anything of his sees, he sees. Upward first.
-  for (const m of flayers) {
-    if (!m.live || m.dead || !m.hasT || now - m.seeT > 8) continue;
-    if (Math.hypot(m.x - v.x, m.z - v.z) > V_LINK) continue;
-    v.hasT = true; v.tx = m.tx; v.tz = m.tz; v.seeT = Math.max(v.seeT, m.seeT);
-  }
-  for (const g of gorgons) {
-    if (!g.live || g.dead || !g.hasT || now - g.seeT > 8) continue;
-    if (Math.hypot(g.x - v.x, g.z - v.z) > V_LINK) continue;
-    v.hasT = true; v.tx = g.tx; v.tz = g.tz; v.seeT = Math.max(v.seeT, g.seeT);
-  }
-  for (const d of dogs) {
-    if (!d.live || d.dead || !d.hasT || now - d.seeT > 8) continue;
-    if (Math.hypot(d.x - v.x, d.z - v.z) > V_LINK) continue;
-    v.hasT = true; v.tx = d.tx; v.tz = d.tz; v.seeT = Math.max(v.seeT, d.seeT);
-  }
+  //  §23 HIVE SENSE is the mind's now (vecna_mind.js hiveStep): what anything
+  //  of his sees reaches him — late, and a little wrong.
   if (!v.awake || v.dead) return;
   //  §22/§55: the override. Sent on a clock, not every frame.
   if (v.cmdT > 0) return;
@@ -169,37 +161,17 @@ function command(V, dt) {
   FL.claimNear(dogs, v.x, v.z, V_TAKE, V_RET.dogs - FL.retinueOf(dogs, 'vec', -1), 'vec', -1);
   FL.claimNear(gorgons, v.x, v.z, V_TAKE, V_RET.gors - FL.retinueOf(gorgons, 'vec', -1), 'vec', -1);
   v.retinue = FL.retinueOf(dogs, 'vec', -1) + FL.retinueOf(gorgons, 'vec', -1);
-  if (!known) return;
-  let sent = 0;
-  //  §55 COMMAND PRIORITY: down the chain. The flayer is told, and what the
-  //  flayer does with its own escort is still the flayer's business.
+  //  the flayer wears his colours (it answers to him — as a commander, not a puppet)
   for (const m of flayers) {
-    if (!m.live || m.dead) continue;
-    if (Math.hypot(m.x - v.x, m.z - v.z) > V_LINK) continue;
-    m.hasT = true; m.tx = v.tx; m.tz = v.tz; m.seeT = now;
-    if (m.st === 'wander') { m.st = 'alert'; m.stT = 0; }
-    m.panicked = false;                         // §53: nothing of his runs away
-    if (m.st === 'flee') { m.st = 'track'; m.stT = 0; }
-    m.lord = 'vec'; m.lordSlot = -1;            // and it wears his colours from now on
-    sent++;
+    if (!m.live || m.dead || Math.hypot(m.x - v.x, m.z - v.z) > V_LINK) continue;
+    m.lord = 'vec'; m.lordSlot = -1;
+    //  FB§25: in his own emergency he may order it to stop running
+    if (v.hp < V_HP * VM.CONFIG.emergencyThreshold && m.panicked) { m.panicked = false; if (m.st === 'flee') { m.st = 'track'; m.stT = 0; } }
   }
-  //  §22/§65: a few, and the nearest — not the whole district.
-  const pick = (arr, n) => arr
-    .filter((o) => o.live && !o.dead && Math.hypot(o.x - v.x, o.z - v.z) <= V_LINK)
-    .sort((a, b) => Math.hypot(a.x - v.x, a.z - v.z) - Math.hypot(b.x - v.x, b.z - v.z))
-    .slice(0, n);
-  for (const g of pick(gorgons, V_CMD_GOR)) {
-    g.hasT = true; g.tx = v.tx; g.tz = v.tz; g.seeT = now;
-    if (g.st === 'wander' || g.st === 'search' || g.st === 'escort') { g.st = 'chase'; g.stT = 0; }
-    sent++;
-  }
-  for (const d of pick(dogs, V_CMD_DOG)) {
-    d.hasT = true; d.tx = v.tx; d.tz = v.tz; d.seeT = now;
-    //  §53: they do not hide and they do not break off while he is watching
-    if (d.st === 'wander' || d.st === 'idle' || d.st === 'hide' || d.st === 'flee' || d.st === 'escort') { d.st = 'chase'; d.stT = 0; }
-    sent++;
-  }
-  v.cmdSent = sent;
+  if (!V.mind || V.mind.focusConf < 0.18) return;
+  //  §55 / FB§15: down the chain as an objective — where he believes they are,
+  //  how sure, how much it matters — and each of them decides how
+  v.cmdSent = VM.commandCourt(V, v.hp < V_HP * VM.CONFIG.emergencyThreshold ? 'hunt' : 'attack', v.hp < V_HP * VM.CONFIG.emergencyThreshold ? 3 : 2);
 }
 //  §21/§29: he calls, but he calls for what is missing and nothing more.
 function ring(V, r) {
@@ -301,11 +273,14 @@ function hurl(V) {
   if (!w) return false;
   const sx = v.x + Math.sin(o.a) * o.r, sz = v.z + Math.cos(o.a) * o.r;
   const sy = v.y + o.h + 1.6;
-  const dx = v.tx - sx, dz = v.tz - sz, d = Math.max(4, Math.hypot(dx, dz));
+  //  (at them — or, when the plan is to deny them a way out or their cover, at that)
+  const T = V.mind && V.mind.tactic, aim = T && T.aim && (T.name === 'AREA_DENIAL' || T.name === 'FORCE_OUT_OF_COVER') ? T.aim : null;
+  const ax = aim ? aim.x : v.tx, az = aim ? aim.z : v.tz;
+  const dx = ax - sx, dz = az - sz, d = Math.max(4, Math.hypot(dx, dz));
   const t = Math.max(0.55, d / 44);                     // faster and flatter than the flayer's lob
   V.thrown.push({ k: o.k, x: sx, y: sy, z: sz,
                   vx: dx / t, vz: dz / t,
-                  vy: (E.supportHeight(v.tx, v.tz, 2) + 1.2 - sy + 0.5 * 26 * t * t) / t,
+                  vy: (E.supportHeight(ax, az, 2) + 1.2 - sy + 0.5 * 26 * t * t) / t,
                   spin: o.spin, roll: o.roll, t: 0, hit: 0, y0: o.y0, got: [] });
   w.thrown = true; w.held = false;
   E.on.hurl(v, o.k);
@@ -327,6 +302,7 @@ function flights(V, dt, judge) {
       if (T.got.indexOf(t) >= 0 || !(Math.hypot(T.x - t.x, T.z - t.z) < 4.2) || !(Math.abs(T.y - t.ey) < 4.2) || t.dead) continue;
       T.got.push(t); T.hit = 1;
       E.hit(null, t, 'throw', V_THROW_DMG, 0, 0, 0, 0, 0.95);
+      VM.noteHit(V, t, 'throw', V_THROW_DMG);
     }
     const gy = E.supportHeight(T.x, T.z, T.y + 1);
     if (T.y <= gy + 0.4 || T.t > 7) {
@@ -406,24 +382,21 @@ function think(V, dt) {
   v.blinkCd -= dt;
   if (v.dead) { v.deadT += dt; v.sp = 0; return; }
 
+  //  FB§28: sense, believe, remember, predict, look at himself, set goals,
+  //  plan — his mind (vecna_mind.js), at its own rates. What he knows of where
+  //  they are is what he believes, and only that.
+  if (!V.mind) V.mind = VM.makeMind(V.difficulty);
+  VM.tick(V, dt);
   command(V, dt);
-  const seen = see(V);
-  if (seen > 0) { v.see = seen; v.seeT = now; v.hasT = true; v.tx = v.tgt.x; v.tz = v.tgt.z; }
-  else v.see = 0;
-  const known = v.hasT && now - v.seeT < V_MEM;
-  const dist = v.tdist;
-  const fx = dist > 0.01 ? (v.tx - v.x) / dist : 0, fz = dist > 0.01 ? (v.tz - v.z) / dist : 1;
+  const M = V.mind;
+  if (v.see > 0) v.seeT = now;
+  const known = M.focusConf > 0.18;
+  v.hasT = known;
+  if (known) { v.tx = M.fx; v.tz = M.fz; if (!(v.see > 0)) v.seeT = Math.max(v.seeT, now - (1 - M.focusConf) * V_MEM); }
+  const dist = known ? Math.hypot(v.tx - v.x, v.tz - v.z) : 999;
+  v.tdist = v.tgt ? v.tdist : dist;
+  const fx = dist > 0.01 && dist < 999 ? (v.tx - v.x) / dist : 0, fz = dist > 0.01 && dist < 999 ? (v.tz - v.z) / dist : 1;
   let lookX = v.tx, lookZ = v.tz;
-
-  //  §34: he may lean where you have been going. From position and velocity
-  //  only — a running average of the movement of the one he hunts.
-  { const q = v.tgt || v.near;
-    if (q) {
-      const vxp = (q.x - v.lastPX) / Math.max(1e-3, dt), vzp = (q.z - v.lastPZ) / Math.max(1e-3, dt);
-      v.dodgeX += (vxp - v.dodgeX) * Math.min(1, dt * 1.4);
-      v.dodgeZ += (vzp - v.dodgeZ) * Math.min(1, dt * 1.4);
-      v.lastPX = q.x; v.lastPZ = q.z;
-    } }
 
   //  §36 phase transitions. Announced by the body, and by a moment of quiet
   //  in which nothing is thrown at you.
@@ -491,7 +464,10 @@ function think(V, dt) {
         E.on.command(v);
         //  and what does not answer, he grows — only ever the shortfall
         let grew = 0;
-        if (v.summonCd <= 0) { v.summonCd = V_SUMMON_CD; grew = summon(V, 2, 1); }
+        if (v.summonCd <= 0 && (!V.mind || V.mind.energy >= VM.CONFIG.cost.summon)) {
+          v.summonCd = V_SUMMON_CD; grew = summon(V, 2, 1);
+          if (grew && V.mind) V.mind.energy -= VM.CONFIG.cost.summon;
+        }
         const n = hiveCount(V);
         if (grew) { tell(V, EV.grew); E.on.grew(v); }
         else if (n > 0) { tell(V, EV.ordered); E.on.ordered(v); }
@@ -500,17 +476,31 @@ function think(V, dt) {
       break;
     }
     case 'hunt': {
-      //  §30/§31: he walks. He never runs, at any phase.
-      if (!known) { v.st = 'observe'; v.stT = 0; break; }
-      const standoff = v.phase >= 4 ? 10 : 20 - v.phase * 2;
-      v.hoverWant = v.phase >= 3 ? 0.5 : 0.12;
+      //  §30/§31: he walks. He never runs, at any phase. Where to, how close,
+      //  and what to do there is the plan (vecna_mind.js): at the one he is
+      //  after (where he guesses they will be), round them with the court, out
+      //  of the line of fire, or waiting where they keep coming back to.
+      const G = VM.goal(V);
+      const lost = !known && G.name !== 'SEARCH' && G.name !== 'AMBUSH' && G.name !== 'REPOSITION' && G.name !== 'RETREAT';
+      if (lost && M.focusConf < 0.05 && v.stT > 6) { v.st = 'observe'; v.stT = 0; break; }
+      v.hoverWant = G.hold ? 0.18 : v.phase >= 3 ? 0.5 : 0.12;
       v.flareWant = 0.4 + v.phase * 0.1;
       v.armUpWant[0] = v.orbit.length ? 0.8 : 0.12;
       v.armUpWant[1] = 0.10; v.spreadWant = v.orbit.length ? 1 : 0.2;
-      step(V, v.tx - fx * standoff, v.tz - fz * standoff, 1.55 + v.phase * 0.22, dt);
-      if (v.atkCd <= 0 && (v.see > 0 || dist < 40)) chooseAtk(V, dist);
-      //  keeps the orbit topped up while he walks: a wall as much as ammunition
-      if (v.phase >= 2 && v.orbit.length < 2 && rnd() < dt * 0.35) lift(V, 2);
+      { const gx = G.x - v.x, gz = G.z - v.z, gd = Math.hypot(gx, gz) || 1;
+        if (G.hold && gd < G.standoff + 3) step(V, v.x, v.z, 0, dt);
+        else step(V, G.x - gx / gd * G.standoff, G.z - gz / gd * G.standoff, G.speed, dt);
+        if (!known) { lookX = G.x; lookZ = G.z; } }
+      if (v.atkCd <= 0 && known && (v.see > 0 || dist < 40)) {
+        const k = VM.pickAttack(V, dist, { mind: mindReady(V, v.tgt, dist) });
+        if (k) startAtk(V, k); else v.atkCd = Math.max(v.atkCd, 0.8);
+      }
+      //  keeps the orbit topped up while he walks: a wall as much as ammunition —
+      //  and when the plan is to throw, he takes up what he will throw
+      const wantCars = G.name === 'TELEKINESIS_THROW' || G.name === 'AREA_DENIAL' || G.name === 'FORCE_OUT_OF_COVER';
+      if (v.orbit.length < (wantCars ? 3 : 2) && (v.phase >= 2 || wantCars) && rnd() < dt * (wantCars ? 0.9 : 0.35) && M.energy >= VM.CONFIG.cost.lift) {
+        const got = lift(V, wantCars ? 2 : 1); M.energy -= got * VM.CONFIG.cost.lift;
+      }
       //  and when the court has thinned he breaks off and calls
       if (v.summonCd <= 0 && v.stT > 3 && !v.atk &&
           FL.retinueOf(E.dogs(), 'vec', -1) + FL.retinueOf(E.gorgons(), 'vec', -1) < V_RET.dogs) {
@@ -575,6 +565,7 @@ function startAtk(V, kind) {
   const v = V.vec;
   const side = V.env.random() < 0.5 ? 0 : 1;
   v.atk = { kind, t: 0, side, phase: 0, hit: 0, sfx: 0, got: [], r0: 0, tg: kind === 'mind' ? (v.tgt || v.near) : null };
+  if (V.mind) VM.log(V.mind, V.env.now(), 'Attack: ' + kind + '.');
   v.st = 'combat'; v.stT = 0;
   if (kind === 'wave' || kind === 'mind') V.env.on.charge(v, kind);
 }
@@ -630,9 +621,10 @@ function runAtk(V, dt) {
         const d = Math.hypot(t.x - v.x, t.z - v.z);
         if (!(d > r0 - 0.6 && d <= r1 + 0.6) || !(d < V_WAVE_R) || !(Math.abs(t.y - v.y) < 4.2)) continue;
         a.got.push(t);
-        if (t.y - E.supportHeight(t.x, t.z, t.y + 0.3) > V_WAVE_JUMP) { if (E.on.dodge) E.on.dodge(v, t); continue; }
-        const f = 1 - d / V_WAVE_R;
-        E.hit(v, t, 'wave', Math.round(V_WAVE_DMG * (0.45 + 0.55 * f)), (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
+        if (t.y - E.supportHeight(t.x, t.z, t.y + 0.3) > V_WAVE_JUMP) { VM.noteDodge(V, t); if (E.on.dodge) E.on.dodge(v, t); continue; }
+        const f = 1 - d / V_WAVE_R, dmg = Math.round(V_WAVE_DMG * (0.45 + 0.55 * f));
+        E.hit(v, t, 'wave', dmg, (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 5.5 * f, 6.5 * f + 2.2, 0);
+        VM.noteHit(V, t, 'wave', dmg);
       }
     }
   } else if (a.kind === 'limb') {
@@ -656,6 +648,7 @@ function runAtk(V, dt) {
         if (!(d < V_LIMB_R * (0.5 + ext01(v.armExt[i]))) || !(Math.abs(t.y - v.y) < 3.6)) continue;
         a.got.push(t); a.hit = 1;
         E.hit(v, t, 'limb', V_LIMB_DMG, (t.x - v.x) / Math.max(1, d), (t.z - v.z) / Math.max(1, d), 2.6, 4.2, 0.7);
+        VM.noteHit(V, t, 'limb', V_LIMB_DMG);
       }
     } else {
       const u = (a.t - act) / A.rec;
@@ -695,7 +688,7 @@ function runAtk(V, dt) {
         if (t1 && !t1.dead && d1 < V_MIND_R && gap >= V_MIND_GAP && sees(V, t1)) {
           t1.psyAt = E.now(); V.mindT = E.now();
           E.mind(v, t1, V_MIND_MS);
-        } else if (E.on.miss) E.on.miss(v);
+        } else { VM.noteMiss(V); if (E.on.miss) E.on.miss(v); }
       }
     } else {
       const u = (a.t - act) / A.rec;
@@ -763,7 +756,10 @@ function hurt(V, dmg, fromX, fromZ) {
   const mult = v.vuln > 0 ? 2.5 : 1;
   v.hp -= dmg * mult;
   v.awake = true;
-  v.hasT = true; v.tx = fromX; v.tz = fromZ; v.seeT = E.now();
+  //  FB§2.4: the round tells him the way it came, not the place (his mind's estimate)
+  if (!V.mind) V.mind = VM.makeMind(V.difficulty);
+  const est = VM.onHurt(V, dmg * mult, fromX, fromZ);
+  v.hasT = true; v.tx = est.x; v.tz = est.z; v.seeT = E.now();
   //  §65: he is very hard to interrupt, and only while he is already exposed
   if (v.vuln > 0 && dmg * mult > 60) v.stagger = 1;
   else v.stagger = Math.max(v.stagger, 0.12);
@@ -773,8 +769,13 @@ function hurt(V, dmg, fromX, fromZ) {
   //  §53: hurting him drives everything of his
   v.cmdT = 0;
   //  Shot from a distance he cannot answer, he simply stops being over there —
-  //  and the court comes with him.
-  if (Math.hypot(fromX - v.x, fromZ - v.z) > V_BLINK_MIN && v.blinkCd <= 0) blinkTo(V, fromX, fromZ);
+  //  and the court comes with him: to where he thinks it came from (not
+  //  exactly), and only if he has the strength for it.
+  if (Math.hypot(fromX - v.x, fromZ - v.z) > V_BLINK_MIN && v.blinkCd <= 0 && V.mind.energy >= VM.CONFIG.cost.blink) {
+    V.mind.energy -= VM.CONFIG.cost.blink;
+    VM.log(V.mind, E.now(), 'Reposition through the ground, toward the shot (estimated).');
+    blinkTo(V, est.x, est.z);
+  }
 }
 //  §7/§45: the arrival is loud on purpose. He opens the ground where he was
 //  and again where he lands, so it never reads as a teleport in the cheap sense.
@@ -798,11 +799,12 @@ function blinkTo(V, tx, tz) {
     for (const o of arr) {
       if (!o.live || o.dead || o.lord !== tag) continue;
       let nx = o.x + dx, nz = o.z + dz;
-      if (!E.clearAt(nx, nz, 1.2)) {
+      //  (and where the formation does not fit, somewhere about him that does — a few tries)
+      for (let k = 0; k < 6 && !E.clearAt(nx, nz, 1.2); k++) {
         const a3 = rnd() * 6.2832, rr = V_CLEAR + 4 + rnd() * 10;
         nx = spot.x + Math.sin(a3) * rr; nz = spot.z + Math.cos(a3) * rr;
-        if (!E.clearAt(nx, nz, 1.2)) continue;
       }
+      if (!E.clearAt(nx, nz, 1.2)) continue;
       E.on.rift(o.x, o.z, 2.4, 2.0);
       o.x = o.rx = nx; o.z = o.rz = nz; o.y = E.supportHeight(nx, nz, 1);
       o.hasT = true; o.tx = tx; o.tz = tz; o.seeT = now;
@@ -852,9 +854,11 @@ const q100 = (x) => Math.round((x || 0) * 100);
 //  easing toward·100 — head yaw, head pitch, hover, crown, arch, arms up (2),
 //  arms out (2), grip, spread, mouth — seen ago·10 (−1: nothing known), what
 //  he hunts x·10, z·10, and the last thing that happened (a count, and what:
-//  EV) with where (the blink: whom he came for)]
-const SNAP_N = 30;
-function snapRow(V) {
+//  EV) with where (the blink: whom he came for), what he holds — and, in the
+//  whole words once a second (withMind), his mind in five numbers
+//  (vecna_mind.js summary: goal, state, tactic, how sure·100, energy)]
+const SNAP_N = 30, SNAP_MIND = 5;
+function snapRow(V, withMind) {
   const v = V.vec;
   if (!v.live) return null;
   const now = V.env.now(), a = v.atk;
@@ -865,7 +869,7 @@ function snapRow(V) {
     q100(v.headYawWant), q100(v.headPitchWant), q100(v.hoverWant), q100(v.flareWant), q100(v.archWant),
     q100(v.armUpWant[0]), q100(v.armUpWant[1]), q100(v.armExtWant[0]), q100(v.armExtWant[1]), q100(v.gripWant), q100(v.spreadWant), q100(v.mawWant),
     v.hasT ? Math.round(Math.min(600, Math.max(0, now - v.seeT)) * 10) : -1, Math.round(v.tx * 10), Math.round(v.tz * 10),
-    V.ev, V.evKind, Math.round(v.x * 10), Math.round(v.z * 10), v.orbit.length];
+    V.ev, V.evKind, Math.round(v.x * 10), Math.round(v.z * 10), v.orbit.length].concat(withMind ? VM.summary(V) : []);
 }
 //  what he holds: per car [wreck, angle·100, radius·10, height·10, spin·100, rise·100, rest height·10]
 function orbitRows(V) {
@@ -889,7 +893,7 @@ function flightRows(V) {
 const FULL_N = 21;
 function fullState(V) {
   const v = V.vec, now = V.env.now();
-  const out = { cd: Math.round(Math.max(0, Math.min(6000, V.spawnCd)) * 10), v: null, o: [], t: [] };
+  const out = { cd: Math.round(Math.max(0, Math.min(6000, V.spawnCd)) * 10), v: null, o: [], t: [], m: V.mind ? VM.fullState(V) : null };
   if (!v.live) return out;
   out.v = [Math.round(v.x * 100), Math.round(v.z * 100), Math.round(v.y * 100), Math.round((v.hd || 0) * 1000), Math.round(Math.max(0, v.hp) * 10),
     V_ST.indexOf(v.st === 'combat' ? 'hunt' : v.st), Math.round(Math.min(600, v.stT) * 10), v.dead ? Math.round(v.deadT * 10) : -1, v.awake ? 1 : 0, v.phase | 0,
@@ -906,6 +910,7 @@ function fullOk(f) {
   if (f.v !== null && (!Array.isArray(f.v) || f.v.length !== FULL_N || !f.v.every(Number.isFinite) || Math.abs(f.v[0]) > 50000 || Math.abs(f.v[1]) > 50000 || f.v[5] < 0 || f.v[5] >= V_ST.length)) return false;
   if (!Array.isArray(f.o) || f.o.length % 8 || f.o.length > V_ORBIT_MAX * 8 || !f.o.every(Number.isFinite)) return false;
   if (!Array.isArray(f.t) || f.t.length % 11 || f.t.length > 20 * 11 || !f.t.every(Number.isFinite)) return false;
+  if (f.m !== undefined && f.m !== null && !VM.fullOk(f.m)) return false;
   return true;
 }
 //  (the wrecks he holds and throws are marked so: they are up in the air)
@@ -914,6 +919,7 @@ function adoptFull(V, f) {
   V.thrown.length = 0; v.orbit = [];
   v.live = false; v.atk = null;
   V.spawnCd = f.cd / 10;
+  VM.adoptFull(V, f.m, V.difficulty);
   if (!f.v) { E.on.gone(v); return; }
   const r = f.v, x = r[0] / 100, z = r[1] / 100;
   Object.assign(v, {
@@ -928,7 +934,7 @@ function adoptFull(V, f) {
     wx: x, wz: z, wanderT: 0, cmdT: r[20] / 10, mentalT: r[16] / 10,
     orbit: [], stepBeat: -1, voiceT: r[17] / 10, lod: 0, awake: !!r[8],
     netX: x, netZ: z, netH: r[3] / 1000, rx: x, rz: z, rspd: 0, hpHold: 0,
-    dodgeX: 0, dodgeZ: 0, lastPX: x, lastPZ: z, summonCd: r[18] / 10, blinkCd: r[19] / 10,
+    summonCd: r[18] / 10, blinkCd: r[19] / 10,
     lifted: 0, cmdDone: 0, chanDone: 0,
   });
   if (v.dead) v.hp = 0;
@@ -948,7 +954,7 @@ function adoptFull(V, f) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     V_HP, V_SIGHT, V_LINK, V_CLEAR, V_CMD_DOG, V_CMD_GOR, V_HEIGHT, V_HIP, V_EXT, V_WAVE_R, V_WAVE_DMG, V_WAVE_SPEED, V_WAVE_JUMP, V_LIMB_R, V_LIMB_DMG, V_MIND_R, V_MIND_MS, V_MIND_GAP, V_MIND_CD,
-    V_THROW_DMG, V_ORBIT_MAX, V_MEM, V_PHASE, V_SUMMON_CD, V_BLINK_MIN, V_BLINK_CD, V_BLINK_STAND, V_TAKE, V_RET, V_ST, V_ATK, ATK_KINDS, EV, SNAP_N, FULL_N,
+    V_THROW_DMG, V_ORBIT_MAX, V_MEM, V_PHASE, V_SUMMON_CD, V_BLINK_MIN, V_BLINK_CD, V_BLINK_STAND, V_TAKE, V_RET, V_ST, V_ATK, ATK_KINDS, EV, SNAP_N, SNAP_MIND, FULL_N,
     makeVecna, tell, spawnSpot, spawnVecna, clearVecna, command, ring, summon, hiveCount, pickWrecks, lift, dropOrbit, hurl, flights, orbitStep,
     sees, see, phaseOf, think, chooseAtk, mindReady, startAtk, runAtk, step, ease, hurt, blinkTo, kill, stock, fighting, ext01,
     snapRow, orbitRows, flightRows, fullState, fullOk, adoptFull,
