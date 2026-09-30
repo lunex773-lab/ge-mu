@@ -9,7 +9,7 @@
 //    node server/test/cognition.test.js
 
 import BB from '../../shared/biobrain.js';
-import { Cognition, messages, parse, LIMITS, MODEL, MODELS } from '../cognition.js';
+import { Cognition, messages, parse, schemaFor, LIMITS, MODEL, MODELS } from '../cognition.js';
 
 const results = []; let pass = 0, fail = 0;
 function check(name, ok, detail) { if (ok) pass++; else fail++; results.push((ok ? '  ok   ' : '  FAIL ') + name + (detail ? '\n         ' + detail : '')); }
@@ -53,6 +53,11 @@ function fakeAI(answer) {
     check('a good answer is taken: its strategy leans his for a while, its line is his to say — and it asked the model named, in JSON mode',
       r.why === 'ok' && v.strategy === 'COUNTER' && v.intent === 'bait' && took && B.strat.llm && B.strat.llm.name === 'COUNTER' && B.say.some((q) => q.src === 'llm' && q.text === 'また跳ぶのだろう？') &&
       ai.asked[0].model === MODEL && ai.asked[0].input.response_format.type === 'json_schema', JSON.stringify(v));
+    const sc = ai.asked[0].input.response_format.json_schema, flayer = schemaFor(BB.llmContext(BB.make('mind_flayer'), 'phase'));
+    check('… held to a schema of this boss\'s own: only its strategies and intents to choose from, and always a line',
+      sc.properties.strategyProposal.properties.strategy.enum.length === 6 && sc.properties.strategyProposal.properties.strategy.enum.indexOf('COUNTER') >= 0 && sc.properties.strategyProposal.properties.strategy.enum.indexOf('SEND_MINIONS') < 0 &&
+      flayer.properties.strategyProposal.properties.strategy.enum.indexOf('SEND_MINIONS') >= 0 && sc.properties.intent.properties.primary.enum.indexOf('bait') >= 0 && sc.required.indexOf('dialogue') >= 0,
+      JSON.stringify(sc.properties.strategyProposal.properties.strategy.enum) + ' / ' + JSON.stringify(flayer.properties.strategyProposal.properties.strategy.enum));
   }
 
   // ---- how often -----------------------------------------------------------------------------

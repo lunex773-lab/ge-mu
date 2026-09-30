@@ -38,8 +38,18 @@ export const SCHEMA = {
     strategyProposal: { type: 'object', properties: { strategy: { type: 'string' }, reason: { type: 'string' }, confidence: { type: 'number' } }, required: ['strategy'] },
     dialogue: { type: 'string' },
   },
-  required: ['intent', 'strategyProposal'],
+  required: ['intent', 'strategyProposal', 'dialogue'],
 };
+//  … for this boss: its own strategies and intents as the only choices, and a
+//  line always (held to only what is required, a model leaves out the rest —
+//  live, the first answers had an intent and nothing else)
+const pick = (a, n) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, n) : []);
+export function schemaFor(ctx) {
+  const c = ctx || {}, s = JSON.parse(JSON.stringify(SCHEMA)), st = pick(c.strategies, 12), it = pick(c.intents, 16);
+  if (st.length) s.properties.strategyProposal.properties.strategy.enum = st;
+  if (it.length) s.properties.intent.properties.primary.enum = it;
+  return s;
+}
 
 //  AC§21: the character, what it has perceived and believes (never the truth), what it may choose
 export function messages(ctx) {
@@ -101,7 +111,7 @@ export class Cognition {
       let timer = null;
       try {
         const input = { messages: messages(ctx), max_tokens: this.L.maxTokens };
-        if (!this.noSchema.has(model)) input.response_format = { type: 'json_schema', json_schema: SCHEMA };
+        if (!this.noSchema.has(model)) input.response_format = { type: 'json_schema', json_schema: schemaFor(ctx) };
         const run = this.ai.run(model, input);
         const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error('timeout')), this.L.timeoutMs); });
         const v = parse(await Promise.race([run, late]));
