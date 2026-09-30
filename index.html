@@ -1843,11 +1843,22 @@
         }
 
         const INTENTS = ['observe', 'probe', 'pressure', 'bait', 'counter', 'overwhelm', 'withdraw', 'send_minions', 'hold_ground', 'taunt'];
+        const WHY = {
+          encounter: 'a player has just been met', pattern: 'the player keeps doing the same thing (see beliefs)',
+          surprise: 'what it predicted the player would do just proved wrong', phase: 'the fight has entered a new phase',
+          hurt_bad: 'it has just been badly hurt', minions_gone: 'its minions are all gone', player_down: 'the player just went down',
+          read: 'it senses the player has read its pattern', desperate: 'it is cornered, with nothing left', strategy: 'its strategy has stopped working',
+        };
+        function voiceOf(id) {
+          const L = LINES[id] || {}, out = [];
+          for (const k of Object.keys(L)) { const l = L[k].find((x) => x.indexOf('{') < 0); if (l && out.length < 5) out.push(l); }
+          return out;
+        }
         function llmContext(B, why) {
           const g = genomeOf(B), o = B.focus !== null ? B.opp[B.focus] : null, R = B.focus !== null ? B.rel[B.focus] : null;
           const facts = Object.keys(B.sem).filter((k) => B.sem[k].n >= 2).slice(0, 5).map((k) => k + ' ' + B.sem[k].p.toFixed(2));
           return {
-            boss: g.id, name: g.name, why: String(why || ''),
+            boss: g.id, name: g.name, why: String(why || ''), why_means: WHY[why] || '', voice: voiceOf(g.id),
             character: traitsOf(g), phase: g.phases[B.phase], hp: r2(B.hp), minions: B.minions,
             affect: moodOf(B), state: B.meta.state, confidence: r2(B.meta.confidence), uncertainty: r2(B.meta.uncertainty),
             strategy: B.strat.name, strategies: g.strategies.slice(), intents: INTENTS.slice(),

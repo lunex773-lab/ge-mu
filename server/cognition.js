@@ -56,12 +56,17 @@ export function messages(ctx) {
   const c = ctx || {};
   const sys = 'You are the slow, reflective mind of ' + String(c.name || 'a boss') + ', a boss in a Japanese open-city action game. ' +
     'Stay in character: ' + String(c.character || '') + '. ' +
-    'You are shown only what this boss has perceived and believes, which may be wrong. Reflect briefly, then answer with JSON only: ' +
+    'You are shown only what this boss has perceived and believes, which may be wrong. ' +
+    (c.why_means ? 'You are thinking now because ' + String(c.why_means) + ': weigh that first. ' : '') +
+    'Reflect briefly, then answer with JSON only: ' +
     '{"internalAssessment":{"situation":"...","predictedPlayerAction":"...","uncertainty":0.0},' +
     '"intent":{"primary":"<one of: ' + (c.intents || []).join(', ') + '>"},' +
     '"strategyProposal":{"strategy":"<one of: ' + (c.strategies || []).join(', ') + '>","reason":"<short, English>","confidence":0.0},' +
-    '"dialogue":"<one line the boss says aloud, in Japanese, at most 24 characters, in its own voice>"}';
-  return [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(c).slice(0, LIMITS.maxCtx) }];
+    '"dialogue":"<one line the boss says aloud to the player, in Japanese, at most 24 characters>"}. ' +
+    'The line is in this boss\'s own voice — never polite (no です/ます), never explaining itself — like these lines of its own: ' +
+    (Array.isArray(c.voice) ? c.voice.slice(0, 5).map((l) => '「' + String(l).slice(0, 30) + '」').join(' ') : '');
+  //  (its voice and the reason are in the instructions already)
+  return [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(Object.assign({}, c, { voice: undefined, why_means: undefined })).slice(0, LIMITS.maxCtx) }];
 }
 
 //  what the model said, as an object (Workers AI gives an object in JSON
