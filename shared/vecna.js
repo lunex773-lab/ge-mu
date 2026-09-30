@@ -373,7 +373,7 @@ function phaseOf(hp) {
 function think(V, dt) {
   const E = V.env, v = V.vec, rnd = E.random, now = E.now();
   v.stT += dt;
-  v.atkCd = Math.max(0, v.atkCd - dt);
+  v.atkCd = Math.max(0, v.atkCd - dt * (V.mind && V.mind.bio ? V.mind.bio.P.tempo : 1));   // (his BIO-BRAIN's tempo: slower in divine calm, quicker in anger)
   v.stagger = Math.max(0, v.stagger - dt * 1.5);
   v.vuln = Math.max(0, v.vuln - dt);
   v.mentalT -= dt;

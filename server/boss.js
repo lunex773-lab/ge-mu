@@ -29,6 +29,7 @@ import { fileable } from './mindstore.js';
 import BR from '../lab/core/boss_runner.js';          // the lab's modules are CommonJS: each is its module.exports
 import NEURAL from '../lab/core/neural.js';
 import BODY from '../lab/core/boss_body.js';
+import BB from '../shared/biobrain.js';
 
 const { NeuralCore } = NEURAL, { ATTACKS } = BODY;
 
@@ -72,6 +73,11 @@ export class RoomBoss {
       onSwing: () => {},
       onDecision: () => {},
       onSave: () => this.remember(),       // half a minute of fighting
+      //  his BIO-BRAIN (shared/biobrain.js): rage, pursuit, pride — and his voice,
+      //  heard by whoever is on this side of the tear
+      BB,
+      onSay: (u) => this.say(u),
+      bioRecall: (id) => this.room.creatures.bioRecall('beelzebub', id),
     };
     this.fightId = null;                   // the candidate this fight is run with (null: none came)
     this.savedT = -Infinity;               // his time when what he learned was last sent to the memory
@@ -211,6 +217,8 @@ export class RoomBoss {
     }
     this.savedT = this.t;
     if (any) this.room.ask({ k: 'save', players });
+    //  and what his BIO-BRAIN remembers of each of them (rage, respect, their habits), for the next fight
+    if (ai.bio) for (const k in ai.bio.opp) { const rec = BB.memoryOf(ai.bio, k); if (rec) C.bioSave('beelzebub', k, rec); }
   }
   //  his time (s) as the time of day (ms), for the memory
   wallOf(t) { return t < 0 ? -Infinity : Math.round((this.last || 0) - (this.t - t) * 1000); }
@@ -277,13 +285,21 @@ export class RoomBoss {
     if (h && h.length >= 4) BR.heard(this.ai, from, h[h.length - 3], h[h.length - 2], h[h.length - 1]);
   }
 
-  //  what everyone is told: the game's own snapshot of him (bzbSnapshot), or null
+  //  what everyone is told: the game's own snapshot of him (bzbSnapshot), or
+  //  null — and, after it, how his BIO-BRAIN stands (BB.summary: strategy,
+  //  phase, rage, fear, calm, confidence), for the bar over his head
   snapshot() {
     const s = this.st; if (!s) return null;
     const h = (((s.hd || 0) % 6.2832) + 6.2832) % 6.2832;
-    return [Math.round(s.x * 10), Math.round(s.z * 10), Math.round(s.alt * 10), Math.round(h * HDQ),
+    const k = [Math.round(s.x * 10), Math.round(s.z * 10), Math.round(s.alt * 10), Math.round(h * HDQ),
       Math.max(0, Math.round(s.hp)), Math.round(s.hpMax), MODES.indexOf(s.mode),
       s.atkSeq, KINDS.indexOf(s.atkKind), PHASES.indexOf(s.atkPhase), s.seed];
+    if (this.ai && this.ai.bio) k.push(...BB.summary(this.ai.bio));
+    return k;
+  }
+  //  something he says: to everyone on this side of the tear
+  say(u) {
+    for (const [id, p] of this.room.players) if (!p.w) this.room.send(id, 'say', { w: 'bzb', t: u.text, c: u.sit, src: u.src || 'fast' });
   }
 }
 export { ATTACKS };

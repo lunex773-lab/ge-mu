@@ -27,6 +27,7 @@
 //  One mind, M, per VECNA (V.mind); all of it plain data, handed over whole.
 
 const RULES = require('./rules.js');
+const BB = require('./biobrain.js');
 
 // ---- one place for every knob (FB§81) ------------------------------------------------
 const CONFIG = {
@@ -100,8 +101,19 @@ function makeMind(difficulty) {
     dir: { hits: [], relief: 0, pressure: 1 },   // FB§72: the director's bookkeeping
     orders: 0, lastOrder: null,
     log: [], logN: 0,
+    //  his BIO-BRAIN (shared/biobrain.js, VECNA's genome — ACIS §6): feeling,
+    //  the player as he models them, his strategy, divine calm, his voice
+    bio: BB.make('vecna'), bioSaveT: 0, bioApT: -99, bioEscT: -99,
   };
 }
+//  his tactics, in his BIO-BRAIN's terms
+const TAC_TAGS = {
+  DIRECT_ATTACK: ['attack'], SHOCKWAVE: ['attack', 'area'], TENTACLE_ATTACK: ['attack'], PSYCHIC_BLAST: ['psychic', 'probe'],
+  TELEKINESIS_THROW: ['ranged'], AREA_DENIAL: ['area', 'deceive'], FORCE_OUT_OF_COVER: ['area', 'counter'],
+  MINION_ATTACK: ['command'], MINION_FLANK: ['command', 'deceive'], SURROUND: ['command', 'area'], CUT_OFF_ESCAPE: ['counter', 'command'],
+  AMBUSH: ['deceive', 'counter', 'hold'], REPOSITION: ['reposition'], RETREAT: ['retreat'], FAKE_RETREAT: ['feint', 'deceive', 'counter'],
+  TEST: ['probe', 'observe'], SEARCH: ['observe'], MINION_SEARCH: ['command', 'observe'],
+};
 //  FB§51: every decision that matters, with when
 function log(M, now, msg) {
   M.log.push({ t: +now.toFixed(2), m: msg });
@@ -217,14 +229,29 @@ function sense(V, dt) {
         p.aggression += (clamp01(0.4 + toward * 0.12) - p.aggression) * 0.08;
         heatAt(M, t.x, t.z, 0.4);
       }
-      if (was < 2) { remember(M, now, 'seen', 1); if (p.seenAt < now - 8) log(M, now, 'Vision: ' + VIS[vis] + ' on ' + key + ' at ' + d.toFixed(0) + ' m.'); p.seenAt = now; }
+      if (was < 2) {
+        remember(M, now, 'seen', 1); if (p.seenAt < now - 8) log(M, now, 'Vision: ' + VIS[vis] + ' on ' + key + ' at ' + d.toFixed(0) + ' m.');
+        if (M.bio && (!M.bio.opp[key] || now - M.bio.opp[key].lastSeen > 20)) {
+          if (!M.bio.opp[key] && E.bioRecall) { const rec = E.bioRecall('vecna', t); if (rec) BB.recall(M.bio, key, rec); }
+          BB.event(M.bio, now, 'seen', { key, d, name: t.name });
+        }
+        p.seenAt = now;
+      }
+      if (M.bio && hh.vx !== undefined) {
+        //  (his BIO-BRAIN's view of them: coming on or going, and across)
+        const tv = -((t.x - v.x) * hh.vx + (t.z - v.z) * hh.vz) / Math.max(1, d), lv = ((t.x - v.x) * hh.vz - (t.z - v.z) * hh.vx) / Math.max(1, d);
+        BB.observe(M.bio, now, key, { d, vr: tv, vl: lv, cover: false });
+        if (tv > 4 && d < 40 && now - M.bioApT > 2) { M.bioApT = now; BB.event(M.bio, now, 'approach', { key, d, speed: tv }); }
+        if (tv < -3 && d > 20 && now - M.bioEscT > 6) { M.bioEscT = now; BB.event(M.bio, now, 'escape', { key, d }); }
+      }
       if (vis === 3 && d < bd) { bd = d; bt = t; }
     } else if (was >= 2) {
       //  lost: behind something (they broke his sight), or gone out of range
       remember(M, now, 'lost', 1);
       log(M, now, 'Vision lost on ' + key + (vis === 1 ? ' (obstructed).' : '.'));
       const p = model(M, key);
-      if (vis === 1) { p.cover += (1 - p.cover) * 0.12; episode(M, now, 'breaks_sight', 0.5); }
+      if (vis === 1) { p.cover += (1 - p.cover) * 0.12; episode(M, now, 'breaks_sight', 0.5); if (M.bio) BB.observe(M.bio, now, key, { d, vr: 0, vl: 0, cover: true }); }
+      if (M.bio) BB.event(M.bio, now, 'lost', { key });
     }
   }
   //  (for the body: the nearest he sees, else the nearest; and how far)
@@ -348,6 +375,7 @@ function onHurt(V, dmg, fromX, fromZ) {
   if (!seen) { M.meta.surprise = Math.min(1, M.meta.surprise + 0.25); if (d > 60) episode(M, now, 'long_range', 0.6); }
   else if (d < 14) episode(M, now, 'close_combat', 0.3);
   if (M.focus !== null) model(M, M.focus).shots++;
+  if (M.bio) BB.event(M.bio, now, 'hurt', { amt: dmg / (V.hpMax || 12600) * 4, key: M.focus, d });
   return { x, z };
 }
 //  what he and his court did to a player: the tactic's score (FB§8.4), and the
@@ -360,6 +388,7 @@ function noteHit(V, t, kind, dmg) {
   M.dir.hits.push({ t: now, k: keyOf(t), d: dmg });
   if (M.dir.hits.length > 40) M.dir.hits.shift();
   remember(M, now, 'hit_dealt', dmg / 20);
+  if (M.bio) BB.event(M.bio, now, 'hit', { key: keyOf(t), amt: dmg / 100, act: kind });
 }
 function noteDodge(V, t) {
   const M = V.mind; if (!M) return;
@@ -367,6 +396,7 @@ function noteDodge(V, t) {
   episode(M, now, 'jumps_wave', 1);
   M.meta.surprise = Math.min(1, M.meta.surprise + 0.2);
   log(M, now, keyOf(t) + ' went over the wave.');
+  if (M.bio) BB.event(M.bio, now, 'dodged', { key: keyOf(t), how: 'jump' });
 }
 function noteMiss(V) {
   const M = V.mind; if (!M) return;
@@ -374,11 +404,13 @@ function noteMiss(V) {
   episode(M, now, 'breaks_sight', 1);
   M.meta.surprise = Math.min(1, M.meta.surprise + 0.2);
   log(M, now, 'His mind found nothing: sight broken.');
+  if (M.bio) BB.event(M.bio, now, 'miss', { act: 'mind' });
 }
 function noteDeath(V, t) {
   const M = V.mind; if (!M) return;
   M.dir.relief = Math.max(M.dir.relief, CONFIG.reliefAfterDeath);
   log(M, V.env.now(), keyOf(t) + ' is down: a moment of quiet (the director).');
+  if (M.bio) BB.event(M.bio, V.env.now(), 'player_down', { key: keyOf(t) });
 }
 
 // ---- prediction (FB§7) -----------------------------------------------------------------
@@ -570,9 +602,12 @@ function plan(V) {
   const blocked = (k) => { const s = M.tac[k]; return s && s.block > now; };
   const val = (k) => { const s = M.tac[k]; return s ? 0.6 + s.val * 0.8 : 1; };
   //  (EV × confidence × fit × goal alignment − risk − cost − fairness cost)
+  //  (and his BIO-BRAIN leans each one: his strategy — observe, manipulate,
+  //  counter, destroy — and his feelings, ACIS §6.5)
+  const lean = (k) => (M.bio ? BB.bias(M.bio, TAC_TAGS[k] || []) * 0.6 : 0);
   const score = (k, ev, fit, goalsFor, risk, cost, fairCost) => {
     if (blocked(k)) return;
-    S[k] = ev * Math.max(0.15, conf) * fit * align(goalsFor) * val(k) - risk - cost - fairCost;
+    S[k] = ev * Math.max(0.15, conf) * fit * align(goalsFor) * val(k) - risk - cost - fairCost + lean(k);
   };
   const rep = (k) => (T.lastName === k ? T.reps * 0.12 : 0);        // FB§43: the same thing again and again becomes oppressive
   const jumpy = epi(M, 'jumps_wave'), sightBreaker = epi(M, 'breaks_sight'), longRange = epi(M, 'long_range'), roof = epi(M, 'rooftop');
@@ -596,7 +631,7 @@ function plan(V) {
   }
   //  not knowing where they are: find out
   if (!known || conf < 0.45) {
-    S.SEARCH = 0.5 + (1 - conf) * 0.4;
+    S.SEARCH = 0.5 + (1 - conf) * 0.4 + lean('SEARCH');
     if (court >= 1) score('MINION_SEARCH', 0.8, 1, ['HUNT_PLAYER', 'TEST_PLAYER', 'CONTROL_AREA'], 0, 0.02, 0);
     if (court >= 1 && conf > 0.08 && w < 0.4) score('TEST', 0.9, 1, ['TEST_PLAYER'], 0, 0.02, 0);   // FB§37: a cheap probe
     if (hotSpot(M, v)) score('AMBUSH', 0.8 + w * 0.3, 1, ['CREATE_AMBUSH'], 0, 0, 0);
@@ -623,6 +658,8 @@ function startTactic(V, name, sc) {
   }
   T.name = name; T.t = now; T.until = now + 4 + E.random() * 3; T.dealt = 0; T.conf0 = M.focusConf;
   T.prefer = null; T.hold = false; T.speed = 1.55 + (v.phase || 0) * 0.22;
+  //  ACIS §6.8 DIVINE CALM: in no hurry — each thing done for longer, walked to more slowly
+  if (M.bio && M.bio.meta.calm) { T.until += 3; T.speed *= 0.8; }
   if (!Number.isFinite(M.fx) || !Number.isFinite(M.fz)) { M.fx = v.x; M.fz = v.z; }       // (nothing believed yet: where he stands)
   const d = Math.max(1, Math.hypot(M.fx - v.x, M.fz - v.z)), ax = (M.fx - v.x) / d, az = (M.fz - v.z) / d;
   const tx = M.pred.cands ? M.pred.px : M.fx, tz = M.pred.cands ? M.pred.pz : M.fz;
@@ -737,6 +774,13 @@ function tick(V, dt) {
   if (M.acc.meta >= 1 / C.metacognitionRate) { M.acc.meta = 0; metacog(V); }
   if (M.acc.strat >= 1 / C.strategicRate) { M.acc.strat = 0; goals(V); }
   if (M.acc.tac >= 1 / C.tacticalRate) { M.acc.tac = 0; predict(V); plan(V); }
+  if (M.bio) {
+    const E = V.env, now = E.now(), v = V.vec;
+    BB.tick(M.bio, now, dt, { hp: v.hp / (V.hpMax || 12600), d: M.focus !== null ? Math.hypot(M.fx - v.x, M.fz - v.z) : null, minions: M.meta.court || 0, seen: M.meta.exposure || 0 });
+    const u = BB.utter(M.bio, now);
+    if (u && E.on && E.on.say) E.on.say(v, u);
+    if (E.bioSave && now - M.bioSaveT > 30) { M.bioSaveT = now; for (const k in M.bio.opp) { const rec = BB.memoryOf(M.bio, k); if (rec) E.bioSave('vecna', { id: k }, rec); } }
+  }
 }
 
 // ---- what his body asks ---------------------------------------------------------------
@@ -813,7 +857,7 @@ function fullState(V) {
   for (const k in M.tac) { const s = M.tac[k]; tc.push([TACTICS.indexOf(k), s.tries, s.wins, Math.round(s.val * 100)]); }
   const ep = [];
   for (const k in M.epi) ep.push([k.slice(0, 20), M.epi[k].n, Math.round(M.epi[k].s * 100)]);
-  return { e: Math.round(M.energy), pl: pl.slice(0, 6), tc: tc.slice(0, TACTICS.length), ep: ep.slice(0, 12), sr: Math.round(M.meta.successRate * 100) };
+  return { e: Math.round(M.energy), pl: pl.slice(0, 6), tc: tc.slice(0, TACTICS.length), ep: ep.slice(0, 12), sr: Math.round(M.meta.successRate * 100), b: M.bio ? BB.fullState(M.bio) : null };
 }
 function fullOk(f) {
   if (!f || typeof f !== 'object' || !Number.isFinite(f.e)) return false;
@@ -828,6 +872,7 @@ function adoptFull(V, f, difficulty) {
   for (const r of f.tc) { const k = TACTICS[r[0]]; if (k) M.tac[k] = { tries: r[1] | 0, wins: r[2] | 0, fails: 0, val: r[3] / 100, block: 0 }; }
   for (const r of f.ep) if (typeof r[0] === 'string') M.epi[r[0]] = { n: r[1] | 0, s: r[2] / 100, t: 0 };
   M.meta.successRate = f.sr / 100;
+  if (f.b) { const b = BB.adoptFull(f.b); if (b) M.bio = b; }
   return M;
 }
 
@@ -836,6 +881,6 @@ if (typeof module !== 'undefined' && module.exports) {
     CONFIG, DIFFICULTY, VIS, STATES, GOALS, TACTICS, ORDERS, PHASE_NAMES,
     makeMind, keyOf, believe, bestOf, sense, hiveStep, order, commandCourt, onHurt, noteHit, noteDodge, noteMiss, noteDeath,
     predict, checkPredictions, metacog, evalTactic, goals, softPick, plan, startTactic, director, fair, tick,
-    pickAttack, goal, debugInfo, phaseName, summary, fullState, fullOk, adoptFull, model, weight, episode, hotSpot, log,
+    pickAttack, goal, debugInfo, phaseName, summary, fullState, fullOk, adoptFull, model, weight, episode, hotSpot, log, TAC_TAGS,
   };
 }

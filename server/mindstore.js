@@ -49,6 +49,11 @@
 //  Storage: anything with the Durable Object storage's get / put / delete
 //  (mind.js passes ctx.storage; the tests a Map). Keys: 'es' the readout's
 //  learning, 'idx' who is remembered and when, 'p:<name>' each player.
+//
+//  And what the three great ones' BIO-BRAINs (shared/biobrain.js memoryOf)
+//  remember of each player between fights — VECNA, the Mind Flayer and
+//  Beelzebub, each their own record: 'b:<name>' { t, vecna, mind_flayer,
+//  beelzebub }, 'bidx' who and when (the same cap, the longest unseen forgotten).
 
 import BRAIN from './brain.js';
 import RNG from '../lab/core/rng.js';
@@ -89,6 +94,13 @@ export function distance(theta) { let s = 0; for (let d = 0; d < DIM; d++) s += 
 
 //  a name the memory files a player under: the name over their head — not
 //  a room's id for someone who gave none, which means nothing in another room
+export const BIO_BOSSES = ['vecna', 'mind_flayer', 'beelzebub'];
+export const MAX_BIO = 1500;           // bytes: one boss's record of one player, as JSON (about 200 is usual)
+//  one boss's record, as biobrain.js memoryOf makes it (the brain checks each field again on recall)
+export function bioOk(r) {
+  if (!r || typeof r !== 'object' || r.v !== 1) return false;
+  try { return JSON.stringify(r).length <= MAX_BIO; } catch (x) { return false; }
+}
 export function fileable(name) { return typeof name === 'string' && name.length > 0 && name.length <= 20 && !/^p[0-9a-z]{6}$/.test(name); }
 //  an entry as stored: { t: wall ms, m: the model (serialize()), f: fairness level }
 export function entryOk(e) {
@@ -104,6 +116,7 @@ export class MindStore {
   }
 
   async ready() {
+    if (!this.bidx) this.bidx = (await this.st.get('bidx')) || {};
     if (!this.es) {
       const es = await this.st.get('es');
       this.es = es && es.v === 1 && es.mark === MARK && Array.isArray(es.theta) && es.theta.length === DIM && Array.isArray(es.acc) ? es : this.fresh();
@@ -123,6 +136,8 @@ export class MindStore {
   //    { k: 'report', id, s, n, for? } → (a new candidate for `for`, when given)   how a fight went
   //    { k: 'save', players }        → nothing                          what was learned of players
   //    { k: 'stats' }                → { k: 'stats', … }
+  //    { k: 'bioget', names }        → { k: 'bio', players }            what the great ones remember of these players
+  //    { k: 'bioput', players }      → nothing                          { name: { boss: record } } — merged, boss by boss
   async ask(asks) {
     await this.ready();
     const out = [];
@@ -151,6 +166,11 @@ export class MindStore {
           this.idx[name] = touched[name].t;
         }
       } else if (a.k === 'stats') out.push(Object.assign({ k: 'stats' }, this.stats()));
+      else if (a.k === 'bioget') {
+        const players = {};
+        for (const n of Array.isArray(a.names) ? a.names.slice(0, 16) : []) if (fileable(n) && this.bidx[n] !== undefined) { const e = await this.st.get('b:' + n); if (e) players[n] = e; }
+        out.push({ k: 'bio', players });
+      } else if (a.k === 'bioput') await this.bioPut(a.players);
     }
     if (touched && Object.keys(touched).length) {
       const puts = { idx: this.idx };
@@ -168,6 +188,28 @@ export class MindStore {
     return out;
   }
 
+  async bioPut(players) {
+    const puts = {};
+    let any = false;
+    for (const [name, recs] of Object.entries(players && typeof players === 'object' ? players : {}).slice(0, 16)) {
+      if (!fileable(name) || !recs || typeof recs !== 'object') continue;
+      const had = (this.bidx[name] !== undefined && await this.st.get('b:' + name)) || {};
+      let changed = false;
+      for (const b of BIO_BOSSES) if (bioOk(recs[b])) { had[b] = recs[b]; changed = true; }
+      if (!changed) continue;
+      had.t = this.now(); this.bidx[name] = had.t; puts['b:' + name] = had; any = true;
+    }
+    if (!any) return;
+    const names = Object.keys(this.bidx);
+    if (names.length > MAX_PLAYERS) {
+      names.sort((x, y) => this.bidx[x] - this.bidx[y]);
+      const gone = names.slice(0, names.length - MAX_PLAYERS);
+      for (const n of gone) { delete this.bidx[n]; delete puts['b:' + n]; }
+      await this.st.delete(gone.map((n) => 'b:' + n));
+    }
+    puts.bidx = this.bidx;
+    await this.st.put(puts);
+  }
   async player(name) {
     if (this.idx[name] === undefined) return null;
     const e = await this.st.get('p:' + name);

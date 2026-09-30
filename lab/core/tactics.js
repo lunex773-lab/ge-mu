@@ -174,7 +174,21 @@ class TacticalBrain {
       if (i === A.attack || i === A.use_skill) p.cd = 0.5 * v[F.self_cooldown];
       u[i] = p.rule + p.neural + p.pred + p.pos + p.threat - p.risk - p.cd;
     }
-    const pick = this.select(u, fair.temperature(), rng, now);
+    //  His BIO-BRAIN (shared/biobrain.js, when whoever runs him gives him one:
+    //  ctx.bio { add, temp, topK }): his strategy and his feelings lean each
+    //  action, and his rage narrows how many he weighs — only the few best
+    //  stay in the running (ACIS AC§8.6: stronger, and easier to read)
+    const bio = ctx.bio;
+    if (bio) {
+      for (let i = 0; i < NA; i++) if (u[i] > -Infinity) { const a = bio.add[ACTIONS[i]] || 0; u[i] += a; P[i].bio = a; }
+      if (bio.topK && bio.topK < NA) {
+        const order = [];
+        for (let i = 0; i < NA; i++) if (u[i] > -Infinity) order.push(i);
+        order.sort((a, b) => u[b] - u[a]);
+        for (const i of order.slice(bio.topK)) if (i !== this.current) u[i] = -Infinity;
+      }
+    }
+    const pick = this.select(u, fair.temperature() * (bio ? bio.temp : 1), rng, now);
 
     // ---- the guardian's leash overrides everything (B5) -------------------
     const dec = this.decision;
@@ -274,7 +288,7 @@ class TacticalBrain {
         return { action: ACTIONS[i], utility: +this.util[i].toFixed(3), commit: i === this.stuck ? this.o.stick : 0,
                  rule: +p.rule.toFixed(3), neural: +p.neural.toFixed(3),
                  prediction: +p.pred.toFixed(3), position: +p.pos.toFixed(3), threat: +p.threat.toFixed(3),
-                 risk: +p.risk.toFixed(3), cooldown: +p.cd.toFixed(3) };
+                 risk: +p.risk.toFixed(3), cooldown: +p.cd.toFixed(3), bio: +(p.bio || 0).toFixed(3) };
       }),
     };
   }

@@ -28,6 +28,7 @@ import DOG from '../shared/dogs.js';
 import GOR from '../shared/gorgons.js';
 import FL from '../shared/flayers.js';
 import VC from '../shared/vecna.js';
+import BB from '../shared/biobrain.js';
 import CITY from '../shared/city.js';
 import WR from '../shared/wrecks.js';
 import TF from '../shared/traffic.js';
@@ -82,6 +83,9 @@ export class RoomDogs {
       wrecks: () => this.wrecks,
       master: (this.masterFn = (tag, slot) => this.master(tag, slot)),
       vec: () => this.V.vec,
+      //  what the great ones' BIO-BRAINs remember of a player, kept by name for the next fight (creatures.js)
+      bioRecall: (boss, t) => this.room.creatures.bioRecall(boss, t),
+      bioSave: (boss, t, rec) => this.room.creatures.bioSave(boss, t, rec),
     };
     const share = (x, z, dmg) => FL.shareDamage(this.M, x, z, dmg);
     const moved = (k) => { if (k >= 0 && !this.mine.has(k)) this.mine.set(k, null); };
@@ -102,7 +106,8 @@ export class RoomDogs {
       //  (the crater itself everyone over there sees in the flayer's swing: 'dv')
       stomp: (m, cx, cz, hits) => { for (const h of hits) this.blow(h.t, h.dmg, h.kb, cx, cz, 0); },
       on: { roar: noop, summon: noop, wind: noop, swing: noop, launch: noop, fly: noop, far: noop, panic: noop, hurt: noop, death: noop, rift: noop, gone: noop,
-        hold: (m) => moved(m.holdW), land: (T) => moved(T.k), drop: (w, k) => moved(k) },
+        hold: (m) => moved(m.holdW), land: (T) => moved(T.k), drop: (w, k) => moved(k),
+        say: (m, u) => this.voice('mf', m.slot, u) },
     }));
     this.V = VC.makeVecna(Object.assign({}, world, {
       dogs: () => this.D.dogs, gorgons: () => this.G.gorgons, flayers: () => this.M.flayers, spawnDog, spawnGorgon,
@@ -110,7 +115,8 @@ export class RoomDogs {
       mind: (v, t, ms) => this.psy(t, ms),
       on: { lift: (v, ks) => { for (const k of ks) moved(k); }, hurl: (v, k) => moved(k), land: (T) => moved(T.k), drop: (ks) => { for (const k of ks) moved(k); },
         charge: noop, wave: noop, limb: noop, psy: noop, phase: noop, whisper: noop, voice: noop, command: noop, grew: noop, ordered: noop,
-        hurt: noop, blink: noop, death: noop, fallen: noop, rift: noop, fly: noop, gone: noop },
+        hurt: noop, blink: noop, death: noop, fallen: noop, rift: noop, fly: noop, gone: noop,
+        say: (v, u) => this.voice('vec', 0, u) },
     }));
     this.bytes = 0; this.sent = 0;         // (for tests and for a look: what they have cost to send)
   }
@@ -172,7 +178,7 @@ export class RoomDogs {
       //  circling nobody on everyone else's screen)
       if (!p.w || h.length < 4 || now - h[h.length - 4] > QUIET_MS) { this.byId.delete(id); continue; }
       let t = this.byId.get(id);
-      if (!t) this.byId.set(id, t = { id, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0, psyAt: p.psyAt });
+      if (!t) this.byId.set(id, t = { id, name: p.name, pl: p, x: 0, z: 0, y: 0, ey: 0, dead: false, cloak: false, fx: 0, fz: -1, yaw: 0, noiseT: 0, psyAt: p.psyAt });
       const n = h.length;
       t.x = h[n - 3]; t.y = h[n - 2]; t.z = h[n - 1]; t.ey = t.y + RULES.EYE;
       t.dead = !!p.dead; t.cloak = !!p.inv;
@@ -351,8 +357,18 @@ export class RoomDogs {
     const o = this.V.vec.live ? this.V.vec.orbit : [];
     const said = o.map((q) => q.k + ':' + r10(q.r)).join(',');
     if (full || said !== this.orbitSaid) { p.vo = VC.orbitRows(this.V); this.orbitSaid = said; }
+    //  how their BIO-BRAINs stand (BB.summary each: strategy, phase, anger, fear, calm, confidence) — for the bar over them
+    const bb = this.brains(), bs = JSON.stringify(bb);
+    if (full || bs !== this.bbSaid) { p.bb = bb; this.bbSaid = bs; }
     this.say('dv', p);
   }
+  brains() {
+    const v = this.V.vec, out = { v: v.live && !v.dead && this.V.mind && this.V.mind.bio ? BB.summary(this.V.mind.bio) : null, m: [] };
+    for (const m of this.M.flayers) if (m.live && !m.dead && m.bio) out.m.push([m.slot].concat(BB.summary(m.bio)));
+    return out;
+  }
+  //  something one of them says, to everyone over there ('say' { w: who, s: slot, t: text, c: why })
+  voice(w, slot, u) { if (u && u.text) this.say('say', { w, s: slot, t: u.text, c: u.sit, src: u.src || 'fast' }); }
   //  The wrecks moved here, per wreck (wreckRow): those that changed since
   //  last said, or all of them (full: for whoever crossed since)
   wreckRows(full) {

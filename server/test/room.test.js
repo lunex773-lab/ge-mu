@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import CITY from '../../shared/city.js';
 import RULES from '../../shared/rules.js';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import TF from '../../shared/traffic.js';
 import FL from '../../shared/flayers.js';
@@ -112,7 +112,10 @@ async function settled() {
 
 async function main() {
   //  its own process group, so that stopping it stops wrangler's children too
-  const dev = LIVE ? null : spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--log-level', 'warn'],
+  //  (from a copy of the config without the Workers AI binding: wrangler dev
+  //  can only reach it logged in to Cloudflare — the room runs without it)
+  if (!LIVE) writeFileSync(path.join(ROOT, '.wrangler-test.jsonc'), readFileSync(path.join(ROOT, 'wrangler.jsonc'), 'utf8').replace(/^\s*"ai":.*$/m, ''));
+  const dev = LIVE ? null : spawn('npx', ['wrangler', 'dev', '--config', '.wrangler-test.jsonc', '--port', String(PORT), '--ip', '127.0.0.1', '--log-level', 'warn'],
     { cwd: ROOT, detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' } });
   let log = ''; if (dev) { dev.stdout.on('data', (d) => { log += d; }); dev.stderr.on('data', (d) => { log += d; }); }
   try {

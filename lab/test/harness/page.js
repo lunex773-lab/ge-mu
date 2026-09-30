@@ -136,8 +136,11 @@ function build() {
 //  Beelzebub's memory (server/mindstore.js, the BossMind object) is one for
 //  every room here too, kept in a Map, and answers a few ms later, as
 //  another Durable Object would.
-async function roomServer({ moves = false, creatures = false } = {}) {
+//  ai: a stand-in for Workers AI (anything with run(model, input) → Promise):
+//  the great ones' slow thoughts are asked of it, as GameRoom does (cognition.js)
+async function roomServer({ moves = false, creatures = false, ai = null } = {}) {
   const { Relay, idFor } = await import(pathToFileURL(path.join(ROOT, 'server', 'relay.js')).href);
+  const { Cognition } = await import(pathToFileURL(path.join(ROOT, 'server', 'cognition.js')).href);
   const { MindStore } = await import(pathToFileURL(path.join(ROOT, 'server', 'mindstore.js')).href);
   const rooms = new Map();                       // name → { relay, next, sockets: Map(id → { ws, who }) }
   connect.rooms = rooms;                         // (a test may look inside: openRoom().rooms)
@@ -159,7 +162,10 @@ async function roomServer({ moves = false, creatures = false } = {}) {
     const raw = String(u.searchParams.get('room') || '').trim();
     const name = /^[\p{L}\p{N}_\-. ]{1,32}$/u.test(raw) ? raw : 'lobby';   // as server/worker.js
     let R = rooms.get(name);
-    if (!R) rooms.set(name, R = { relay: new Relay({ moves, creatures }), next: 0, sockets: new Map() });
+    if (!R) {
+      rooms.set(name, R = { relay: new Relay({ moves, creatures }), next: 0, sockets: new Map(), cog: new Cognition({ ai }) });
+      R.relay.canThink = !!ai;
+    }
     const id = idFor(R.next++);
     R.sockets.set(id, { ws, who });
     const joined = R.relay.join(id, String(u.searchParams.get('name') || '').slice(0, 20));
@@ -194,6 +200,7 @@ async function roomServer({ moves = false, creatures = false } = {}) {
       const r = R.relay.handle(id, String(m), Date.now());
       R.relay.dirty.clear();
       route(r.out, id);
+      for (const t of R.relay.takeThinks()) R.cog.think(t.key, t.ctx).then((res) => route(R.relay.thoughtSaid(t, res), null));
       askMind();
     };
     const gone = () => {
@@ -211,11 +218,11 @@ async function roomServer({ moves = false, creatures = false } = {}) {
 
 //  A room of players. Each is a separate browser context — its own
 //  localStorage — and all of them meet in the room server above.
-async function openRoom({ moves = false, creatures = false } = {}) {
+async function openRoom({ moves = false, creatures = false, ai = null } = {}) {
   build();
   const { chromium } = playwright();
   const browser = await chromium.launch({ args: ['--disable-gpu', '--mute-audio'] });
-  const connect = await roomServer({ moves, creatures });
+  const connect = await roomServer({ moves, creatures, ai });
 
   async function player({ room, nick, save, render, seed, url, viewport } = {}) {
     const ctx = await browser.newContext({ viewport: viewport || { width: 480, height: 320 } });

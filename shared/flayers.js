@@ -39,6 +39,7 @@ const WR = require('./wrecks.js');
 const RULES = require('./rules.js');
 const DG = require('./dogs.js');
 const GR = require('./gorgons.js');
+const BB = require('./biobrain.js');
 
 const NMF = 2;
 const MF_HP = GR.GOR_HP * 10;            // 4200 — ten gorgons
@@ -123,6 +124,7 @@ function spawnFlayer(F, at, slot) {
     netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
     spawnD: DG.nearestTo(E.targets(), spot.x, spot.z).d, escorted: false,
     lord: null, lordSlot: -1, lordFar: 0, taint: 0,
+    bio: BB.make('mind_flayer'), bioKey: null, bioD: undefined, bioVr: 0, bioEsc: null, bioSeenT: -99, bioT: -99, reloc: null, bioSaveT: 0,
   });
   return m;
 }
@@ -389,7 +391,7 @@ function see(F, m) {
 function think(F, m, dt) {
   const E = F.env, rnd = E.random, now = E.now();
   m.stT += dt;
-  m.atkCd = Math.max(0, m.atkCd - dt);
+  m.atkCd = Math.max(0, m.atkCd - dt * (m.bio ? m.bio.P.tempo : 1));
   m.panicCd = Math.max(0, m.panicCd - dt);
   m.summonT -= dt;
   m.stagger = Math.max(0, m.stagger - dt * 1.4);
@@ -400,6 +402,7 @@ function think(F, m, dt) {
   const seen = see(F, m);
   if (seen > 0) { m.see = seen; m.seeT = now; m.hasT = true; m.tx = m.tgt.x; m.tz = m.tgt.z; }
   else m.see = 0;
+  sense(F, m, seen, dt);
   //  VECNA's objective (the Fly-Brain design §20–§21, §25): he says what, it
   //  chooses how — straight in, round the side, its escort round the side,
   //  a car to keep them down, or the street itself — once per order, its own
@@ -410,9 +413,10 @@ function think(F, m, dt) {
     if (!(seen > 0) && !(m.hasT && now - m.seeT < 3) && o.obj !== 'protect' && o.obj !== 'regroup') { m.hasT = true; m.tx = o.x; m.tz = o.z; m.seeT = Math.max(m.seeT, o.t - 1.5); }
     if (m.orderAt !== o.t) {
       m.orderAt = o.t;
-      const r = rnd();
+      //  (how, it weighs with its own brain: afraid, it keeps the cars and the
+      //  children between them; desperate, it goes in itself — AC§7.4)
       m.method = o.obj === 'search' || o.obj === 'investigate' ? 'search' : o.obj === 'protect' || o.obj === 'regroup' || o.obj === 'retreat' ? 'hold'
-        : r < 0.34 ? 'direct' : r < 0.54 ? 'flank' : r < 0.74 ? 'minion_flank' : r < 0.9 ? 'suppress' : 'environment';
+        : (BB.decide(m.bio, now, METHODS, rnd) || { id: 'direct' }).id;
       if (o.pri >= 3 && m.panicked) { m.panicked = false; if (m.st === 'flee') { m.st = 'track'; m.stT = 0; } }
       if (m.method === 'minion_flank') {
         //  (its own escort round the side: its own chain, no hive between)
@@ -434,7 +438,8 @@ function think(F, m, dt) {
   //  §28: it decides the day has gone badly — calls everything, then leaves
   if (!m.panicked && m.hp <= MF_HP * MF_PANIC && m.panicCd <= 0) {
     m.panicked = true; m.panicCd = MF_PANIC_CD;
-    m.st = 'summon'; m.stT = 0; m.pendSummon = [5, 2]; m.thenFlee = true;
+    //  (AC§7.7: with its children gone it has nowhere to send, and nowhere to hide — it stays and fights)
+    m.st = 'summon'; m.stT = 0; m.pendSummon = [5, 2]; m.thenFlee = m.bio.strat.name !== 'DESPERATE';
     E.on.panic(m);
   }
   if (m.atk) { runAtk(F, m, dt); return; }
@@ -470,8 +475,16 @@ function think(F, m, dt) {
       //  lets the escort do the work and simply keeps coming — round the side,
       //  if that is how it chose to carry out his order.
       const side = m.order && m.method === 'flank' && dist > 26 ? ((m.slot & 1) ? 20 : -20) : 0;
-      step(F, m, m.tx - fx * 9 - fz * side, m.tz - fz * 9 + fx * side, m.panicked ? 5.4 : 4.3, dt);
-      m.mawWant = 0.2;
+      //  AC§7.8 REMOTE WAR: where it stands is its brain's choice — as far off
+      //  as its fear and its strategy want, backing away from whoever comes
+      //  on, off somewhere else when they have found where it shoots from;
+      //  in close only when it is desperate (or told to go straight in)
+      const keep = keepAt(m);
+      if (m.reloc && now < m.reloc.until && Math.hypot(m.reloc.x - m.x, m.reloc.z - m.z) > 6) step(F, m, m.reloc.x, m.reloc.z, 5.6, dt);
+      else if (dist < keep * 0.78) backOff(F, m, m.tx - fx * keep - fz * side, m.tz - fz * keep + fx * side, 4.6 + 1.8 * m.bio.affect.fear, dt);
+      else if (dist > keep * 1.15) step(F, m, m.tx - fx * keep - fz * side, m.tz - fz * keep + fx * side, m.panicked || m.bio.strat.name === 'DESPERATE' ? 5.4 : 4.3, dt);
+      else { step(F, m, m.x + fz * 6 * ((m.slot & 1) ? 1 : -1), m.z - fx * 6 * ((m.slot & 1) ? 1 : -1), 1.2, dt); }
+      m.mawWant = m.bio.strat.name === 'DESPERATE' ? 0.8 : 0.2;
       if (m.atkCd <= 0 && m.see > 0) {
         //  Each band offers more than one answer and picks between them, and
         //  the bands overlap: standing at any particular range never tells you
@@ -541,6 +554,114 @@ function think(F, m, dt) {
   }
 }
 
+// ---- its brain (shared/biobrain.js, the Mind Flayer's genome; AC§7) -----------
+//  How it may carry out one of VECNA's orders (it chooses: AC§7.6), as its brain weighs them
+const METHODS = [
+  { id: 'direct', tags: ['attack', 'pursue'], utility: 0.7, risk: 0.5 },
+  { id: 'flank', tags: ['reposition', 'attack'], utility: 0.6, risk: 0.3 },
+  { id: 'minion_flank', tags: ['command', 'summon'], utility: 0.65, risk: 0.05 },
+  { id: 'suppress', tags: ['ranged', 'area'], utility: 0.6, risk: 0.1 },
+  { id: 'environment', tags: ['area', 'ranged'], utility: 0.55, risk: 0.1 },
+];
+//  the distance it would keep from what it is fighting (m)
+function keepAt(m) {
+  const B = m.bio, S = B.strat.name;
+  if (m.order && m.method === 'direct') return 9;
+  if (S === 'DESPERATE') return 7;
+  const base = S === 'RETREAT' ? 70 : S === 'OBSERVE' ? 46 : S === 'SEND_MINIONS' ? 42 : S === 'EXHAUST' ? 38 : S === 'RANGED' ? 32 : 34;
+  //  (with no car to hand, from afar it could do nothing: it fights from the edge of the lash's reach instead)
+  if (!m.bioWreck && S !== 'RETREAT' && S !== 'OBSERVE') return 23;
+  return Math.min(78, base * Math.min(1.6, Math.max(0.8, B.P.standoff * 0.75)));
+}
+//  What it senses of whoever it is watching, told to its brain; its children
+//  counted (and missed); the brain stepped; what it has to say, said.
+function sense(F, m, seen, dt) {
+  const E = F.env, B = m.bio, now = E.now();
+  if (!B) return;
+  const t = seen > 0 ? m.tgt : null;
+  if (t) {
+    const key = t.id !== undefined ? t.id : 'p', d = Math.hypot(t.x - m.x, t.z - m.z);
+    if (m.bioKey !== key || now - m.bioSeenT > 20) {
+      if (E.bioRecall && (m.bioKey !== key)) { const rec = E.bioRecall('mind_flayer', t); if (rec) BB.recall(B, key, rec); }
+      m.bioKey = key; m.bioD = d;
+      BB.event(B, now, 'seen', { key, d, name: t.name });
+    }
+    m.bioSeenT = now;
+    //  (how fast they come on — their own speed towards it, not the gap closing, which its backing off hides — smoothed)
+    if (m.bioPx !== undefined && dt > 0 && d > 0.1) {
+      const vx = (t.x - m.bioPx) / dt, vz = (t.z - m.bioPz) / dt;
+      m.bioVr += ((vx * (m.x - t.x) + vz * (m.z - t.z)) / d - m.bioVr) * Math.min(1, dt * 4);
+    }
+    m.bioPx = t.x; m.bioPz = t.z; m.bioD = d;
+    BB.observe(B, now, key, { d, vr: m.bioVr, vl: 0 });
+    if (m.bioVr > 4 && d < 45 && now - (m.bioApT || -9) > 2) { m.bioApT = now; BB.event(B, now, 'approach', { key, d, speed: m.bioVr }); }
+    if (t.dead && !m.bioDown) { m.bioDown = 1; BB.event(B, now, 'player_down', { key }); }
+    else if (!t.dead) m.bioDown = 0;
+  }
+  //  its children, counted twice a second: the ones that died are missed
+  if (now - m.bioT >= 0.5) {
+    m.bioT = now;
+    const kids = [];
+    for (const d of E.dogs()) if (d.live && !d.dead && d.lord === 'mf' && d.lordSlot === m.slot) kids.push('d' + d.slot);
+    for (const g of E.gorgons()) if (g.live && !g.dead && g.lord === 'mf' && g.lordSlot === m.slot) kids.push('g' + g.slot);
+    if (m.bioEsc) {
+      let lost = 0;
+      for (const k of m.bioEsc) {
+        if (kids.indexOf(k) >= 0) continue;
+        const q = k[0] === 'd' ? E.dogs()[+k.slice(1)] : E.gorgons()[+k.slice(1)];
+        if (!q || !q.live || q.dead) lost++;          // (one that wandered off is not a loss)
+      }
+      if (lost) BB.event(B, now, 'minion_lost', { n: lost });
+    }
+    m.bioEsc = kids;
+    //  AC§7.8: shot again and again from where it stands — they have found it: it moves
+    const hurtFar = B.hurtAt.filter((q) => now - q.t < 12 && q.d > 20).length;
+    if (hurtFar >= 3 && (!m.reloc || now > m.reloc.until + 4) && B.strat.name !== 'DESPERATE' && m.hasT) {
+      const dist = Math.max(1, Math.hypot(m.tx - m.x, m.tz - m.z)), ax = (m.x - m.tx) / dist, az = (m.z - m.tz) / dist, s = (m.slot & 1) ? 1 : -1;
+      let best = null;
+      for (let i = 0; i < 8 && !best; i++) {
+        const r = 40 + i * 5, x = m.x + az * s * r + ax * 18, z = m.z - ax * s * r + az * 18;
+        if (Math.abs(x) < WORLD * 0.42 && Math.abs(z) < WORLD * 0.42 && E.clearAt(x, z, 2.5)) best = { x, z };
+      }
+      if (best) { m.reloc = { x: best.x, z: best.z, until: now + 7 }; B.hurtAt.length = 0; BB.speak(B, now, 'relocate', null, true); BB.note(B, now, 'relocate', 'Safe zone found: moving.'); }
+    }
+    //  SEND_MINIONS: the children are told to go for them (and more called, if there are too few)
+    if (B.strat.name === 'SEND_MINIONS' || B.strat.name === 'EXHAUST') {
+      if (m.hasT && now - (m.sentT || -99) > 4) {
+        m.sentT = now;
+        for (const q of E.dogs().concat(E.gorgons())) if (q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot) q.order = { obj: 'attack', x: m.tx, z: m.tz, conf: 0.8, pri: 2, t: now, until: now + 6, by: 'mf' };
+      }
+      //  (it stands still to call them: not while someone is coming at it — it gets back out of reach first)
+      if (kids.length < 3 && m.summonT > MF_SUMMON * 0.35 && m.st === 'track' && !m.atk && m.bioVr < 2.5 && m.tdist > keepAt(m) * 0.9) { m.summonT = 0; }
+    }
+  }
+  let wreck = m.bioWreck || false;
+  if (m.hasT && now - (m.bioWreckT || -9) > 1) { m.bioWreckT = now; wreck = false; const w = E.wrecks(); for (let k = 0; k < w.length && !wreck; k++) if (w[k] && !w[k].thrown && Math.hypot(w[k].x - m.x, w[k].z - m.z) < 34) wreck = true; m.bioWreck = wreck; }
+  BB.tick(B, now, dt, { hp: m.hp / MF_HP, d: m.hasT ? m.tdist : null, minions: m.bioEsc ? m.bioEsc.length : 0, wreck, cornered: m.tdist < 12, seen: seen > 0 ? 1 : 0 });
+  voice(F, m);
+  if (now - m.bioSaveT > 30) { m.bioSaveT = now; keep(F, m); }
+}
+function voice(F, m) {
+  const u = BB.utter(m.bio, F.env.now());
+  if (u && F.env.on.say) F.env.on.say(m, u);
+}
+//  what it learned of whoever it fought, for the next time (AC§37)
+function keep(F, m) {
+  if (!F.env.bioSave || m.bioKey === null) return;
+  const rec = BB.memoryOf(m.bio, m.bioKey);
+  if (rec) F.env.bioSave('mind_flayer', m.bioKey, rec);
+}
+function landed(m, t, dmg, kind) {
+  if (!m.bio) return;
+  BB.event(m.bio, m.bio.t, 'hit', { key: t && t.id !== undefined ? t.id : m.bio.focus, amt: dmg / 100, act: kind });
+}
+//  its brain, handed over with it (a room taking the flayers from a game, or giving them back)
+function bioState(F) { return F.flayers.filter((m) => m.live && m.bio).map((m) => ({ s: m.slot, b: BB.fullState(m.bio) })); }
+function adoptBio(F, list) {
+  if (!Array.isArray(list)) return;
+  for (const e of list) { const m = e && F.flayers[e.s]; if (!m || !m.live) continue; const b = BB.adoptFull(e.b); if (b) m.bio = b; }
+}
+
 // ---- attacks ---------------------------------------------------------
 function startAtk(F, m, kind) {
   const legs = [0, 3];                                   // the two forelegs do the hitting
@@ -584,6 +705,7 @@ function runAtk(F, m, dt) {
   }
   if (a.t >= total) {
     m.atkCd = A.cd * (m.panicked ? 0.7 : 1);
+    if (!a.hit && a.kind !== 'throw' && m.bio) BB.event(m.bio, E.now(), 'miss', { act: a.kind });
     m.atk = null; m.st = 'track'; m.stT = 0;
   }
 }
@@ -607,6 +729,7 @@ function strike(F, m, a, k) {
       if (r < MF_STOMP_R) hits.push({ t, dmg: Math.round(MF_STOMP_DMG * (1 - 0.55 * (r / MF_STOMP_R))), kb: 9.5 * (1 - r / MF_STOMP_R) + 2 });
     }
     E.stomp(m, cx, cz, hits);
+    for (const h of hits) landed(m, h.t, h.dmg, 'stomp');
     return;
   }
   const open = a.kind === 'swipe' ? k > 0.3 : a.kind === 'sweep' ? k > 0.22 && k < 0.9 : a.kind === 'lash' ? k > 0.35 : false;
@@ -617,7 +740,7 @@ function strike(F, m, a, k) {
     if (a.kind === 'swipe') {
       if (!(dist < MF_SWIPE_R)) continue;
       a.got.push(t); a.hit = 1;
-      E.hit(m, t, MF_SWIPE_DMG, 7.5, m.x, m.z, 1.0);           // §18: it knocks you about
+      E.hit(m, t, MF_SWIPE_DMG, 7.5, m.x, m.z, 1.0); landed(m, t, MF_SWIPE_DMG, a.kind);           // §18: it knocks you about
     } else if (a.kind === 'sweep') {
       //  A leg goes round it at knee height. The test is angular, not radial:
       //  it catches you anywhere in a wide arc, so the answer is to be outside
@@ -628,7 +751,7 @@ function strike(F, m, a, k) {
       while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
       if (!(Math.abs(rel) < 0.30)) continue;
       a.got.push(t); a.hit = 1;
-      E.hit(m, t, MF_SWEEP_DMG, 11.0, m.x, m.z, 0.9);          // and it puts you a long way out
+      E.hit(m, t, MF_SWEEP_DMG, 11.0, m.x, m.z, 0.9); landed(m, t, MF_SWEEP_DMG, a.kind);          // and it puts you a long way out
     } else {
       //  The neck throws the head out on the end of it. Fast, cheap, and the
       //  only thing it has that reaches past a swipe.
@@ -638,12 +761,27 @@ function strike(F, m, a, k) {
       while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
       if (!(Math.abs(rel) < 0.5)) continue;
       a.got.push(t); a.hit = 1;
-      E.hit(m, t, MF_LASH_DMG, 4.0, m.x, m.z, 0.6);
+      E.hit(m, t, MF_LASH_DMG, 4.0, m.x, m.z, 0.6); landed(m, t, MF_LASH_DMG, a.kind);
     }
   }
 }
 
 // ---- movement --------------------------------------------------------
+//  Backing away from what it fears: the legs carry it off in any direction
+//  while the body stays turned to the threat — it watches you all the way
+//  (a turn to walk off would hand them five seconds to close in).
+function backOff(F, m, tx, tz, speed, dt) {
+  const dx = tx - m.x, dz = tz - m.z, dd = Math.hypot(dx, dz);
+  const turn = TR.easeHeading(m, Math.atan2(m.tx - m.x, m.tz - m.z), dt, 1.6, 0.62);
+  m.lean += (-turn * 0.10 - m.lean) * Math.min(1, dt * 5);
+  const bx = m.x, bz = m.z;
+  if (dd > 0.01) { const s = Math.min(dd, speed * dt); m.x += dx / dd * s; m.z += dz / dd * s; }
+  m.x = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.x));
+  m.z = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.z));
+  m.sp = dt > 1e-5 ? Math.hypot(m.x - bx, m.z - bz) / dt : 0;
+  m.y += (F.env.supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
+  return dd;
+}
 function step(F, m, tx, tz, speed, dt) {
   const dx = tx - m.x, dz = tz - m.z, dd = Math.hypot(dx, dz);
   const ux = dd > 0.01 ? dx / dd : Math.sin(m.hd), uz = dd > 0.01 ? dz / dd : Math.cos(m.hd);
@@ -669,6 +807,7 @@ function hurt(F, m, dmg, fromX, fromZ) {
   m.hp -= dmg;
   m.hasT = true; m.tx = fromX; m.tz = fromZ; m.seeT = now;
   m.swell = Math.min(1, m.swell + 0.5);
+  if (m.bio) BB.event(m.bio, now, 'hurt', { amt: dmg / MF_HP * 5, key: m.bio.focus, d: Math.hypot(fromX - m.x, fromZ - m.z) });
   if (dmg > 60) m.stagger = 1; else m.stagger = Math.max(m.stagger, 0.2);
   if (m.hp <= 0) { kill(F, m); return; }
   E.on.hurt(m);
@@ -712,6 +851,7 @@ function hurt(F, m, dmg, fromX, fromZ) {
 function kill(F, m) {
   drop(F, m);
   m.dead = true; m.deadT = 0; m.hp = 0; m.sp = 0; m.atk = null; m.maw = 0.7;
+  if (m.bio) { BB.event(m.bio, F.env.now(), 'death'); keep(F, m); voice(F, m); }
   F.env.on.death(m);
 }
 
@@ -787,7 +927,7 @@ function fullState(F) {
       m.pendSummon ? m.pendSummon[0] : -1, m.pendSummon ? m.pendSummon[1] : -1, m.thenFlee ? 1 : 0);
   }
   const T = F.thrown;
-  return { r, cd: Math.round(Math.max(0, Math.min(6000, F.spawnCd)) * 10),
+  return { r, cd: Math.round(Math.max(0, Math.min(6000, F.spawnCd)) * 10), b: bioState(F),
     t: T ? [T.k, Math.round(T.x * 100), Math.round(T.y * 100), Math.round(T.z * 100), Math.round(T.vx * 100), Math.round(T.vy * 100), Math.round(T.vz * 100),
       Math.round(T.spin * 1000), Math.round(T.roll * 1000), Math.round(T.t * 100)] : null };
 }
@@ -824,9 +964,11 @@ function adoptFull(F, f) {
       spawnD: 999, escorted: !!r[i + 24], lord: r[i + 14] ? 'vec' : null, lordSlot: -1, lordFar: 0, taint: r[i + 14] ? 1 : 0,
       pendSummon: r[i + 25] >= 0 ? [r[i + 25], Math.max(0, r[i + 26])] : null, thenFlee: !!r[i + 27],
       roared: 0, holdW: -1, claimT: 0, farCalled: 0,
+      bio: BB.make('mind_flayer'), bioKey: null, bioD: undefined, bioVr: 0, bioEsc: null, bioSeenT: -99, bioT: -99, reloc: null, bioSaveT: 0,
     });
     if (m.dead) m.hp = 0;
   }
+  adoptBio(F, f.b);
   F.spawnCd = f.cd / 10;
   F.thrown = null;
   const t = f.t;
@@ -845,5 +987,6 @@ if (typeof module !== 'undefined' && module.exports) {
     makeFlayers, spawnSpot, spawnFlayer, despawnFlayer, clearFlayers, drop, claimNear, retinueOf, linkedTo, counts, command,
     shareDamage, summon, ring, pickWreck, launch, flight, see, think, startAtk, runAtk, strike, step, hurt, kill, stock, fighting,
     marks, snapRows, flightRow, fullState, fullOk, adoptFull,
+    METHODS, keepAt, sense, bioState, adoptBio, backOff,
   };
 }

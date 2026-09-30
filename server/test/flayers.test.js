@@ -13,6 +13,7 @@
 //    node server/test/flayers.test.js
 
 import FL from '../../shared/flayers.js';
+import BB from '../../shared/biobrain.js';
 import VC from '../../shared/vecna.js';
 import VM from '../../shared/vecna_mind.js';
 import GOR from '../../shared/gorgons.js';
@@ -78,12 +79,32 @@ let F0 = null;
   check('one arrives, far off (120–300 m) and never alone: its escort climbs out around it', m && d >= 120 && d <= 300 && sworn === FL.MF_ESC_DOG + FL.MF_ESC_GOR && summons === 1,
     m ? d.toFixed(0) + ' m off, ' + sworn + ' sworn to it' : 'none');
   M.holdSpawn = true;
-  //  set on the player from 40 m, in the open: it answers, closes, and strikes
+  //  set on the player from 40 m, in the open: it answers — and (AC§7.8 REMOTE
+  //  WAR) keeps its distance and fights from there: a car, or the lash
   const s0 = spotNear(me.x, me.z, 40, 3);
   m.x = m.rx = s0.x; m.z = m.rz = s0.z; m.y = 0; m.hd = Math.atan2(me.x - m.x, me.z - m.z); m.st = 'wander'; m.stT = 0; m.atkCd = 0; m.summonT = 999;
-  run(40, () => hits.some((h) => h.by === 'blow' && h.kb > 0) || stomps.some((s) => s.hs.length));
+  let closest = 999;
+  run(14, () => { closest = Math.min(closest, Math.hypot(m.x - me.x, m.z - me.z)); return false; });
+  check('set on the player from 40 m, it does not walk in: it keeps its distance and fights from there (a car, or the lash)',
+    closest > 22 && winds.some((k) => k === 'throw' || k === 'lash'), 'never nearer than ' + closest.toFixed(1) + ' m; winds ' + winds.join(',') + ' [' + m.bio.strat.name + ']');
+  //  the player walks up to it: it backs away from them
+  m.atk = null; m.st = 'track'; m.stT = 0; m.atkCd = 5; m.hasT = true;
+  const back0 = Math.hypot(m.x - me.x, m.z - me.z);
+  let nearest = 999;
+  run(6, () => {
+    const d = Math.hypot(m.x - me.x, m.z - me.z); nearest = Math.min(nearest, d);
+    if (d > 4) { me.x += (m.x - me.x) / d * 0.25; me.z += (m.z - me.z) / d * 0.25; }   // (5 m/s, straight at it)
+    m.atkCd = 5; return false;
+  });
+  check('walked up to, it backs away (and says it wants them off)', nearest > 14 && m.bio.affect.fear > BB.GENOMES.mind_flayer.affect.rest.fear,
+    back0.toFixed(1) + ' m; the player walked 30 m at it and got no nearer than ' + nearest.toFixed(1) + ' m; fear ' + m.bio.affect.fear.toFixed(2));
+  me.x = ax; me.z = az;
+  //  a player right under it is struck: the blow lands, and knocks them away
+  const sU = spotNear(me.x, me.z, 9, 3);
+  m.x = m.rx = sU.x; m.z = m.rz = sU.z; m.hd = Math.atan2(me.x - m.x, me.z - m.z); m.atk = null; m.st = 'track'; m.atkCd = 0;
+  run(8, () => hits.some((h) => h.by === 'blow' && h.kb > 0) || stomps.some((s) => s.hs.length));
   const blow = hits.find((h) => h.by === 'blow');
-  check('set on the player from 40 m, it closes and strikes: the blow lands, and knocks them away', (blow && blow.kb > 0 && blow.shake > 0) || stomps.some((s) => s.hs.length),
+  check('a player right under it is struck: the blow lands, and knocks them away', (blow && blow.kb > 0 && blow.shake > 0) || stomps.some((s) => s.hs.length),
     'winds ' + winds.join(',') + '; ' + JSON.stringify(blow || stomps.find((s) => s.hs.length)));
   //  a car: it picks one up and throws it at them
   const ow = openWreck(wr);
@@ -310,7 +331,8 @@ try {
 check('a minute of a flayer, its escort and the pack on two players: no error, and no call near the 10 ms a call has', !thrown && worst < 9.5,
   (thrown ? thrown.message + ' ' : '') + 'each call ' + (sum / n).toFixed(3) + ' ms on average, ' + worst.toFixed(2) + ' ms at worst; ' + blows + ' blows landed; ' +
   RD.dogs.filter((d) => d.live && !d.dead && d.lord === 'mf').length + ' dogs and ' + RD.gorgons.filter((g) => g.live && !g.dead && g.lord === 'mf').length + ' gorgons sworn to it');
-check('and what the flayer costs to send: a few hundred bytes a second', (part.f || 0) + (part.fly || 0) + (part.w || 0) < 600,
+//  (700: since its BIO-BRAIN it fights from range — more cars in the air, more moved — ACIS §7.8)
+check('and what the flayer costs to send: a few hundred bytes a second', (part.f || 0) + (part.fly || 0) + (part.w || 0) + (part.bb || 0) < 700,
   Object.entries(part).map(([key, b]) => key + ' ' + Math.round(b) + ' B/s').join(', '));
 
 //  one left: given back

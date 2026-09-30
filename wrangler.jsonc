@@ -33,5 +33,11 @@
   // which deploy of this Worker a room is running (its version ID): the
   // live check waits for rooms on the one just deployed (server/test/room.test.js)
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  // the great ones' slow brain (server/cognition.js): Workers AI — on the free
+  // allocation, asked only on events and rate-limited per room; without it
+  // (or when it is out of its day's allowance) they fight on their fast brain.
+  // (server/test/room.test.js runs wrangler dev from a copy without this line:
+  // it cannot be reached from a machine with no Cloudflare login)
+  "ai": { "binding": "AI" },
   "observability": { "enabled": true }
 }

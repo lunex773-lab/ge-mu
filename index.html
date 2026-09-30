@@ -493,6 +493,16 @@
   }
   #boss.rage i u { background: linear-gradient(90deg, #a01008, #ff3a18 55%, #ffb066); }
   #boss.king b { color: #d9c6a6; text-shadow: 0 0 12px rgba(140,26,16,.85); letter-spacing: .46em; }
+  /* what its BIO-BRAIN is doing, under its name (shared/biobrain.js moodLabel) */
+  #boss em { display: block; min-height: 12px; margin: -2px 0 4px; font-size: 10px; font-style: normal; letter-spacing: .2em; color: #cdb8b0; opacity: .88; }
+  /* what one of the great ones says: a subtitle, in its colour */
+  #boss-say {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24% + env(safe-area-inset-bottom)); max-width: min(86vw, 640px);
+    pointer-events: none; text-align: center; font-size: 16px; line-height: 1.45; letter-spacing: .06em; font-weight: 600;
+    opacity: 0; transition: opacity .35s ease; text-shadow: 0 0 10px rgba(0,0,0,.95), 0 0 3px #000;
+  }
+  #boss-say.on { opacity: 1; }
+  #boss-say.vec { color: #d7b8ff; }  #boss-say.mf { color: #9fe0d0; }  #boss-say.bzb { color: #ffb070; }
   #boss.king i u { background: linear-gradient(90deg, #4a0c08, #8c1a10 58%, #d8683a); }
   @keyframes ragepulse { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
 
@@ -597,7 +607,8 @@
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="chatfeed"></div>
   <div id="rage"><b>🐒 猿の群れ</b><span id="rage-t">60</span></div>
-  <div id="boss"><b id="boss-name">MIND FLAYER</b><i><u id="boss-hp"></u></i></div>
+  <div id="boss"><b id="boss-name">MIND FLAYER</b><em id="boss-mood"></em><i><u id="boss-hp"></u></i></div>
+  <div id="boss-say"></div>
   <div id="psy"></div>
   <div id="reveal"><b>🧭 敵の位置</b><span id="reveal-t">30</span></div>
   <div id="gate-prompt"><b>触れる</b><span>E</span></div>
@@ -1558,7 +1569,11 @@
           if (B.say.length > 4) B.say.shift();
           B.sayT = now; B.sayAt[sit] = now;
         }
-        function utter(B) { return B.say.length ? B.say.shift() : null; }
+        function utter(B, now) {
+          if (!B.say.length) return null;
+          if (now !== undefined) { if (now - (B.utterT === undefined ? -99 : B.utterT) < 2.5) return null; B.utterT = now; }
+          return B.say.shift();
+        }
 
         const LINES = {
           vecna: {
@@ -1869,7 +1884,7 @@
         function adoptThought(B, now, v, src) {
           if (!v) { B.slow.fails++; return false; }
           if (v.strategy) B.strat.llm = { name: v.strategy, conf: v.conf, until: now + 20, intent: v.intent };
-          if (v.dialogue && now - B.sayT > 2) { B.say.push({ t: r2(now), text: v.dialogue, sit: 'thought', src: src || 'llm' }); if (B.say.length > 4) B.say.shift(); B.sayT = now; }
+          if (v.dialogue) { B.say.push({ t: r2(now), text: v.dialogue, sit: 'thought', src: src || 'llm' }); if (B.say.length > 4) B.say.shift(); B.sayT = now; }
           B.slow.src = src || 'llm';
           note(B, now, 'thought', (src || 'llm') + ': ' + (v.strategy || '-') + ' / ' + (v.intent || '-') + (v.reason ? ' — ' + v.reason : ''));
           return true;
@@ -1890,7 +1905,8 @@
         }
         function summary(B) {
           const g = genomeOf(B);
-          return [g.strategies.indexOf(B.strat.name), B.phase, Math.round(B.affect.anger * 100), Math.round(B.affect.fear * 100), B.meta.calm ? 1 : 0, Math.round(B.meta.confidence * 100)];
+          const q = (x) => Math.round(Math.max(0, Math.min(1, x)) * 10) * 10;
+          return [g.strategies.indexOf(B.strat.name), B.phase, q(B.affect.anger), q(B.affect.fear), B.meta.calm ? 1 : 0, q(B.meta.confidence)];
         }
         const MOOD_JP = {
           vecna: { OBSERVE: '観察', ANALYZE: '分析', MANIPULATE: '誘導', CONTROL: '支配', COUNTER: '看破', DESTROY: '殲滅' },
@@ -3807,6 +3823,7 @@
         const RULES = require('./rules.js');
         const DG = require('./dogs.js');
         const GR = require('./gorgons.js');
+        const BB = require('./biobrain.js');
 
         const NMF = 2;
         const MF_HP = GR.GOR_HP * 10;            // 4200 — ten gorgons
@@ -3877,6 +3894,7 @@
             netX: spot.x, netZ: spot.z, netH: 0, rx: spot.x, rz: spot.z, hpHold: 0, lod: 0,
             spawnD: DG.nearestTo(E.targets(), spot.x, spot.z).d, escorted: false,
             lord: null, lordSlot: -1, lordFar: 0, taint: 0,
+            bio: BB.make('mind_flayer'), bioKey: null, bioD: undefined, bioVr: 0, bioEsc: null, bioSeenT: -99, bioT: -99, reloc: null, bioSaveT: 0,
           });
           return m;
         }
@@ -4096,7 +4114,7 @@
         function think(F, m, dt) {
           const E = F.env, rnd = E.random, now = E.now();
           m.stT += dt;
-          m.atkCd = Math.max(0, m.atkCd - dt);
+          m.atkCd = Math.max(0, m.atkCd - dt * (m.bio ? m.bio.P.tempo : 1));
           m.panicCd = Math.max(0, m.panicCd - dt);
           m.summonT -= dt;
           m.stagger = Math.max(0, m.stagger - dt * 1.4);
@@ -4107,15 +4125,15 @@
           const seen = see(F, m);
           if (seen > 0) { m.see = seen; m.seeT = now; m.hasT = true; m.tx = m.tgt.x; m.tz = m.tgt.z; }
           else m.see = 0;
+          sense(F, m, seen, dt);
           const o = m.order;
           if (o && now > o.until) m.order = null;
           else if (o) {
             if (!(seen > 0) && !(m.hasT && now - m.seeT < 3) && o.obj !== 'protect' && o.obj !== 'regroup') { m.hasT = true; m.tx = o.x; m.tz = o.z; m.seeT = Math.max(m.seeT, o.t - 1.5); }
             if (m.orderAt !== o.t) {
               m.orderAt = o.t;
-              const r = rnd();
               m.method = o.obj === 'search' || o.obj === 'investigate' ? 'search' : o.obj === 'protect' || o.obj === 'regroup' || o.obj === 'retreat' ? 'hold'
-                : r < 0.34 ? 'direct' : r < 0.54 ? 'flank' : r < 0.74 ? 'minion_flank' : r < 0.9 ? 'suppress' : 'environment';
+                : (BB.decide(m.bio, now, METHODS, rnd) || { id: 'direct' }).id;
               if (o.pri >= 3 && m.panicked) { m.panicked = false; if (m.st === 'flee') { m.st = 'track'; m.stT = 0; } }
               if (m.method === 'minion_flank') {
                 for (const q of E.dogs().concat(E.gorgons())) if (q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot) q.order = { obj: 'flank', x: m.tx, z: m.tz, conf: o.conf, pri: o.pri, t: now, until: now + 8, by: 'mf' };
@@ -4134,7 +4152,7 @@
           }
           if (!m.panicked && m.hp <= MF_HP * MF_PANIC && m.panicCd <= 0) {
             m.panicked = true; m.panicCd = MF_PANIC_CD;
-            m.st = 'summon'; m.stT = 0; m.pendSummon = [5, 2]; m.thenFlee = true;
+            m.st = 'summon'; m.stT = 0; m.pendSummon = [5, 2]; m.thenFlee = m.bio.strat.name !== 'DESPERATE';
             E.on.panic(m);
           }
           if (m.atk) { runAtk(F, m, dt); return; }
@@ -4167,8 +4185,12 @@
             case 'track': {
               if (!known) { m.st = 'wander'; m.stT = 0; break; }
               const side = m.order && m.method === 'flank' && dist > 26 ? ((m.slot & 1) ? 20 : -20) : 0;
-              step(F, m, m.tx - fx * 9 - fz * side, m.tz - fz * 9 + fx * side, m.panicked ? 5.4 : 4.3, dt);
-              m.mawWant = 0.2;
+              const keep = keepAt(m);
+              if (m.reloc && now < m.reloc.until && Math.hypot(m.reloc.x - m.x, m.reloc.z - m.z) > 6) step(F, m, m.reloc.x, m.reloc.z, 5.6, dt);
+              else if (dist < keep * 0.78) backOff(F, m, m.tx - fx * keep - fz * side, m.tz - fz * keep + fx * side, 4.6 + 1.8 * m.bio.affect.fear, dt);
+              else if (dist > keep * 1.15) step(F, m, m.tx - fx * keep - fz * side, m.tz - fz * keep + fx * side, m.panicked || m.bio.strat.name === 'DESPERATE' ? 5.4 : 4.3, dt);
+              else { step(F, m, m.x + fz * 6 * ((m.slot & 1) ? 1 : -1), m.z - fx * 6 * ((m.slot & 1) ? 1 : -1), 1.2, dt); }
+              m.mawWant = m.bio.strat.name === 'DESPERATE' ? 0.8 : 0.2;
               if (m.atkCd <= 0 && m.see > 0) {
                 const r = rnd();
                 if (dist < MF_STOMP_R * 0.9) {
@@ -4229,6 +4251,101 @@
           }
         }
 
+        const METHODS = [
+          { id: 'direct', tags: ['attack', 'pursue'], utility: 0.7, risk: 0.5 },
+          { id: 'flank', tags: ['reposition', 'attack'], utility: 0.6, risk: 0.3 },
+          { id: 'minion_flank', tags: ['command', 'summon'], utility: 0.65, risk: 0.05 },
+          { id: 'suppress', tags: ['ranged', 'area'], utility: 0.6, risk: 0.1 },
+          { id: 'environment', tags: ['area', 'ranged'], utility: 0.55, risk: 0.1 },
+        ];
+        function keepAt(m) {
+          const B = m.bio, S = B.strat.name;
+          if (m.order && m.method === 'direct') return 9;
+          if (S === 'DESPERATE') return 7;
+          const base = S === 'RETREAT' ? 70 : S === 'OBSERVE' ? 46 : S === 'SEND_MINIONS' ? 42 : S === 'EXHAUST' ? 38 : S === 'RANGED' ? 32 : 34;
+          if (!m.bioWreck && S !== 'RETREAT' && S !== 'OBSERVE') return 23;
+          return Math.min(78, base * Math.min(1.6, Math.max(0.8, B.P.standoff * 0.75)));
+        }
+        function sense(F, m, seen, dt) {
+          const E = F.env, B = m.bio, now = E.now();
+          if (!B) return;
+          const t = seen > 0 ? m.tgt : null;
+          if (t) {
+            const key = t.id !== undefined ? t.id : 'p', d = Math.hypot(t.x - m.x, t.z - m.z);
+            if (m.bioKey !== key || now - m.bioSeenT > 20) {
+              if (E.bioRecall && (m.bioKey !== key)) { const rec = E.bioRecall('mind_flayer', t); if (rec) BB.recall(B, key, rec); }
+              m.bioKey = key; m.bioD = d;
+              BB.event(B, now, 'seen', { key, d, name: t.name });
+            }
+            m.bioSeenT = now;
+            if (m.bioPx !== undefined && dt > 0 && d > 0.1) {
+              const vx = (t.x - m.bioPx) / dt, vz = (t.z - m.bioPz) / dt;
+              m.bioVr += ((vx * (m.x - t.x) + vz * (m.z - t.z)) / d - m.bioVr) * Math.min(1, dt * 4);
+            }
+            m.bioPx = t.x; m.bioPz = t.z; m.bioD = d;
+            BB.observe(B, now, key, { d, vr: m.bioVr, vl: 0 });
+            if (m.bioVr > 4 && d < 45 && now - (m.bioApT || -9) > 2) { m.bioApT = now; BB.event(B, now, 'approach', { key, d, speed: m.bioVr }); }
+            if (t.dead && !m.bioDown) { m.bioDown = 1; BB.event(B, now, 'player_down', { key }); }
+            else if (!t.dead) m.bioDown = 0;
+          }
+          if (now - m.bioT >= 0.5) {
+            m.bioT = now;
+            const kids = [];
+            for (const d of E.dogs()) if (d.live && !d.dead && d.lord === 'mf' && d.lordSlot === m.slot) kids.push('d' + d.slot);
+            for (const g of E.gorgons()) if (g.live && !g.dead && g.lord === 'mf' && g.lordSlot === m.slot) kids.push('g' + g.slot);
+            if (m.bioEsc) {
+              let lost = 0;
+              for (const k of m.bioEsc) {
+                if (kids.indexOf(k) >= 0) continue;
+                const q = k[0] === 'd' ? E.dogs()[+k.slice(1)] : E.gorgons()[+k.slice(1)];
+                if (!q || !q.live || q.dead) lost++;          // (one that wandered off is not a loss)
+              }
+              if (lost) BB.event(B, now, 'minion_lost', { n: lost });
+            }
+            m.bioEsc = kids;
+            const hurtFar = B.hurtAt.filter((q) => now - q.t < 12 && q.d > 20).length;
+            if (hurtFar >= 3 && (!m.reloc || now > m.reloc.until + 4) && B.strat.name !== 'DESPERATE' && m.hasT) {
+              const dist = Math.max(1, Math.hypot(m.tx - m.x, m.tz - m.z)), ax = (m.x - m.tx) / dist, az = (m.z - m.tz) / dist, s = (m.slot & 1) ? 1 : -1;
+              let best = null;
+              for (let i = 0; i < 8 && !best; i++) {
+                const r = 40 + i * 5, x = m.x + az * s * r + ax * 18, z = m.z - ax * s * r + az * 18;
+                if (Math.abs(x) < WORLD * 0.42 && Math.abs(z) < WORLD * 0.42 && E.clearAt(x, z, 2.5)) best = { x, z };
+              }
+              if (best) { m.reloc = { x: best.x, z: best.z, until: now + 7 }; B.hurtAt.length = 0; BB.speak(B, now, 'relocate', null, true); BB.note(B, now, 'relocate', 'Safe zone found: moving.'); }
+            }
+            if (B.strat.name === 'SEND_MINIONS' || B.strat.name === 'EXHAUST') {
+              if (m.hasT && now - (m.sentT || -99) > 4) {
+                m.sentT = now;
+                for (const q of E.dogs().concat(E.gorgons())) if (q.live && !q.dead && q.lord === 'mf' && q.lordSlot === m.slot) q.order = { obj: 'attack', x: m.tx, z: m.tz, conf: 0.8, pri: 2, t: now, until: now + 6, by: 'mf' };
+              }
+              if (kids.length < 3 && m.summonT > MF_SUMMON * 0.35 && m.st === 'track' && !m.atk && m.bioVr < 2.5 && m.tdist > keepAt(m) * 0.9) { m.summonT = 0; }
+            }
+          }
+          let wreck = m.bioWreck || false;
+          if (m.hasT && now - (m.bioWreckT || -9) > 1) { m.bioWreckT = now; wreck = false; const w = E.wrecks(); for (let k = 0; k < w.length && !wreck; k++) if (w[k] && !w[k].thrown && Math.hypot(w[k].x - m.x, w[k].z - m.z) < 34) wreck = true; m.bioWreck = wreck; }
+          BB.tick(B, now, dt, { hp: m.hp / MF_HP, d: m.hasT ? m.tdist : null, minions: m.bioEsc ? m.bioEsc.length : 0, wreck, cornered: m.tdist < 12, seen: seen > 0 ? 1 : 0 });
+          voice(F, m);
+          if (now - m.bioSaveT > 30) { m.bioSaveT = now; keep(F, m); }
+        }
+        function voice(F, m) {
+          const u = BB.utter(m.bio, F.env.now());
+          if (u && F.env.on.say) F.env.on.say(m, u);
+        }
+        function keep(F, m) {
+          if (!F.env.bioSave || m.bioKey === null) return;
+          const rec = BB.memoryOf(m.bio, m.bioKey);
+          if (rec) F.env.bioSave('mind_flayer', m.bioKey, rec);
+        }
+        function landed(m, t, dmg, kind) {
+          if (!m.bio) return;
+          BB.event(m.bio, m.bio.t, 'hit', { key: t && t.id !== undefined ? t.id : m.bio.focus, amt: dmg / 100, act: kind });
+        }
+        function bioState(F) { return F.flayers.filter((m) => m.live && m.bio).map((m) => ({ s: m.slot, b: BB.fullState(m.bio) })); }
+        function adoptBio(F, list) {
+          if (!Array.isArray(list)) return;
+          for (const e of list) { const m = e && F.flayers[e.s]; if (!m || !m.live) continue; const b = BB.adoptFull(e.b); if (b) m.bio = b; }
+        }
+
         function startAtk(F, m, kind) {
           const legs = [0, 3];                                   // the two forelegs do the hitting
           const leg = legs[F.env.random() < 0.5 ? 0 : 1];
@@ -4268,6 +4385,7 @@
           }
           if (a.t >= total) {
             m.atkCd = A.cd * (m.panicked ? 0.7 : 1);
+            if (!a.hit && a.kind !== 'throw' && m.bio) BB.event(m.bio, E.now(), 'miss', { act: a.kind });
             m.atk = null; m.st = 'track'; m.stT = 0;
           }
         }
@@ -4283,6 +4401,7 @@
               if (r < MF_STOMP_R) hits.push({ t, dmg: Math.round(MF_STOMP_DMG * (1 - 0.55 * (r / MF_STOMP_R))), kb: 9.5 * (1 - r / MF_STOMP_R) + 2 });
             }
             E.stomp(m, cx, cz, hits);
+            for (const h of hits) landed(m, h.t, h.dmg, 'stomp');
             return;
           }
           const open = a.kind === 'swipe' ? k > 0.3 : a.kind === 'sweep' ? k > 0.22 && k < 0.9 : a.kind === 'lash' ? k > 0.35 : false;
@@ -4293,7 +4412,7 @@
             if (a.kind === 'swipe') {
               if (!(dist < MF_SWIPE_R)) continue;
               a.got.push(t); a.hit = 1;
-              E.hit(m, t, MF_SWIPE_DMG, 7.5, m.x, m.z, 1.0);           // §18: it knocks you about
+              E.hit(m, t, MF_SWIPE_DMG, 7.5, m.x, m.z, 1.0); landed(m, t, MF_SWIPE_DMG, a.kind);           // §18: it knocks you about
             } else if (a.kind === 'sweep') {
               if (!(dist < MF_SWEEP_R)) continue;
               const bear = Math.atan2(t.x - m.x, t.z - m.z);
@@ -4301,7 +4420,7 @@
               while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
               if (!(Math.abs(rel) < 0.30)) continue;
               a.got.push(t); a.hit = 1;
-              E.hit(m, t, MF_SWEEP_DMG, 11.0, m.x, m.z, 0.9);          // and it puts you a long way out
+              E.hit(m, t, MF_SWEEP_DMG, 11.0, m.x, m.z, 0.9); landed(m, t, MF_SWEEP_DMG, a.kind);          // and it puts you a long way out
             } else {
               if (!(dist < MF_LASH_R)) continue;
               const bear = Math.atan2(t.x - m.x, t.z - m.z);
@@ -4309,11 +4428,23 @@
               while (rel > Math.PI) rel -= 6.2832; while (rel < -Math.PI) rel += 6.2832;
               if (!(Math.abs(rel) < 0.5)) continue;
               a.got.push(t); a.hit = 1;
-              E.hit(m, t, MF_LASH_DMG, 4.0, m.x, m.z, 0.6);
+              E.hit(m, t, MF_LASH_DMG, 4.0, m.x, m.z, 0.6); landed(m, t, MF_LASH_DMG, a.kind);
             }
           }
         }
 
+        function backOff(F, m, tx, tz, speed, dt) {
+          const dx = tx - m.x, dz = tz - m.z, dd = Math.hypot(dx, dz);
+          const turn = TR.easeHeading(m, Math.atan2(m.tx - m.x, m.tz - m.z), dt, 1.6, 0.62);
+          m.lean += (-turn * 0.10 - m.lean) * Math.min(1, dt * 5);
+          const bx = m.x, bz = m.z;
+          if (dd > 0.01) { const s = Math.min(dd, speed * dt); m.x += dx / dd * s; m.z += dz / dd * s; }
+          m.x = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.x));
+          m.z = Math.max(-WORLD * 0.45, Math.min(WORLD * 0.45, m.z));
+          m.sp = dt > 1e-5 ? Math.hypot(m.x - bx, m.z - bz) / dt : 0;
+          m.y += (F.env.supportHeight(m.x, m.z, m.y + 1) - m.y) * Math.min(1, dt * 4);
+          return dd;
+        }
         function step(F, m, tx, tz, speed, dt) {
           const dx = tx - m.x, dz = tz - m.z, dd = Math.hypot(dx, dz);
           const ux = dd > 0.01 ? dx / dd : Math.sin(m.hd), uz = dd > 0.01 ? dz / dd : Math.cos(m.hd);
@@ -4335,6 +4466,7 @@
           m.hp -= dmg;
           m.hasT = true; m.tx = fromX; m.tz = fromZ; m.seeT = now;
           m.swell = Math.min(1, m.swell + 0.5);
+          if (m.bio) BB.event(m.bio, now, 'hurt', { amt: dmg / MF_HP * 5, key: m.bio.focus, d: Math.hypot(fromX - m.x, fromZ - m.z) });
           if (dmg > 60) m.stagger = 1; else m.stagger = Math.max(m.stagger, 0.2);
           if (m.hp <= 0) { kill(F, m); return; }
           E.on.hurt(m);
@@ -4373,6 +4505,7 @@
         function kill(F, m) {
           drop(F, m);
           m.dead = true; m.deadT = 0; m.hp = 0; m.sp = 0; m.atk = null; m.maw = 0.7;
+          if (m.bio) { BB.event(m.bio, F.env.now(), 'death'); keep(F, m); voice(F, m); }
           F.env.on.death(m);
         }
 
@@ -4428,7 +4561,7 @@
               m.pendSummon ? m.pendSummon[0] : -1, m.pendSummon ? m.pendSummon[1] : -1, m.thenFlee ? 1 : 0);
           }
           const T = F.thrown;
-          return { r, cd: Math.round(Math.max(0, Math.min(6000, F.spawnCd)) * 10),
+          return { r, cd: Math.round(Math.max(0, Math.min(6000, F.spawnCd)) * 10), b: bioState(F),
             t: T ? [T.k, Math.round(T.x * 100), Math.round(T.y * 100), Math.round(T.z * 100), Math.round(T.vx * 100), Math.round(T.vy * 100), Math.round(T.vz * 100),
               Math.round(T.spin * 1000), Math.round(T.roll * 1000), Math.round(T.t * 100)] : null };
         }
@@ -4463,9 +4596,11 @@
               spawnD: 999, escorted: !!r[i + 24], lord: r[i + 14] ? 'vec' : null, lordSlot: -1, lordFar: 0, taint: r[i + 14] ? 1 : 0,
               pendSummon: r[i + 25] >= 0 ? [r[i + 25], Math.max(0, r[i + 26])] : null, thenFlee: !!r[i + 27],
               roared: 0, holdW: -1, claimT: 0, farCalled: 0,
+              bio: BB.make('mind_flayer'), bioKey: null, bioD: undefined, bioVr: 0, bioEsc: null, bioSeenT: -99, bioT: -99, reloc: null, bioSaveT: 0,
             });
             if (m.dead) m.hp = 0;
           }
+          adoptBio(F, f.b);
           F.spawnCd = f.cd / 10;
           F.thrown = null;
           const t = f.t;
@@ -4484,6 +4619,7 @@
             makeFlayers, spawnSpot, spawnFlayer, despawnFlayer, clearFlayers, drop, claimNear, retinueOf, linkedTo, counts, command,
             shareDamage, summon, ring, pickWreck, launch, flight, see, think, startAtk, runAtk, strike, step, hurt, kill, stock, fighting,
             marks, snapRows, flightRow, fullState, fullOk, adoptFull,
+            METHODS, keepAt, sense, bioState, adoptBio, backOff,
           };
         }
 
@@ -4492,6 +4628,7 @@
         'use strict';
 
         const RULES = require('./rules.js');
+        const BB = require('./biobrain.js');
 
         const CONFIG = {
           difficulty: 'NIGHTMARE',
@@ -4561,8 +4698,16 @@
             dir: { hits: [], relief: 0, pressure: 1 },   // FB§72: the director's bookkeeping
             orders: 0, lastOrder: null,
             log: [], logN: 0,
+            bio: BB.make('vecna'), bioSaveT: 0, bioApT: -99, bioEscT: -99,
           };
         }
+        const TAC_TAGS = {
+          DIRECT_ATTACK: ['attack'], SHOCKWAVE: ['attack', 'area'], TENTACLE_ATTACK: ['attack'], PSYCHIC_BLAST: ['psychic', 'probe'],
+          TELEKINESIS_THROW: ['ranged'], AREA_DENIAL: ['area', 'deceive'], FORCE_OUT_OF_COVER: ['area', 'counter'],
+          MINION_ATTACK: ['command'], MINION_FLANK: ['command', 'deceive'], SURROUND: ['command', 'area'], CUT_OFF_ESCAPE: ['counter', 'command'],
+          AMBUSH: ['deceive', 'counter', 'hold'], REPOSITION: ['reposition'], RETREAT: ['retreat'], FAKE_RETREAT: ['feint', 'deceive', 'counter'],
+          TEST: ['probe', 'observe'], SEARCH: ['observe'], MINION_SEARCH: ['command', 'observe'],
+        };
         function log(M, now, msg) {
           M.log.push({ t: +now.toFixed(2), m: msg });
           if (M.log.length > 60) M.log.shift();
@@ -4659,13 +4804,27 @@
                 p.aggression += (clamp01(0.4 + toward * 0.12) - p.aggression) * 0.08;
                 heatAt(M, t.x, t.z, 0.4);
               }
-              if (was < 2) { remember(M, now, 'seen', 1); if (p.seenAt < now - 8) log(M, now, 'Vision: ' + VIS[vis] + ' on ' + key + ' at ' + d.toFixed(0) + ' m.'); p.seenAt = now; }
+              if (was < 2) {
+                remember(M, now, 'seen', 1); if (p.seenAt < now - 8) log(M, now, 'Vision: ' + VIS[vis] + ' on ' + key + ' at ' + d.toFixed(0) + ' m.');
+                if (M.bio && (!M.bio.opp[key] || now - M.bio.opp[key].lastSeen > 20)) {
+                  if (!M.bio.opp[key] && E.bioRecall) { const rec = E.bioRecall('vecna', t); if (rec) BB.recall(M.bio, key, rec); }
+                  BB.event(M.bio, now, 'seen', { key, d, name: t.name });
+                }
+                p.seenAt = now;
+              }
+              if (M.bio && hh.vx !== undefined) {
+                const tv = -((t.x - v.x) * hh.vx + (t.z - v.z) * hh.vz) / Math.max(1, d), lv = ((t.x - v.x) * hh.vz - (t.z - v.z) * hh.vx) / Math.max(1, d);
+                BB.observe(M.bio, now, key, { d, vr: tv, vl: lv, cover: false });
+                if (tv > 4 && d < 40 && now - M.bioApT > 2) { M.bioApT = now; BB.event(M.bio, now, 'approach', { key, d, speed: tv }); }
+                if (tv < -3 && d > 20 && now - M.bioEscT > 6) { M.bioEscT = now; BB.event(M.bio, now, 'escape', { key, d }); }
+              }
               if (vis === 3 && d < bd) { bd = d; bt = t; }
             } else if (was >= 2) {
               remember(M, now, 'lost', 1);
               log(M, now, 'Vision lost on ' + key + (vis === 1 ? ' (obstructed).' : '.'));
               const p = model(M, key);
-              if (vis === 1) { p.cover += (1 - p.cover) * 0.12; episode(M, now, 'breaks_sight', 0.5); }
+              if (vis === 1) { p.cover += (1 - p.cover) * 0.12; episode(M, now, 'breaks_sight', 0.5); if (M.bio) BB.observe(M.bio, now, key, { d, vr: 0, vl: 0, cover: true }); }
+              if (M.bio) BB.event(M.bio, now, 'lost', { key });
             }
           }
           v.tgt = bt; v.near = nt;
@@ -4770,6 +4929,7 @@
           if (!seen) { M.meta.surprise = Math.min(1, M.meta.surprise + 0.25); if (d > 60) episode(M, now, 'long_range', 0.6); }
           else if (d < 14) episode(M, now, 'close_combat', 0.3);
           if (M.focus !== null) model(M, M.focus).shots++;
+          if (M.bio) BB.event(M.bio, now, 'hurt', { amt: dmg / (V.hpMax || 12600) * 4, key: M.focus, d });
           return { x, z };
         }
         function noteHit(V, t, kind, dmg) {
@@ -4780,6 +4940,7 @@
           M.dir.hits.push({ t: now, k: keyOf(t), d: dmg });
           if (M.dir.hits.length > 40) M.dir.hits.shift();
           remember(M, now, 'hit_dealt', dmg / 20);
+          if (M.bio) BB.event(M.bio, now, 'hit', { key: keyOf(t), amt: dmg / 100, act: kind });
         }
         function noteDodge(V, t) {
           const M = V.mind; if (!M) return;
@@ -4787,6 +4948,7 @@
           episode(M, now, 'jumps_wave', 1);
           M.meta.surprise = Math.min(1, M.meta.surprise + 0.2);
           log(M, now, keyOf(t) + ' went over the wave.');
+          if (M.bio) BB.event(M.bio, now, 'dodged', { key: keyOf(t), how: 'jump' });
         }
         function noteMiss(V) {
           const M = V.mind; if (!M) return;
@@ -4794,11 +4956,13 @@
           episode(M, now, 'breaks_sight', 1);
           M.meta.surprise = Math.min(1, M.meta.surprise + 0.2);
           log(M, now, 'His mind found nothing: sight broken.');
+          if (M.bio) BB.event(M.bio, now, 'miss', { act: 'mind' });
         }
         function noteDeath(V, t) {
           const M = V.mind; if (!M) return;
           M.dir.relief = Math.max(M.dir.relief, CONFIG.reliefAfterDeath);
           log(M, V.env.now(), keyOf(t) + ' is down: a moment of quiet (the director).');
+          if (M.bio) BB.event(M.bio, V.env.now(), 'player_down', { key: keyOf(t) });
         }
 
         function predict(V) {
@@ -4960,9 +5124,10 @@
           const S = {};
           const blocked = (k) => { const s = M.tac[k]; return s && s.block > now; };
           const val = (k) => { const s = M.tac[k]; return s ? 0.6 + s.val * 0.8 : 1; };
+          const lean = (k) => (M.bio ? BB.bias(M.bio, TAC_TAGS[k] || []) * 0.6 : 0);
           const score = (k, ev, fit, goalsFor, risk, cost, fairCost) => {
             if (blocked(k)) return;
-            S[k] = ev * Math.max(0.15, conf) * fit * align(goalsFor) * val(k) - risk - cost - fairCost;
+            S[k] = ev * Math.max(0.15, conf) * fit * align(goalsFor) * val(k) - risk - cost - fairCost + lean(k);
           };
           const rep = (k) => (T.lastName === k ? T.reps * 0.12 : 0);        // FB§43: the same thing again and again becomes oppressive
           const jumpy = epi(M, 'jumps_wave'), sightBreaker = epi(M, 'breaks_sight'), longRange = epi(M, 'long_range'), roof = epi(M, 'rooftop');
@@ -4985,7 +5150,7 @@
             if (hpF < C.emergencyThreshold && (g === 'RECOVER' || mt.state === 'RECOVERING')) score('RETREAT', 1.0, 1, ['RECOVER', 'ESCAPE_DANGER'], 0, 0, rep('RETREAT'));
           }
           if (!known || conf < 0.45) {
-            S.SEARCH = 0.5 + (1 - conf) * 0.4;
+            S.SEARCH = 0.5 + (1 - conf) * 0.4 + lean('SEARCH');
             if (court >= 1) score('MINION_SEARCH', 0.8, 1, ['HUNT_PLAYER', 'TEST_PLAYER', 'CONTROL_AREA'], 0, 0.02, 0);
             if (court >= 1 && conf > 0.08 && w < 0.4) score('TEST', 0.9, 1, ['TEST_PLAYER'], 0, 0.02, 0);   // FB§37: a cheap probe
             if (hotSpot(M, v)) score('AMBUSH', 0.8 + w * 0.3, 1, ['CREATE_AMBUSH'], 0, 0, 0);
@@ -5009,6 +5174,7 @@
           }
           T.name = name; T.t = now; T.until = now + 4 + E.random() * 3; T.dealt = 0; T.conf0 = M.focusConf;
           T.prefer = null; T.hold = false; T.speed = 1.55 + (v.phase || 0) * 0.22;
+          if (M.bio && M.bio.meta.calm) { T.until += 3; T.speed *= 0.8; }
           if (!Number.isFinite(M.fx) || !Number.isFinite(M.fz)) { M.fx = v.x; M.fz = v.z; }       // (nothing believed yet: where he stands)
           const d = Math.max(1, Math.hypot(M.fx - v.x, M.fz - v.z)), ax = (M.fx - v.x) / d, az = (M.fz - v.z) / d;
           const tx = M.pred.cands ? M.pred.px : M.fx, tz = M.pred.cands ? M.pred.pz : M.fz;
@@ -5109,6 +5275,13 @@
           if (M.acc.meta >= 1 / C.metacognitionRate) { M.acc.meta = 0; metacog(V); }
           if (M.acc.strat >= 1 / C.strategicRate) { M.acc.strat = 0; goals(V); }
           if (M.acc.tac >= 1 / C.tacticalRate) { M.acc.tac = 0; predict(V); plan(V); }
+          if (M.bio) {
+            const E = V.env, now = E.now(), v = V.vec;
+            BB.tick(M.bio, now, dt, { hp: v.hp / (V.hpMax || 12600), d: M.focus !== null ? Math.hypot(M.fx - v.x, M.fz - v.z) : null, minions: M.meta.court || 0, seen: M.meta.exposure || 0 });
+            const u = BB.utter(M.bio, now);
+            if (u && E.on && E.on.say) E.on.say(v, u);
+            if (E.bioSave && now - M.bioSaveT > 30) { M.bioSaveT = now; for (const k in M.bio.opp) { const rec = BB.memoryOf(M.bio, k); if (rec) E.bioSave('vecna', { id: k }, rec); } }
+          }
         }
 
         function pickAttack(V, dist, ready) {
@@ -5173,7 +5346,7 @@
           for (const k in M.tac) { const s = M.tac[k]; tc.push([TACTICS.indexOf(k), s.tries, s.wins, Math.round(s.val * 100)]); }
           const ep = [];
           for (const k in M.epi) ep.push([k.slice(0, 20), M.epi[k].n, Math.round(M.epi[k].s * 100)]);
-          return { e: Math.round(M.energy), pl: pl.slice(0, 6), tc: tc.slice(0, TACTICS.length), ep: ep.slice(0, 12), sr: Math.round(M.meta.successRate * 100) };
+          return { e: Math.round(M.energy), pl: pl.slice(0, 6), tc: tc.slice(0, TACTICS.length), ep: ep.slice(0, 12), sr: Math.round(M.meta.successRate * 100), b: M.bio ? BB.fullState(M.bio) : null };
         }
         function fullOk(f) {
           if (!f || typeof f !== 'object' || !Number.isFinite(f.e)) return false;
@@ -5188,6 +5361,7 @@
           for (const r of f.tc) { const k = TACTICS[r[0]]; if (k) M.tac[k] = { tries: r[1] | 0, wins: r[2] | 0, fails: 0, val: r[3] / 100, block: 0 }; }
           for (const r of f.ep) if (typeof r[0] === 'string') M.epi[r[0]] = { n: r[1] | 0, s: r[2] / 100, t: 0 };
           M.meta.successRate = f.sr / 100;
+          if (f.b) { const b = BB.adoptFull(f.b); if (b) M.bio = b; }
           return M;
         }
 
@@ -5196,7 +5370,7 @@
             CONFIG, DIFFICULTY, VIS, STATES, GOALS, TACTICS, ORDERS, PHASE_NAMES,
             makeMind, keyOf, believe, bestOf, sense, hiveStep, order, commandCourt, onHurt, noteHit, noteDodge, noteMiss, noteDeath,
             predict, checkPredictions, metacog, evalTactic, goals, softPick, plan, startTactic, director, fair, tick,
-            pickAttack, goal, debugInfo, phaseName, summary, fullState, fullOk, adoptFull, model, weight, episode, hotSpot, log,
+            pickAttack, goal, debugInfo, phaseName, summary, fullState, fullOk, adoptFull, model, weight, episode, hotSpot, log, TAC_TAGS,
           };
         }
 
@@ -5491,7 +5665,7 @@
         function think(V, dt) {
           const E = V.env, v = V.vec, rnd = E.random, now = E.now();
           v.stT += dt;
-          v.atkCd = Math.max(0, v.atkCd - dt);
+          v.atkCd = Math.max(0, v.atkCd - dt * (V.mind && V.mind.bio ? V.mind.bio.P.tempo : 1));   // (his BIO-BRAIN's tempo: slower in divine calm, quicker in anger)
           v.stagger = Math.max(0, v.stagger - dt * 1.5);
           v.vuln = Math.max(0, v.vuln - dt);
           v.mentalT -= dt;
@@ -7907,6 +8081,8 @@
     if (t.slice(-3) === '/dv') { onRoomDogs(msg); return; }
     if (t.slice(-3) === '/dq') { onDogAsk(); return; }
     if (t.slice(-4) === '/psy') { onRoomPsy(msg); return; }
+    if (t.slice(-4) === '/say') { onBossSay(msg); return; }
+    if (t.slice(-8) === '/thought') { onThought(msg); return; }
     if (t.slice(-5) === '/chat') { onChat(msg); return; }
     if (t.slice(-5) === '/kill') { if (msg.by === MP.id) creditKill(msg.v, msg.ds); return; }
     if (!msg.id) return;
@@ -9188,6 +9364,11 @@
     if (msg.fly) onMfFlight(msg.fly);
     if (msg.vf) onVecFlights(msg.vf);
     if (msg.vo) onVecOrbit(msg.vo);
+    if (msg.bb) {                                            // how their BIO-BRAINs stand (server/dogs.js brains)
+      vec.bbSum = Array.isArray(msg.bb.v) ? msg.bb.v : null;
+      for (const m of flayers) m.bbSum = null;
+      for (const r of Array.isArray(msg.bb.m) ? msg.bb.m : []) { const m = flayers[r[0]]; if (m) m.bbSum = r.slice(1); }
+    }
   }
   //  ---- where a told creature is now, not when the word about it left ----------
   //  A follower used to ease onto the last position it was told, so it drew
@@ -9539,6 +9720,7 @@
                  (v.pressure < 1 ? '  EASED' : '') + (v.fightPhase ? '  [' + v.fightPhase + ']' : '') + '\n' +
                  (v.pred ? 'PRED  ' + v.pred + '  adapt ' + v.adapt + '  mem ' + v.mem + '  ' + v.eps + '\n' : '') +
                  (v.lastLog ? 'LOG   ' + v.lastLog + '\n' : ''); })(); })() : '') +
+      bioDebugText() +
       'TIME  ' + String(Math.floor(todHours)).padStart(2, '0') + ':' + String(Math.floor((todHours % 1) * 60)).padStart(2, '0') +
       '  NIGHT ' + nightF.toFixed(2) + '\n' + (wState === WS.NORMAL ? bzbDebugText() : '');
   }
@@ -11942,6 +12124,88 @@
   //  (this player, as the dogs do), the city, and what it looks, sounds and
   //  feels like.
   const bossEl = $('boss'), bossHpEl = $('boss-hp');
+  //  ---- the three great ones' BIO-BRAINs, as this screen shows them ----------------
+  //  (shared/biobrain.js; ACIS × BIO-BRAIN). Whoever runs a boss — this game
+  //  alone, or the room — gives it its brain; here: what it says, as a
+  //  subtitle ('say' from the room, or its own env.on.say), what it is doing
+  //  under its name on the bar, and — alone — what it remembers of this
+  //  player between fights, kept on this phone (localStorage 'contour.bio').
+  const BBM = SH('biobrain.js');
+  const bossMoodEl = $('boss-mood'), bossSayEl = $('boss-say');
+  const BIO_NAME = { vec: 'VECNA', mf: 'MIND FLAYER', bzb: 'BEELZEBUB' }, BIO_ID = { vec: 'vecna', mf: 'mind_flayer', bzb: 'beelzebub' };
+  const bioHeard = [];                              // (the last lines, for F3 and the tests)
+  let bossSayUntil = 0;
+  function bossSay(w, u) {
+    if (!u || !u.text || !bossSayEl) return;
+    bossSayEl.className = 'on ' + w;
+    bossSayEl.textContent = BIO_NAME[w] + '「' + u.text + '」';
+    bossSayUntil = performance.now() + 3000 + u.text.length * 70;
+    bioHeard.push({ w, t: u.text, src: u.src || 'fast', at: Math.round(cityT * 10) / 10 });
+    if (bioHeard.length > 24) bioHeard.shift();
+  }
+  //  F3: each great one's BIO-BRAIN — in full where this game runs it, as the room says it otherwise
+  function bioDebugText() {
+    const out = [];
+    const one = (id, B, sum) => { if (B) out.push(...BBM.debugLines(B)); else if (sum) out.push('BRAIN ' + BBM.GENOMES[id].name + ' (room)  ' + BBM.moodLabel(id, sum) + '  rage ' + sum[2] + ' fear ' + sum[3] + ' conf ' + sum[5]); };
+    if (wState === WS.BACK) {
+      if (vec.live && !vec.dead) one('vecna', dogSim() && VS.mind ? VS.mind.bio : null, vec.bbSum);
+      for (const m of flayers) if (m.live && !m.dead) one('mind_flayer', dogSim() ? m.bio : null, m.bbSum);
+    } else if (bzb.live && bzb.mode !== 'dead') one('beelzebub', !MP.srvOwns.b && bzbAI ? bzbAI.bio : null, bzb.bbSum);
+    if (bioHeard.length) out.push('SAID  ' + bioHeard.slice(-2).map((q) => q.w + ': ' + q.t + (q.src !== 'fast' ? ' [' + q.src + ']' : '')).join(' / '));
+    return out.length ? out.join('\n') + '\n' : '';
+  }
+  function bossSayTick(now) { if (bossSayUntil && now > bossSayUntil) { bossSayUntil = 0; bossSayEl.className = ''; } bioThink(now); }
+  //  The slow brain (ACIS §20–§26), for the great ones this game runs itself:
+  //  when one wants to think something over, its room asks the model
+  //  (server/cognition.js, 'think') and the answer comes back ('thought') to
+  //  be checked against that one's genome. No room, no model: nothing waits.
+  function localBrains() {
+    const out = [];
+    if (dogSim()) {
+      if (vec.live && !vec.dead && VS.mind && VS.mind.bio) out.push(VS.mind.bio);
+      for (const m of flayers) if (m.live && !m.dead && m.bio) out.push(m.bio);
+    }
+    if (!MP.srvOwns.b && bzbAI && bzbAI.bio && bzb.live && bzb.mode !== 'dead') out.push(bzbAI.bio);
+    return out;
+  }
+  let bioThinkT = 0;
+  function bioThink(now) {
+    if (now - bioThinkT < 1000 || !MP.connected || !MP.client) return;
+    bioThinkT = now;
+    for (const B of localBrains()) {
+      const why = BBM.wantsThought(B, B.t, 45);
+      if (why) { try { MP.client.publish(mtopic('think'), JSON.stringify({ b: B.id, ctx: BBM.llmContext(B, why) })); } catch (e) {} return; }
+    }
+  }
+  function onThought(msg) {
+    if (!msg || !msg.v) return;
+    const B = localBrains().find((q) => q.id === msg.b);
+    if (B) BBM.adoptThought(B, B.t, BBM.validateThought(B, msg.v), 'llm');
+  }
+  //  a line from the room: shown only on the side of the tear it was said on
+  function onBossSay(msg) {
+    if (!msg || typeof msg.t !== 'string' || !BIO_NAME[msg.w]) return;
+    if ((msg.w === 'bzb') !== (wState === WS.NORMAL)) return;
+    bossSay(msg.w, { text: msg.t.slice(0, 64), src: msg.src });
+  }
+  let bossMoodSaid = '';
+  function bossMood(id, sum) {
+    const t = sum ? BBM.moodLabel(id, sum) : '';
+    if (bossMoodEl && t !== bossMoodSaid) { bossMoodSaid = t; bossMoodEl.textContent = t; }
+  }
+  //  what the bosses this game runs remember of me, kept here between fights
+  const bioStore = (() => { try { return JSON.parse(localStorage.getItem('contour.bio') || '{}') || {}; } catch (e) { return {}; } })();
+  let bioStoreT = 0;
+  function bioMe() { return (MP.name || (($('nick') || {}).value) || 'me').slice(0, 20); }
+  function bioLocalRecall(boss) { const e = bioStore[bioMe()]; return e && e[boss] ? e[boss] : null; }
+  function bioLocalSave(boss, rec) {
+    if (!rec) return;
+    const n = bioMe(), e = bioStore[n] || (bioStore[n] = {});
+    e[boss] = rec; e.t = Date.now();
+    const names = Object.keys(bioStore);
+    if (names.length > 12) { names.sort((a, b) => (bioStore[a].t || 0) - (bioStore[b].t || 0)); delete bioStore[names[0]]; }
+    if (performance.now() - bioStoreT > 10000) { bioStoreT = performance.now(); try { localStorage.setItem('contour.bio', JSON.stringify(bioStore)); } catch (x) {} }
+  }
   const _mfW = new THREE.Matrix4(), _mfQ = new THREE.Quaternion(), _mfE = new THREE.Euler(), _mfS = new THREE.Vector3(1, 1, 1);
   //  knocked kb m away from (ox, oz), as far as the city lets you go
   function mfShove(kb, ox, oz) {
@@ -12002,7 +12266,9 @@
       death: (m) => { playMfDeath(m.tdist, mfPan(m)); camShake = Math.max(camShake, 1.2); _mfT.set(m.x, m.y + 6, m.z); spawnImpact(_mfT); notify('倒れた', 3200); },
       rift: (x, z, r, life) => summonRift(x, z, r, life),
       gone: (m) => mfHideSlot(m.slot),
+      say: (m, u) => bossSay('mf', u),                      // (its BIO-BRAIN's voice: shared/biobrain.js)
     },
+    bioRecall: (boss) => bioLocalRecall(boss), bioSave: (boss, t, rec) => bioLocalSave(boss, rec),
   });
   const flayers = MFS.flayers;
   let mfOn = false, mfFrame = 0, mfHigh = 0;
@@ -12303,6 +12569,7 @@
         bossEl.classList.toggle('on', show);
         bossEl.classList.toggle('rage', !!m.panicked);
         if (show && bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, m.hp / MF_HP).toFixed(3) + ')';
+        if (show) bossMood('mind_flayer', dogSim() && m.bio ? BBM.summary(m.bio) : m.bbSum);
       }
     } else {
       mfBedOff();
@@ -12943,6 +13210,7 @@
     },
     //  his mind reaches this player: no harm, the view bends
     mind: (v, t, ms) => { if (t === dogTarget) psyWarpStart(ms); },
+    bioRecall: (boss) => bioLocalRecall(boss), bioSave: (boss, t, rec) => bioLocalSave(boss, rec),
     on: {
       lift: () => playVecLift(),
       hurl: () => playVecHurl(),
@@ -13400,6 +13668,7 @@
       bossEl.classList.remove('rage');
       if (vecEl.name) vecEl.name.textContent = 'VECNA';
       if (bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, vec.hp / V_HP).toFixed(3) + ')';
+      bossMood('vecna', dogSim() && VS.mind && VS.mind.bio ? BBM.summary(VS.mind.bio) : vec.bbSum);
       vecBarOwns = true;
     } else vecReleaseBar();
   }
@@ -15898,7 +16167,7 @@
           step(dt, now, targets, hooks) {
             this.now = now;
             if (!this.alive) { this.vx = this.vz = 0; return; }
-            for (const k of ATTACK_NAMES) if (this.cd[k] > 0) this.cd[k] = Math.max(0, this.cd[k] - dt);
+            for (const k of ATTACK_NAMES) if (this.cd[k] > 0) this.cd[k] = Math.max(0, this.cd[k] - dt * (this.tempo || 1));
             if (this.flyCd > 0) this.flyCd -= dt;
             const sp = this.fair ? this.fair.body.speed : 1;
             let tvx = 0, tvz = 0;
@@ -16164,7 +16433,17 @@
               if (i === A.attack || i === A.use_skill) p.cd = 0.5 * v[F.self_cooldown];
               u[i] = p.rule + p.neural + p.pred + p.pos + p.threat - p.risk - p.cd;
             }
-            const pick = this.select(u, fair.temperature(), rng, now);
+            const bio = ctx.bio;
+            if (bio) {
+              for (let i = 0; i < NA; i++) if (u[i] > -Infinity) { const a = bio.add[ACTIONS[i]] || 0; u[i] += a; P[i].bio = a; }
+              if (bio.topK && bio.topK < NA) {
+                const order = [];
+                for (let i = 0; i < NA; i++) if (u[i] > -Infinity) order.push(i);
+                order.sort((a, b) => u[b] - u[a]);
+                for (const i of order.slice(bio.topK)) if (i !== this.current) u[i] = -Infinity;
+              }
+            }
+            const pick = this.select(u, fair.temperature() * (bio ? bio.temp : 1), rng, now);
 
             const dec = this.decision;
             dec.t = now; dec.attack = null; dec.move = null; dec.fly = false;
@@ -16255,7 +16534,7 @@
                 return { action: ACTIONS[i], utility: +this.util[i].toFixed(3), commit: i === this.stuck ? this.o.stick : 0,
                          rule: +p.rule.toFixed(3), neural: +p.neural.toFixed(3),
                          prediction: +p.pred.toFixed(3), position: +p.pos.toFixed(3), threat: +p.threat.toFixed(3),
-                         risk: +p.risk.toFixed(3), cooldown: +p.cd.toFixed(3) };
+                         risk: +p.risk.toFixed(3), cooldown: +p.cd.toFixed(3), bio: +(p.bio || 0).toFixed(3) };
               }),
             };
           }
@@ -16457,7 +16736,7 @@
         const { makeGameAdapter } = require('../adapter/game_adapter.js');
         const { makeRng } = require('./rng.js');
         const { BossBody } = require('./boss_body.js');
-        const { toChannels } = require('./worldstate.js');
+        const { toChannels, F: WF } = require('./worldstate.js');
 
         const KINDS = ['reap', 'whirl', 'dash', 'dive'];      // his attacks, in the order the game's snapshot numbers them
 
@@ -16479,7 +16758,43 @@
             self: {}, ch: {}, view: null, readout: null, gated: null, resp: {}, dec: null,
             senseAcc: 0, thinkAcc: 0, adaptAcc: 0, saveAcc: 0, toChannels,
             bodyInfo: null, thinkUs: 0, thinks: 0, now: 0, tally: null,
+            bio: env.BB ? env.BB.make('beelzebub') : null, bioKey: null, bioSeenT: -99, bioEscT: -99, bioApT: -99,
           };
+        }
+        const BIO_TAGS = {
+          attack: ['attack'], use_skill: ['attack', 'pursue'], chase: ['pursue'], intercept: ['pursue', 'counter'],
+          ambush: ['feint', 'counter'], retreat: ['retreat'], dodge: ['defend', 'reposition'], reposition: ['reposition'],
+          wait: ['hold', 'observe'], defend: ['defend'],
+        };
+        function bioThink(ai, env, dt, now) {
+          const BB = env.BB, B = ai.bio, b = ai.body, v = ai.view;
+          if (!BB || !B || !v) return null;
+          const F = WF;
+          const known = v.get('has_target') > 0.5 && v.get('player_confidence') > 0.1;
+          const tid = ai.sensor.target ? ai.sensor.target.id : null;
+          let d = null;
+          if (known && tid) {
+            d = Math.hypot(v.v[F.target_x] - b.x, v.v[F.target_z] - b.z);
+            const vr = -v.v[F.player_radial_speed], vl = v.v[F.player_lateral_speed];
+            if (ai.bioKey !== tid || now - ai.bioSeenT > 20) {
+              if (ai.bioKey !== tid && env.bioRecall) { const rec = env.bioRecall(tid); if (rec) BB.recall(B, tid, rec); }
+              ai.bioKey = tid;
+              BB.event(B, now, 'seen', { key: tid, d, name: env.nameOf ? env.nameOf(tid) : undefined });
+            }
+            ai.bioSeenT = now;
+            BB.observe(B, now, tid, { d, vr, vl, shooting: v.get('player_attacking') > 0.6 });
+            if (vr > 4 && d < 40 && now - ai.bioApT > 2) { ai.bioApT = now; BB.event(B, now, 'approach', { key: tid, d, speed: vr }); }
+            if (vr < -3 && d > 18 && now - ai.bioEscT > 6) { ai.bioEscT = now; BB.event(B, now, 'escape', { key: tid, d }); }
+          }
+          BB.tick(B, now, dt, { hp: b.hp / b.hpMax, d, far: d !== null && d > 25, seen: known ? 1 : 0 });
+          b.tempo = B.P.tempo;
+          const add = ai.bioAdd || (ai.bioAdd = {});
+          for (const a in BIO_TAGS) add[a] = BB.bias(B, BIO_TAGS[a]);
+          const out = ai.bioCtx || (ai.bioCtx = { add, temp: 1, topK: 0 });
+          out.temp = B.P.temperature / 0.14; out.topK = B.P.candidates;
+          const u = BB.utter(B, now);
+          if (u && env.onSay) env.onSay(u);
+          return out;
         }
         function serializeMind(ai) { return { v: 1, fair: ai.fair.serialize(), bank: ai.bank.serialize() }; }
 
@@ -16518,6 +16833,7 @@
           const b = ai.body;
           const got = b.hurt(dmg, fx, fz);
           ai.adapter.noteHit('self', by, got, 100);
+          if (ai.bio && ai.bioBB) ai.bioBB.event(ai.bio, now, 'hurt', { amt: got / b.hpMax * 4, key: by });
           ai.fair.noteBossHurt(got / b.hpMax, now);
           if (ai.pm) ai.pm.noteOutcome('boss_hurt', now);
           if (now - (ai.missT || -99) < 1) ai.memory.episodic.record(now, 'player_countered', ai.missKind || 'reap', 'close', by);
@@ -16542,12 +16858,14 @@
               if (ai.pm) ai.pm.noteOutcome('player_hurt', ai.now);
               const t = ai.tally;
               if (t) { t.landed++; if (flank) t.flank++; if (ai.dec && ai.dec.reason && ai.dec.reason.prediction_weight > 0) t.predicted++; }
+              if (ai.bio && env.BB) env.BB.event(ai.bio, ai.now, 'hit', { key: id, amt: dmg / 100, act: kind });
             },
             miss(kind) {
               if (ai.tally) ai.tally.whiff++;
               ai.memory.episodic.record(ai.now, 'boss_attack_failed', kind, 'close');
               if (ai.pm) ai.pm.noteOutcome('boss_missed', ai.now);
               ai.missT = ai.now; ai.missKind = kind;
+              if (ai.bio && env.BB) env.BB.event(ai.bio, ai.now, 'miss', { act: kind });
             },
             swing(kind) { env.onSwing(kind); ai.adapter.noteSwing(); },
           });
@@ -16581,9 +16899,11 @@
             ai.gated = ai.pm ? ai.fair.gatePrediction(ai.pm.predict()) : null;
             for (const k of KINDS) ai.resp[k] = ai.pm ? ai.fair.gatePrediction(ai.pm.predictResponse(k)) : null;
             ai.inner.gate.x = gate.x; ai.inner.gate.z = gate.z;
+            ai.bioBB = env.BB;
+            const bio = bioThink(ai, env, 0.1, now);
             const dec = ai.brain.decide({ view: ai.view, readout: ai.readout, gated: ai.gated, memory: ai.memory, body: ai.bodyInfo,
               fair: ai.fair, rng: ai.rng, now, targetId: ai.sensor.target ? ai.sensor.target.id : null,
-              respond: (k) => ai.resp[k] || null });
+              respond: (k) => ai.resp[k] || null, bio });
             ai.dec = dec;
             apply(ai, b, dec);
             env.onDecision(ai, dec);
@@ -16614,7 +16934,7 @@
         }
 
         if (typeof module !== 'undefined' && module.exports) {
-          module.exports = { KINDS, MIN_FIGHT, makeMind, serializeMind, fightStart, fightScore, giveBody, adoptBody, hurt, heard, think, apply };
+          module.exports = { KINDS, MIN_FIGHT, BIO_TAGS, makeMind, serializeMind, fightStart, fightScore, giveBody, adoptBody, hurt, heard, think, apply, bioThink };
         }
 
       },
@@ -17217,7 +17537,11 @@
     onHit(id, dmg, kind) { if (id === MP.id) bzbStruck(dmg, kind); },
     onSwing(kind) { playBzbSwing(kind, bzb.tdist); },
     onDecision: (ai, dec) => bzbRecord(ai, dec),
-    onSave: () => { bzbSaveMind(); bzbShareOwn(); },       // (half a minute of this phone running him)
+    onSave: () => { bzbSaveMind(); bzbShareOwn(); if (bzbAI && bzbAI.bio) for (const k in bzbAI.bio.opp) bioLocalSave('beelzebub', BBM.memoryOf(bzbAI.bio, k)); },   // (half a minute of this phone running him)
+    //  his BIO-BRAIN (shared/biobrain.js): rage, pursuit, pride — his voice, and what he remembers of me
+    BB: BBM,
+    onSay: (u) => bossSay('bzb', u),
+    bioRecall: () => bioLocalRecall('beelzebub'),
   };
   function bzbMakeAI() {
     bzbEnv.G = {
@@ -17508,6 +17832,7 @@
     //  (another boss may have taken it meanwhile)
     if (bzb.barOwns && bzb.hp === bzb.barHp && cityT - bzb.barT < 0.25 && cityT >= bzb.barT) return;
     bzb.barHp = bzb.hp; bzb.barT = cityT;
+    bossMood('beelzebub', !MP.srvOwns.b && bzbAI && bzbAI.bio ? BBM.summary(bzbAI.bio) : bzb.bbSum);
     bossEl.classList.add('on', 'king'); bossEl.classList.remove('rage');
     const nm = $('boss-name'); if (nm && nm.textContent !== 'BEELZEBUB') nm.textContent = 'BEELZEBUB';   // in capitals, as MIND FLAYER is
     if (bossHpEl) bossHpEl.style.transform = 'scaleX(' + Math.max(0, bzb.hp / bzb.hpMax).toFixed(3) + ')';
@@ -17530,6 +17855,7 @@
   }
   function applyBzbSnapshot(k) {
     if (!k) { if (bzb.live && bzb.mode !== 'dead') bzbDespawn(); return; }
+    bzb.bbSum = k.length >= 17 ? k.slice(11, 17) : null;   // (his BIO-BRAIN, when the room runs him: server/boss.js snapshot)
     if (!bzb.live) {
       if (bzb.slain && bzb.seed === k[10]) return;
       bzbSpawn(k[0] / 10, k[1] / 10, k[3] / HDQ, k[5], false);
@@ -18150,6 +18476,7 @@
 
   function frame(now) {
     requestAnimationFrame(frame);
+    bossSayTick(now);
     const tFrame = dbgOn ? performance.now() : 0;
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;

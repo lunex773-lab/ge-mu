@@ -138,7 +138,8 @@ class BossBody {
   step(dt, now, targets, hooks) {
     this.now = now;
     if (!this.alive) { this.vx = this.vz = 0; return; }
-    for (const k of ATTACK_NAMES) if (this.cd[k] > 0) this.cd[k] = Math.max(0, this.cd[k] - dt);
+    //  (tempo: how quickly his hand comes round again — his rage's, when he has a BIO-BRAIN; 1 otherwise)
+    for (const k of ATTACK_NAMES) if (this.cd[k] > 0) this.cd[k] = Math.max(0, this.cd[k] - dt * (this.tempo || 1));
     if (this.flyCd > 0) this.flyCd -= dt;
     const sp = this.fair ? this.fair.body.speed : 1;
     let tvx = 0, tvz = 0;

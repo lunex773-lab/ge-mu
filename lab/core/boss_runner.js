@@ -24,6 +24,11 @@
 //    onSwing(kind)          he has begun a swing
 //    onDecision(ai, dec)    a decision was made (the game's replay recorder)
 //    onSave(ai)             half a minute since the mind was last saved
+//    BB                     shared/biobrain.js, if he is to have a BIO-BRAIN
+//                           (the room and the game give him one; the lab's
+//                           training runs do not, and fight as they always have)
+//    onSay(line)            something he says ({ text, sit, src })
+//    bioRecall(key)         what was kept of a player from other fights (or null)
 //
 //  The mind is a plain object, `ai`, with the fields the game's F3 panel and
 //  replay read (fair, bank, pm, sensor, core, view, dec, …): that is what
@@ -42,7 +47,7 @@ const { WorkingMemory, EpisodicMemory, bandOf } = require('./memory.js');
 const { makeGameAdapter } = require('../adapter/game_adapter.js');
 const { makeRng } = require('./rng.js');
 const { BossBody } = require('./boss_body.js');
-const { toChannels } = require('./worldstate.js');
+const { toChannels, F: WF } = require('./worldstate.js');
 
 const KINDS = ['reap', 'whirl', 'dash', 'dive'];      // his attacks, in the order the game's snapshot numbers them
 
@@ -67,7 +72,48 @@ function makeMind(env) {
     self: {}, ch: {}, view: null, readout: null, gated: null, resp: {}, dec: null,
     senseAcc: 0, thinkAcc: 0, adaptAcc: 0, saveAcc: 0, toChannels,
     bodyInfo: null, thinkUs: 0, thinks: 0, now: 0, tally: null,
+    //  his BIO-BRAIN (ACIS §8: Beelzebub's genome — rage, pursuit, pride)
+    bio: env.BB ? env.BB.make('beelzebub') : null, bioKey: null, bioSeenT: -99, bioEscT: -99, bioApT: -99,
   };
+}
+//  what his actions are, in the brain's terms
+const BIO_TAGS = {
+  attack: ['attack'], use_skill: ['attack', 'pursue'], chase: ['pursue'], intercept: ['pursue', 'counter'],
+  ambush: ['feint', 'counter'], retreat: ['retreat'], dodge: ['defend', 'reposition'], reposition: ['reposition'],
+  wait: ['hold', 'observe'], defend: ['defend'],
+};
+//  his BIO-BRAIN, told what his senses have of the one he is after (10 Hz,
+//  with his thinking), stepped, and asked how it leans his choice
+function bioThink(ai, env, dt, now) {
+  const BB = env.BB, B = ai.bio, b = ai.body, v = ai.view;
+  if (!BB || !B || !v) return null;
+  const F = WF;
+  const known = v.get('has_target') > 0.5 && v.get('player_confidence') > 0.1;
+  const tid = ai.sensor.target ? ai.sensor.target.id : null;
+  let d = null;
+  if (known && tid) {
+    d = Math.hypot(v.v[F.target_x] - b.x, v.v[F.target_z] - b.z);
+    const vr = -v.v[F.player_radial_speed], vl = v.v[F.player_lateral_speed];
+    if (ai.bioKey !== tid || now - ai.bioSeenT > 20) {
+      if (ai.bioKey !== tid && env.bioRecall) { const rec = env.bioRecall(tid); if (rec) BB.recall(B, tid, rec); }
+      ai.bioKey = tid;
+      BB.event(B, now, 'seen', { key: tid, d, name: env.nameOf ? env.nameOf(tid) : undefined });
+    }
+    ai.bioSeenT = now;
+    BB.observe(B, now, tid, { d, vr, vl, shooting: v.get('player_attacking') > 0.6 });
+    if (vr > 4 && d < 40 && now - ai.bioApT > 2) { ai.bioApT = now; BB.event(B, now, 'approach', { key: tid, d, speed: vr }); }
+    //  running from him
+    if (vr < -3 && d > 18 && now - ai.bioEscT > 6) { ai.bioEscT = now; BB.event(B, now, 'escape', { key: tid, d }); }
+  }
+  BB.tick(B, now, dt, { hp: b.hp / b.hpMax, d, far: d !== null && d > 25, seen: known ? 1 : 0 });
+  b.tempo = B.P.tempo;
+  const add = ai.bioAdd || (ai.bioAdd = {});
+  for (const a in BIO_TAGS) add[a] = BB.bias(B, BIO_TAGS[a]);
+  const out = ai.bioCtx || (ai.bioCtx = { add, temp: 1, topK: 0 });
+  out.temp = B.P.temperature / 0.14; out.topK = B.P.candidates;
+  const u = BB.utter(B, now);
+  if (u && env.onSay) env.onSay(u);
+  return out;
 }
 function serializeMind(ai) { return { v: 1, fair: ai.fair.serialize(), bank: ai.bank.serialize() }; }
 
@@ -119,6 +165,7 @@ function hurt(ai, dmg, fx, fz, by, now) {
   const b = ai.body;
   const got = b.hurt(dmg, fx, fz);
   ai.adapter.noteHit('self', by, got, 100);
+  if (ai.bio && ai.bioBB) ai.bioBB.event(ai.bio, now, 'hurt', { amt: got / b.hpMax * 4, key: by });
   ai.fair.noteBossHurt(got / b.hpMax, now);
   if (ai.pm) ai.pm.noteOutcome('boss_hurt', now);
   if (now - (ai.missT || -99) < 1) ai.memory.episodic.record(now, 'player_countered', ai.missKind || 'reap', 'close', by);
@@ -150,12 +197,14 @@ function think(ai, env, dt, now, targets, gate, out) {
       if (ai.pm) ai.pm.noteOutcome('player_hurt', ai.now);
       const t = ai.tally;
       if (t) { t.landed++; if (flank) t.flank++; if (ai.dec && ai.dec.reason && ai.dec.reason.prediction_weight > 0) t.predicted++; }
+      if (ai.bio && env.BB) env.BB.event(ai.bio, ai.now, 'hit', { key: id, amt: dmg / 100, act: kind });
     },
     miss(kind) {
       if (ai.tally) ai.tally.whiff++;
       ai.memory.episodic.record(ai.now, 'boss_attack_failed', kind, 'close');
       if (ai.pm) ai.pm.noteOutcome('boss_missed', ai.now);
       ai.missT = ai.now; ai.missKind = kind;
+      if (ai.bio && env.BB) env.BB.event(ai.bio, ai.now, 'miss', { act: kind });
     },
     swing(kind) { env.onSwing(kind); ai.adapter.noteSwing(); },
   });
@@ -193,9 +242,11 @@ function think(ai, env, dt, now, targets, gate, out) {
     ai.gated = ai.pm ? ai.fair.gatePrediction(ai.pm.predict()) : null;
     for (const k of KINDS) ai.resp[k] = ai.pm ? ai.fair.gatePrediction(ai.pm.predictResponse(k)) : null;
     ai.inner.gate.x = gate.x; ai.inner.gate.z = gate.z;
+    ai.bioBB = env.BB;
+    const bio = bioThink(ai, env, 0.1, now);
     const dec = ai.brain.decide({ view: ai.view, readout: ai.readout, gated: ai.gated, memory: ai.memory, body: ai.bodyInfo,
       fair: ai.fair, rng: ai.rng, now, targetId: ai.sensor.target ? ai.sensor.target.id : null,
-      respond: (k) => ai.resp[k] || null });
+      respond: (k) => ai.resp[k] || null, bio });
     ai.dec = dec;
     apply(ai, b, dec);
     env.onDecision(ai, dec);
@@ -230,5 +281,5 @@ function apply(ai, b, d) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { KINDS, MIN_FIGHT, makeMind, serializeMind, fightStart, fightScore, giveBody, adoptBody, hurt, heard, think, apply };
+  module.exports = { KINDS, MIN_FIGHT, BIO_TAGS, makeMind, serializeMind, fightStart, fightScore, giveBody, adoptBody, hurt, heard, think, apply, bioThink };
 }

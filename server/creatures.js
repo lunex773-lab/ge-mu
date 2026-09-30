@@ -43,6 +43,7 @@ import { RoomBoss } from './boss.js';
 import { RoomTroop } from './troop.js';
 import { RoomTraffic } from './traffic.js';
 import { RoomDogs } from './dogs.js';
+import BB from '../shared/biobrain.js';
 import { fileable, MIN_FIGHT } from './mindstore.js';
 import PM from '../lab/core/player_model.js';
 
@@ -68,6 +69,10 @@ export class Creatures {
     this.asked = new Set();                // names already asked of the memory
     this.cand = null; this.candAsked = false;
     this.ro = null;                        // the readout, as the memory last had it
+    //  what the three great ones' BIO-BRAINs remember of each player (by name),
+    //  from the memory and from this room's fights; what is new goes back
+    //  every half a minute (mindstore.js 'bioget' / 'bioput')
+    this.bio = new Map(); this.bioAsked = new Set(); this.bioOut = {}; this.bioOutT = 0;
   }
   owns() { return { b: this.own.b ? 1 : 0, m: this.own.m ? 1 : 0, t: this.own.t ? 1 : 0, d: this.own.d ? 1 : 0 }; }
 
@@ -134,6 +139,8 @@ export class Creatures {
   //  a message has arrived (now: ms)
   tick(now) {
     this.now = now;
+    this.bioFlush(now);
+    if (this.room.canThink && now - (this.thinkT || 0) > 1000) { this.thinkT = now; this.slowThoughts(); }
     if (!this.own.b && !this.own.m && !this.own.t && !this.own.d) return;
     if (this.own.t) { this.traffic.step(now); this.traffic.tell(now); }
     if (this.own.d) { this.dogs.step(now); this.dogs.tell(now); }
@@ -214,6 +221,44 @@ export class Creatures {
       this.asked.add(p.name); names.push(p.name);
     }
     if (names.length) this.room.ask({ k: 'models', names });
+    const bn = [];
+    for (const p of this.room.players.values()) if (fileable(p.name) && !this.bioAsked.has(p.name)) { this.bioAsked.add(p.name); bn.push(p.name); }
+    if (bn.length) this.room.ask({ k: 'bioget', names: bn });
+  }
+  //  ---- the great ones' slow thoughts (cognition.js), for the bosses the room runs
+  brainOf(key) {
+    if (key === 'vec') return this.own.d && this.dogs.V.mind ? this.dogs.V.mind.bio : null;
+    if (key === 'bzb') return this.own.b && this.boss.ai ? this.boss.ai.bio : null;
+    if (key.slice(0, 3) === 'mf:') { const m = this.own.d && this.dogs.M.flayers[+key.slice(3)]; return m && m.live && !m.dead ? m.bio : null; }
+    return null;
+  }
+  slowThoughts() {
+    const keys = ['vec', 'bzb'];
+    for (const m of this.dogs.M.flayers) if (m.live) keys.push('mf:' + m.slot);
+    for (const key of keys) {
+      const B = this.brainOf(key); if (!B) continue;
+      const why = BB.wantsThought(B, B.t, 30);
+      if (why) this.room.thinks.push({ key, boss: B.id, ctx: BB.llmContext(B, why) });
+    }
+  }
+  adoptThought(key, v) {
+    const B = this.brainOf(key);
+    if (B) BB.adoptThought(B, B.t, BB.validateThought(B, v), 'llm');
+  }
+  //  ---- what the great ones remember of a player (shared/biobrain.js memoryOf / recall)
+  //  who: a player's id, or a creature's target ({ id })
+  nameOf(who) { const id = who && typeof who === 'object' ? who.id : who, p = this.room.players.get(id); return p && fileable(p.name) ? p.name : null; }
+  bioRecall(boss, who) { const n = this.nameOf(who), e = n && this.bio.get(n); return (e && e[boss]) || null; }
+  bioSave(boss, who, rec) {
+    const n = this.nameOf(who); if (!n || !rec) return;
+    const e = this.bio.get(n) || {}; e[boss] = rec; this.bio.set(n, e);
+    (this.bioOut[n] || (this.bioOut[n] = {}))[boss] = rec;
+  }
+  bioFlush(now) {
+    if (now - this.bioOutT < 30000 || !Object.keys(this.bioOut).length) return;
+    this.bioOutT = now;
+    this.room.ask({ k: 'bioput', players: this.bioOut });
+    this.bioOut = {};
   }
   //  one of the memory's answers (mindstore.js ask)
   mindSaid(r) {
@@ -229,6 +274,8 @@ export class Creatures {
       if (r.ro) this.ro = r.ro;
     } else if (r.k === 'models') {
       for (const [n, e] of Object.entries(r.players || {})) this.learnt(n, e);
+    } else if (r.k === 'bio') {
+      for (const [n, e] of Object.entries(r.players || {})) if (fileable(n) && e && typeof e === 'object' && !this.bio.has(n)) this.bio.set(n, e);
     }
   }
   learnt(name, e) {

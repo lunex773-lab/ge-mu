@@ -47,6 +47,8 @@ import ITEMS from '../shared/items.js';
 import { remember, whyNot } from './combat.js';
 import { step, freeStep } from './move.js';
 import { Creatures } from './creatures.js';
+import { fileable } from './mindstore.js';
+import BB from '../shared/biobrain.js';
 
 export const DMG = RULES.DMG;
 export const MAX_BYTES = 16384;        // one message
@@ -150,6 +152,20 @@ const KINDS = {
   //  has learned of this player (creatures.js fromPlayer); nothing passed on
   mind: [0.2, 4, (p, from, room, now) => { room.creatures.fromPlayer(from, p, now); return null; }],
   ping: [2, 4, (p, from) => ({ id: from, t: +p.t || 0 })],    // answered to the sender only
+  //  A player alone, whose game runs the great ones, asks the room for one
+  //  of their slow thoughts (server/cognition.js): { b: which boss, ctx: its
+  //  brain's llmContext }. Checked for size and kind, at most one each 40 s;
+  //  the answer ('thought' { b, v }) goes to that player only, and their
+  //  game's brain checks it against the genome before it counts.
+  think: [0.05, 2, (p, from, room, now) => {
+    const me = room.players.get(from);
+    if (!room.canThink || BB.IDS.indexOf(p.b) < 0 || !p.ctx || typeof p.ctx !== 'object') return null;
+    let n = 0; try { n = JSON.stringify(p.ctx).length; } catch (e) { return null; }
+    if (n > 2500 || now - (me.thinkT || -1e9) < 40000) return null;
+    me.thinkT = now;
+    room.thinks.push({ to: from, boss: p.b, key: 'p:' + from, ctx: p.ctx });
+    return null;
+  }],
 };
 
 function num(v) { return typeof v === 'number' && Number.isFinite(v); }
@@ -173,12 +189,29 @@ export class Relay {
     this.pickups = null;               // shared/items.js, and which are lying there (items())
     this.creatures = new Creatures(this, { enabled: creatures });
     this.asks = [];                    // for Beelzebub's memory (mindstore.js): the room takes them (takeAsks) and answers (mindSaid)
+    this.thinks = [];                  // slow thoughts to be had (cognition.js): the room takes them (takeThinks) and answers (thoughtSaid)
+    this.canThink = false;             // (the GameRoom sets it when it has the AI binding)
+  }
+  takeThinks() { const a = this.thinks; this.thinks = []; return a; }
+  //  a slow thought came back (r: { v }) — to a player's game, or into one of the room's own bosses
+  thoughtSaid(t, r) {
+    this.out = [];
+    if (t.to) { if (this.players.has(t.to)) this.send(t.to, 'thought', { b: t.boss, v: r && r.v ? r.v : null }); }
+    else this.creatures.adoptThought(t.key, r && r.v);
+    return this.out;
   }
   ask(a) { this.asks.push(a); }
   takeAsks() { const a = this.asks; this.asks = []; return a; }
   //  a player has arrived (not one the room woke up with): the memory is
   //  asked for its readout, a candidate, and what it knows of them
-  hello(id) { const v = this.players.get(id); if (v) { v.helloed = true; this.ask({ k: 'hello', id, name: v.name }); } }
+  hello(id) {
+    const v = this.players.get(id);
+    if (!v) return;
+    v.helloed = true; this.ask({ k: 'hello', id, name: v.name });
+    //  (and what the three great ones remember of them: creatures.js bioRecall)
+    const C = this.creatures;
+    if (C.enabled && fileable(v.name) && !C.bioAsked.has(v.name)) { C.bioAsked.add(v.name); this.ask({ k: 'bioget', names: [v.name] }); }
+  }
   //  the memory's answers. Returns what to send, as join() does.
   mindSaid(list) {
     this.out = [];

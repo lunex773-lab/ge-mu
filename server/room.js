@@ -22,6 +22,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { Relay, idFor } from './relay.js';
+import { Cognition } from './cognition.js';
 import BUILD from '../dist/build.js';                // (written by server/build.js: which code this is)
 
 export class GameRoom extends DurableObject {
@@ -30,6 +31,9 @@ export class GameRoom extends DurableObject {
     //  MOVE_CHECK=off (wrangler dev --var) only for tests that move players
     //  about to set a scene up; every real room checks
     this.relay = new Relay({ moves: env.MOVE_CHECK !== 'off' });
+    //  the great ones' slow brain (cognition.js): Workers AI, when this Worker has it (env.AI)
+    this.cog = new Cognition({ ai: env.AI || null, model: env.AI_MODEL || undefined });
+    this.relay.canThink = !!env.AI;
     this.sockets = new Map();                       // id → WebSocket
     this.who = new Map();                           // WebSocket → { id, name, mind }
     this.mindName = 'beelzebub';
@@ -86,8 +90,17 @@ export class GameRoom extends DurableObject {
     }
     this.relay.dirty.clear();
     this.route(r.out, a.id, ws);
+    this.thinkSlow();
     const asked = this.askMind();
     if (asked) await asked;
+  }
+  //  the slow thoughts asked for (the room's own bosses, or a player's), each
+  //  answered when it comes — nothing waits on them
+  thinkSlow() {
+    for (const t of this.relay.takeThinks()) {
+      const p = this.cog.think(t.key, t.ctx).then((r) => this.route(this.relay.thoughtSaid(t, r), null, null)).catch(() => {});
+      try { this.ctx.waitUntil(p); } catch (e) {}
+    }
   }
   //  what the room says: [to, text] pairs, to 'others' (than `from`), 'all', 'self' or an id
   route(out, from, ws) {

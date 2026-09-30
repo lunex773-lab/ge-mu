@@ -480,8 +480,13 @@ function speak(B, now, sit, e, force) {
   if (B.say.length > 4) B.say.shift();
   B.sayT = now; B.sayAt[sit] = now;
 }
-//  the body takes what it has to say (and shows or sends it)
-function utter(B) { return B.say.length ? B.say.shift() : null; }
+//  the body takes what it has to say (and shows or sends it) — one line at a
+//  time, a few seconds apart, however many are waiting
+function utter(B, now) {
+  if (!B.say.length) return null;
+  if (now !== undefined) { if (now - (B.utterT === undefined ? -99 : B.utterT) < 2.5) return null; B.utterT = now; }
+  return B.say.shift();
+}
 
 //  AC§6–§8 in its own voice. {n}: the name it knows them by; {habit}: what
 //  it has seen them do (the line is kept back until it has seen it).
@@ -837,7 +842,7 @@ function validateThought(B, out) {
 function adoptThought(B, now, v, src) {
   if (!v) { B.slow.fails++; return false; }
   if (v.strategy) B.strat.llm = { name: v.strategy, conf: v.conf, until: now + 20, intent: v.intent };
-  if (v.dialogue && now - B.sayT > 2) { B.say.push({ t: r2(now), text: v.dialogue, sit: 'thought', src: src || 'llm' }); if (B.say.length > 4) B.say.shift(); B.sayT = now; }
+  if (v.dialogue) { B.say.push({ t: r2(now), text: v.dialogue, sit: 'thought', src: src || 'llm' }); if (B.say.length > 4) B.say.shift(); B.sayT = now; }
   B.slow.src = src || 'llm';
   note(B, now, 'thought', (src || 'llm') + ': ' + (v.strategy || '-') + ' / ' + (v.intent || '-') + (v.reason ? ' — ' + v.reason : ''));
   return true;
@@ -860,7 +865,9 @@ function debugLines(B) {
 //  what everyone's screen is told of it (a few small numbers)
 function summary(B) {
   const g = genomeOf(B);
-  return [g.strategies.indexOf(B.strat.name), B.phase, Math.round(B.affect.anger * 100), Math.round(B.affect.fear * 100), B.meta.calm ? 1 : 0, Math.round(B.meta.confidence * 100)];
+  //  (in tenths: the bar needs no finer, and a word is sent only when one of these moves)
+  const q = (x) => Math.round(Math.max(0, Math.min(1, x)) * 10) * 10;
+  return [g.strategies.indexOf(B.strat.name), B.phase, q(B.affect.anger), q(B.affect.fear), B.meta.calm ? 1 : 0, q(B.meta.confidence)];
 }
 //  in the words a player reads (the boss bar)
 const MOOD_JP = {
