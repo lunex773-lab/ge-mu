@@ -196,7 +196,8 @@ export class Relay {
   //  a slow thought came back (r: { v }) — to a player's game, or into one of the room's own bosses
   thoughtSaid(t, r) {
     this.out = [];
-    if (t.to) { if (this.players.has(t.to)) this.send(t.to, 'thought', { b: t.boss, v: r && r.v ? r.v : null }); }
+    //  (none: why not — 'timeout', 'not JSON', the model's error… — for a look, the game only counts v)
+    if (t.to) { if (this.players.has(t.to)) this.send(t.to, 'thought', r && r.v ? { b: t.boss, v: r.v } : { b: t.boss, v: null, why: String((r && r.why) || 'none').slice(0, 80) }); }
     else this.creatures.adoptThought(t.key, r && r.v);
     return this.out;
   }

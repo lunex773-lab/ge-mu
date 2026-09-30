@@ -17,11 +17,12 @@ import { spawn } from 'node:child_process';
 import CITY from '../../shared/city.js';
 import RULES from '../../shared/rules.js';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import TF from '../../shared/traffic.js';
 import FL from '../../shared/flayers.js';
 import VC from '../../shared/vecna.js';
+import BB from '../../shared/biobrain.js';
 import { fingerprint } from '../fingerprint.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -292,6 +293,28 @@ async function main() {
     const D = await join(ROOM + 'alpha', 'Dai');
     check('a newcomer gets the next id, never a lower one', D.id > B.id && D.welcome.host === A.id, D.id);
     A.ws.close(); C.ws.close(); D.ws.close();
+
+    // ---- live: the great ones' slow brain (Workers AI) — reported, not judged ----
+    //  (only live: wrangler dev runs without the AI binding. A model that does
+    //  not answer — down, or its day's allowance used — is no fault of the
+    //  code, and the fight goes on without it: so it is said, not failed)
+    if (LIVE) {
+      const T = await join(ROOM + 'think', 'Thinker');
+      const B = BB.make('vecna');
+      let t = 0;
+      for (let i = 0; i < 6; i++) { BB.event(B, t, 'dodged', { key: 'p1', how: 'jump' }); for (let k = 0; k < 20; k++) { t += 0.05; BB.tick(B, t, 0.05, { hp: 0.8, d: 20 }); BB.observe(B, t, 'p1', { d: 20, vr: 0, vl: 0, jumping: true }); } }
+      const t0 = Date.now();
+      T.send('think', { b: 'vecna', ctx: BB.llmContext(B, 'pattern') });
+      await until(() => T.of('thought').length > 0, 9000);
+      const m = T.of('thought')[0], v = m && m.p.v ? BB.validateThought(B, m.p.v) : null;
+      const said = !m ? 'no answer in ' + Math.round((Date.now() - t0) / 1000) + ' s'
+        : v ? 'answered in ' + (Date.now() - t0) + ' ms, and it holds: ' + JSON.stringify({ strategy: v.strategy, intent: v.intent, dialogue: v.dialogue })
+          : m.p.v ? 'answered, but nothing in it is VECNA\'s to take: ' + JSON.stringify(m.p.v).slice(0, 200) : 'the model did not answer: ' + m.p.why;
+      console.log('  info the slow brain (Workers AI), live: ' + said);
+      if (!v) console.log('::warning::The slow brain (Workers AI) ' + said + ' — the bosses fight on their fast brains');
+      if (process.env.GITHUB_STEP_SUMMARY) try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, '### スロー脳（Workers AI）: ' + (v ? '応答あり' : '応答なし') + '\n\n' + said.replace(/[<>]/g, '') + '\n'); } catch (e) {}
+      T.ws.close();
+    }
   } finally {
     if (dev) try { process.kill(-dev.pid, 'SIGTERM'); } catch (e) {}
   }
