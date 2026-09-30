@@ -197,7 +197,8 @@ export class Relay {
   thoughtSaid(t, r) {
     this.out = [];
     //  (none: why not — 'timeout', 'not JSON', the model's error… — for a look, the game only counts v)
-    if (t.to) { if (this.players.has(t.to)) this.send(t.to, 'thought', r && r.v ? { b: t.boss, v: r.v } : { b: t.boss, v: null, why: String((r && r.why) || 'none').slice(0, 80) }); }
+    //  (and which model it was: Workers AI retires them, cognition.js moves on)
+    if (t.to) { if (this.players.has(t.to)) this.send(t.to, 'thought', Object.assign(r && r.v ? { b: t.boss, v: r.v } : { b: t.boss, v: null, why: String((r && r.why) || 'none').slice(0, 80) }, r && r.model ? { m: String(r.model).slice(0, 64) } : {})); }
     else this.creatures.adoptThought(t.key, r && r.v);
     return this.out;
   }

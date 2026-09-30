@@ -9,7 +9,7 @@
 //    node server/test/cognition.test.js
 
 import BB from '../../shared/biobrain.js';
-import { Cognition, messages, parse, LIMITS } from '../cognition.js';
+import { Cognition, messages, parse, LIMITS, MODEL, MODELS } from '../cognition.js';
 
 const results = []; let pass = 0, fail = 0;
 function check(name, ok, detail) { if (ok) pass++; else fail++; results.push((ok ? '  ok   ' : '  FAIL ') + name + (detail ? '\n         ' + detail : '')); }
@@ -52,7 +52,7 @@ function fakeAI(answer) {
     const took = BB.adoptThought(B, t, v, 'llm');
     check('a good answer is taken: its strategy leans his for a while, its line is his to say — and it asked the model named, in JSON mode',
       r.why === 'ok' && v.strategy === 'COUNTER' && v.intent === 'bait' && took && B.strat.llm && B.strat.llm.name === 'COUNTER' && B.say.some((q) => q.src === 'llm' && q.text === 'また跳ぶのだろう？') &&
-      ai.asked[0].model === '@cf/meta/llama-3.1-8b-instruct' && ai.asked[0].input.response_format.type === 'json_schema', JSON.stringify(v));
+      ai.asked[0].model === MODEL && ai.asked[0].input.response_format.type === 'json_schema', JSON.stringify(v));
   }
 
   // ---- how often -----------------------------------------------------------------------------
@@ -84,6 +84,20 @@ function fakeAI(answer) {
     const alien = BB.validateThought(B, { strategyProposal: { strategy: 'SEND_MINIONS' }, intent: { primary: 'nuke' }, dialogue: '' });
     check('nonsense is dropped, and a proposal outside VECNA\'s genome (the flayer\'s strategy, an unknown intent) is not his to take',
       j.v === null && j.why === 'not JSON' && alien === null && parse('before {"a":1} after').a === 1, j.why);
+    //  Workers AI retires models (the first one used here went on 2026-05-30, error 5028): the room moves on
+    const retired = fakeAI((input) => (retired.asked.length === 1 ? new Error('5028: @cf/meta/infire-llama-3.1-8b-instruct was deprecated on 2026-05-30. See the model catalog for alternatives') :
+      retired.asked.length === 2 ? new Error('AiError: this model does not support response_format json_schema') : { response: { intent: { primary: 'observe' }, strategyProposal: { strategy: 'OBSERVE' } } }));
+    const R = new Cognition({ ai: retired, now, limits: { perBossMs: 0 } });
+    const r1 = await R.think('vec', ctx);
+    const r2 = await R.think('vec', ctx);
+    const m = retired.asked.map((q) => q.model);
+    check('a model that has been retired is left for the next, in the same thought; one that will not take a schema is asked without it — and the room stays with what works',
+      r1.why === 'ok' && r2.why === 'ok' && m[0] === MODELS[0] && m[1] === MODELS[1] && m[2] === MODELS[1] && m[3] === MODELS[1] && !retired.asked[2].input.response_format && !retired.asked[3].input.response_format &&
+      R.stats().model === MODELS[1] && R.stats().gone[0] === MODELS[0] && R.bad === 0, m.join(' → ') + '; ' + JSON.stringify(R.stats()));
+    const chat = parse({ choices: [{ message: { content: 'Here: {"intent":{"primary":"bait"}}' } }] });
+    const named = new Cognition({ ai: fakeAI({ response: {} }), model: '@cf/some/other-model' });
+    check('… an answer in the chat-completions shape is read too, and AI_MODEL puts a model of one\'s own choosing first',
+      chat && chat.intent.primary === 'bait' && named.model === '@cf/some/other-model' && named.models.length === MODELS.length + 1);
     const none = new Cognition({ now });
     check('with no AI (every test, a deploy without it) nothing is asked, and nothing waits on it', !none.want('vec') && (await none.think('vec', ctx)).why === 'not now');
   }

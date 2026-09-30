@@ -308,8 +308,8 @@ async function main() {
       await until(() => T.of('thought').length > 0, 9000);
       const m = T.of('thought')[0], v = m && m.p.v ? BB.validateThought(B, m.p.v) : null;
       const said = !m ? 'no answer in ' + Math.round((Date.now() - t0) / 1000) + ' s'
-        : v ? 'answered in ' + (Date.now() - t0) + ' ms, and it holds: ' + JSON.stringify({ strategy: v.strategy, intent: v.intent, dialogue: v.dialogue })
-          : m.p.v ? 'answered, but nothing in it is VECNA\'s to take: ' + JSON.stringify(m.p.v).slice(0, 200) : 'the model did not answer: ' + m.p.why;
+        : v ? (m.p.m || 'the model') + ' answered in ' + (Date.now() - t0) + ' ms, and it holds: ' + JSON.stringify({ strategy: v.strategy, intent: v.intent, dialogue: v.dialogue })
+          : m.p.v ? (m.p.m || 'the model') + ' answered, but nothing in it is VECNA\'s to take: ' + JSON.stringify(m.p.v).slice(0, 200) : (m.p.m || 'the model') + ' did not answer: ' + m.p.why;
       console.log('  info the slow brain (Workers AI), live: ' + said);
       if (!v) console.log('::warning::The slow brain (Workers AI) ' + said + ' — the bosses fight on their fast brains');
       if (process.env.GITHUB_STEP_SUMMARY) try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, '### スロー脳（Workers AI）: ' + (v ? '応答あり' : '応答なし') + '\n\n' + said.replace(/[<>]/g, '') + '\n'); } catch (e) {}
