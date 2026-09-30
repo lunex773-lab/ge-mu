@@ -45,7 +45,7 @@ function fakeAI(answer) {
   // ---- a good answer -----------------------------------------------------------------------
   {
     const ai = fakeAI({ response: { internalAssessment: { situation: 'they jump every wave', predictedPlayerAction: 'jump', uncertainty: 0.2 },
-      intent: { primary: 'bait' }, strategyProposal: { strategy: 'COUNTER', reason: 'bait the jump, punish the landing', confidence: 0.8 }, dialogue: 'また跳ぶのだろう？' } });
+      intent: { primary: 'bait' }, strategyProposal: { strategy: 'COUNTER', reason: 'bait the jump, punish the landing', confidence: 0.8 }, dialogue: '「また跳ぶのだろう？」' } });
     const C = new Cognition({ ai, now });
     const r = await C.think('vec', ctx);
     const v = BB.validateThought(B, r.v);

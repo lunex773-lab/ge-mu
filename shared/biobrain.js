@@ -842,6 +842,7 @@ function validateThought(B, out) {
   const intent = typeof intentRaw === 'string' ? intentRaw.toLowerCase().replace(/[^a-z_]/g, '') : '';
   let line = typeof out.dialogue === 'string' ? out.dialogue : '';
   line = line.replace(/<[^>]*>/g, '').replace(/https?:\/\/\S+/g, '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  line = line.replace(/^[「『"'“]+/, '').replace(/[」』"'”]+$/, '').trim();          // (a model often quotes its own line: the subtitle frames it)
   if (line.length > 48) line = line.slice(0, 48);
   const conf = Number.isFinite(+sp.confidence) ? clamp01(+sp.confidence) : 0.5;
   const v = {
